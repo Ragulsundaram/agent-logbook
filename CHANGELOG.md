@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1
+
+- Homepage and issue links point to the public project page.
+
 ## 1.0.0
 
 First public release.
