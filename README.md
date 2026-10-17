@@ -1,7 +1,5 @@
 # Agent Logbook
 
-<img src="media/icon.png" width="96" alt="">
-
 Browse, read, resume and measure the Claude Code and Codex sessions already on
 your machine. Everything is read from local transcript files. Nothing is
 uploaded, and no account is needed.
@@ -69,13 +67,3 @@ setting the editor's own settings page does.
 ## Licence
 
 MIT.
-
-## Install
-
-Search for **Agent Logbook** in the Extensions panel of Cursor, Windsurf,
-VSCodium or any editor that uses Open VSX, or install it from
-[open-vsx.org/extension/ragulsundaram/agent-logbook](https://open-vsx.org/extension/ragulsundaram/agent-logbook).
-
-## Bugs and ideas
-
-[Open an issue](https://github.com/Ragulsundaram/agent-logbook/issues/new/choose).
