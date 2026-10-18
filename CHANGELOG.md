@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1
+
+- Live chats shows the chats in this window's folders by default, with a switch in the Settings tab to show every window.
+- New setting: open Agent Logbook in the sidebar when the editor starts, instead of the Explorer (off by default).
+- Security: chat titles, project names and file paths are escaped on the dashboards, and the handover-brief prompt is safely quoted when it has to be typed into a shell.
+
 ## 1.3.0
 
 - Live chats: every running chat on one page - working or waiting for you, your last ask and its latest reply ready to copy. Cards rise to the top as messages arrive.
