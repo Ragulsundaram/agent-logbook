@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.2
+
+- The store pages and README link to the new website, its changelog and the privacy page.
+
 ## 1.3.1
 
 - Live chats shows the chats in this window's folders by default, with a switch in the Settings tab to show every window.

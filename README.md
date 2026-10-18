@@ -4,6 +4,8 @@ Browse, read, resume and measure the Claude Code and Codex sessions already on
 your machine. Everything is read from local transcript files. Nothing is
 uploaded, and no account is needed.
 
+**[Website](https://ragulsundaram.github.io/agent-logbook-site/)** · [Changelog](https://ragulsundaram.github.io/agent-logbook-site/changelog.html) · [Privacy](https://ragulsundaram.github.io/agent-logbook-site/privacy.html)
+
 ## What it does
 
 **Read your chats.** Every session, grouped by project, with the full
