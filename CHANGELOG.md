@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0
+
+- Chat history for your agents: one click in Settings connects Claude Code and Codex to a local, read-only server over your chats. They can list and search past chats, pull a chat's context to continue its work, find exact strings in tool output, see what a chat changed (summary or diff) and which chats changed a file. Optionally limited to the current project. A skill lets you just ask in plain words.
+- Settings › Exporting has a folder picker for where exports are saved. Until one is chosen, Export opens the chat as an unsaved tab, as before.
+- The raw .source.jsonl copy beside an export is now off by default, and only offered once an export folder is set.
+- Improved security.
+- Fix: chats on models Claude Code runs at 1M by default (Opus 4.7 and up, Sonnet 5 and 5.5, Haiku 5.5, Fable, Mythos) show the 1M window from the start. Claude Code writes these model ids without a [1m] tag, so the 1.4.x check never fired and the meter read 200K until a chat passed it. Opus 4.6, Sonnet 4.6 and Haiku 4.5 stay at 200K unless run with [1m].
+
 ## 1.4.2
 
 - Fix: right-clicking in a message now opens a menu that copies. Copy copies the selected text, Copy link and Copy path copy the link or path under the pointer, Copy code copies a code block, and Copy message copies the whole message. Before, the menu only showed a greyed-out Copy unless text was selected.
