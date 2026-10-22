@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.4.2
+
+- Fix: right-clicking in a message now opens a menu that copies. Copy copies the selected text, Copy link and Copy path copy the link or path under the pointer, Copy code copies a code block, and Copy message copies the whole message. Before, the menu only showed a greyed-out Copy unless text was selected.
+
+## 1.4.1
+
+- Folders are ordered by their latest chat instead of by how many chats they hold, so a folder with today's chats no longer sits below one full of old ones.
+- In a workspace with several folders, every one of them counts as current and stays at the top, the most recently active first.
+- Clicking a file path shows it in Finder by asking macOS directly. Before, the editor's own command could open the file in a tab instead. Cmd/Ctrl-click still opens it in the editor.
+- More file names are clickable: zip, tar, dmg, vsix and other archives, Office files, and audio and video files.
+- A relative path is looked up in every folder of the workspace, not only the first.
+
+## 1.4.0
+
+- Links and file paths in messages are clickable. A web address opens in your browser. A file path shows the file in Finder, or opens it in the editor with Cmd/Ctrl held; a folder opens in Finder.
+- A dismissed usage warning comes back instead of staying gone for the whole window: when the time it warned about has halved, when it gets more serious (unused, then running out), or when a new window starts. Dismissing it in the sidebar also hides it in Live chats, and the other way round.
+- The sidebar is titled Agent Logbook instead of History.
+- Fix: the folder this window is open on stays at the top of the list after you add a chat to a group or open Settings, instead of dropping below busier folders.
+
 ## 1.3.2
 
 - The store pages and README link to the new website, its changelog and the privacy page.
