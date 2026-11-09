@@ -23,13 +23,13 @@ reviews:
         instructions: Fail if package.json gains dependencies, devDependencies, optionalDependencies, peerDependencies, bundleDependencies, or any install, prepare, prepack or postpack script, or if the PR adds a bundler, lockfile or build step.
       - name: No new network access
         mode: error
-        instructions: Fail if any .js file adds fetch, http, https, net, tls, dgram, dns, http2, WebSocket, XMLHttpRequest, sendBeacon, EventSource, or a remote URL loaded into a webview. The only allowed request is the existing plan-usage call to api.anthropic.com in scan.js.
+        instructions: Fail if any changed file (JavaScript, HTML, shell script, workflow or other) adds fetch, http, https, net, tls, dgram, dns, http2, WebSocket, XMLHttpRequest, sendBeacon, EventSource, or a remote URL loaded into a webview. The only allowed request is the existing plan-usage call to api.anthropic.com in scan.js.
       - name: No shell strings or code from strings
         mode: error
-        instructions: Fail if the PR adds exec or execSync from child_process, shell true, eval, new Function, a computed require, dynamic import(), or a sendText call built from text that did not come from a validated id or a fixed command.
+        instructions: Fail if the PR adds exec or execSync from child_process, shell true, eval, new Function, a computed require, dynamic import(), a shell interpreter (sh, bash, zsh, cmd, powershell) run through execFile or spawn with a command string such as -c, or a sendText call built from text that did not come from a validated id or a fixed command.
       - name: Webview output escaped
         mode: error
-        instructions: Fail if any new innerHTML, outerHTML or insertAdjacentHTML in media/*.js uses a value that is not passed through esc() or is not a fixed string, or if the Content-Security-Policy or nonce in extension.js is changed.
+        instructions: Fail if any new innerHTML, outerHTML or insertAdjacentHTML in media/*.js, or any webview HTML built in extension.js or another file, uses a value that is not passed through esc() or is not a fixed string, or if the Content-Security-Policy or nonce in extension.js is changed.
       - name: No transcripts or secrets committed
         mode: error
         instructions: Fail if the PR adds a .jsonl file, a real-looking chat transcript, a screenshot of a chat, an API key, token or password.
