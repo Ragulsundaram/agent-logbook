@@ -1,10 +1,41 @@
-# CodeRabbit review settings. Reviews are advisory; the Check workflow and the
-# maintainer's read stay the gate. Schema: https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit review settings. The maintainer is not a full-time reviewer, so
+# CodeRabbit requests changes on blocking findings and the pre-merge checks
+# below fail the PR. Schema: https://coderabbit.ai/integrations/schema.v2.json
 language: en-US
 
 reviews:
   profile: assertive
-  request_changes_workflow: false
+  # Requests changes on blocking findings; approves only once they are resolved.
+  auto_approvals:
+    enabled: true
+  security_risk_instructions: |
+    Treat as high risk anything that could send transcript text, file contents or
+    tokens off the machine, run a shell or a string as code, write outside the
+    locations in README.md, or weaken the Check workflow or check.js.
+  pre_merge_checks:
+    # Only the maintainer can wave a failing check through, not the PR author.
+    override_requested_reviewers_only: true
+    description:
+      mode: error
+    custom_checks:
+      - name: No dependencies or build step
+        mode: error
+        instructions: Fail if package.json gains dependencies, devDependencies, optionalDependencies, bundleDependencies, or any install, prepare, prepack or postpack script, or if the PR adds a bundler, lockfile or build step.
+      - name: No new network access
+        mode: error
+        instructions: Fail if any .js file adds fetch, http, https, net, tls, dgram, dns, http2, WebSocket, XMLHttpRequest, sendBeacon, EventSource, or a remote URL loaded into a webview. The only allowed request is the existing plan-usage call to api.anthropic.com in scan.js.
+      - name: No shell strings or code from strings
+        mode: error
+        instructions: Fail if the PR adds exec or execSync from child_process, shell true, eval, new Function, a computed require, dynamic import(), or a sendText call built from text that did not come from a validated id or a fixed command.
+      - name: Webview output escaped
+        mode: error
+        instructions: Fail if any new innerHTML, outerHTML or insertAdjacentHTML in media/*.js uses a value that is not passed through esc() or is not a fixed string, or if the Content-Security-Policy or nonce in extension.js is changed.
+      - name: No transcripts or secrets committed
+        mode: error
+        instructions: Fail if the PR adds a .jsonl file, a real-looking chat transcript, a screenshot of a chat, an API key, token or password.
+      - name: Protected files untouched
+        mode: error
+        instructions: Fail if the PR changes CHANGELOG.md, the version field in package.json, .github/workflows, .github/check.js, AGENTS.md or SECURITY.md, unless the PR author is Ragulsundaram.
   high_level_summary: true
   poem: false
   auto_review:
@@ -46,7 +77,13 @@ reviews:
   tools:
     gitleaks:
       enabled: true
+    trufflehog:
+      enabled: true
     actionlint:
+      enabled: true
+    zizmor:
+      enabled: true
+    semgrep:
       enabled: true
 
 chat:
