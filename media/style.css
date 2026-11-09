@@ -31,7 +31,7 @@ button { font: inherit; cursor: pointer }
 [hidden] { display: none !important }
 
 /* one header row: the view's name, the views as icons, then the tools */
-#tabs { display: flex; align-items: center; gap: 3px; padding: 9px 10px 7px;
+#tabs { display: flex; align-items: center; gap: 4px; padding: 8px 10px 8px;
   border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
   /* a narrow panel used to clip the tools on the right, New chat among them:
      the open view's name shortens, then goes, and only then do the tools wrap */
@@ -39,35 +39,37 @@ button { font: inherit; cursor: pointer }
 /* only the open view is named - the rest stay as icons */
 .tabgap { flex: 1 0 0 }
 /* the tools move as one: wrapped onto a row of their own, they stay together on the right */
-#tabs .tools { display: flex; align-items: center; gap: 3px; margin-left: auto }
+#tabs .tools { display: flex; align-items: center; gap: 4px; margin-left: auto }
 #tabs .iconbtn { flex: none }
-.tab { display: flex; align-items: center; gap: 7px; flex: none; min-width: 0;
-  height: 28px; padding: 0 7px; border: 0; border-radius: 7px; background: none;
+.tab { display: flex; align-items: center; gap: 8px; flex: none; min-width: 0;
+  height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: none;
   color: var(--vscode-descriptionForeground) }
 .tab svg { width: 15px; height: 15px; flex: none }
-.tab .tlabel { display: none; font-size: 12.5px; font-weight: 600; white-space: nowrap;
+.tab .tlabel { display: none; font-size: 13px; font-weight: 500; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis }
 .tab:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground) }
-.tab.on { background: var(--clay-dim); color: var(--clay); padding: 0 11px 0 9px }
+.tab.on { background: var(--clay-dim); color: var(--clay); padding: 0 12px 0 8px }
 .tab.on .tlabel { display: block; min-width: 0 }
-.tab.on { flex: 0 1 auto }
+/* a zero basis means a long group name never wraps the row: the tab takes only
+   the room left, up to its full name, and the label ends in an ellipsis */
+.tab.on { flex: 1 1 0; min-width: 32px; max-width: max-content }
 @container (max-width: 330px) {
   .tab.on .tlabel { display: none }
-  .tab.on { padding: 0 7px }
+  .tab.on { padding: 0 8px }
 }
 #newchat, #dash, #rescan, #boardbtn { display: flex; align-items: center; justify-content: center;
   flex: none; width: 28px; height: 25px; padding: 0; border: 0; border-radius: 6px }
 #newchat svg, #dash svg, #rescan svg, #boardbtn svg { width: 15px; height: 15px }
 #newchat { background: var(--clay); color: #fff }
-#newchat:hover { background: #c9663f }
+#newchat:hover { background: color-mix(in srgb, var(--clay) 88%, #000) }
 
 .view { display: none; flex-direction: column }
 .view.on { display: flex }
 
-.bar { padding: 8px; display: flex; flex-direction: column; gap: 7px;
+.bar { padding: 8px; display: flex; flex-direction: column; gap: 8px;
   border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border) }
 input[type=search] {
-  width: 100%; padding: 4px 7px; border-radius: 3px;
+  width: 100%; padding: 4px 8px; border-radius: 4px;
   border: 1px solid var(--vscode-input-border, transparent);
   background: var(--vscode-input-background); color: var(--vscode-input-foreground);
   font: inherit; font-size: 12px;
@@ -83,7 +85,7 @@ input[type=search]:focus { outline: 1px solid var(--vscode-focusBorder) }
 .searchbox .sicon { width: 15px; height: 15px; flex: none;
   color: var(--vscode-descriptionForeground) }
 .searchbox input { flex: 1; min-width: 0; border: 0; outline: 0; background: none;
-  color: var(--vscode-input-foreground); font: inherit; font-size: 12.5px }
+  color: var(--vscode-input-foreground); font: inherit; font-size: 13px }
 .searchbox input::placeholder { color: var(--vscode-input-placeholderForeground,
   var(--vscode-descriptionForeground)) }
 #qclear { border: 0; background: none; padding: 2px 4px; border-radius: 4px;
@@ -92,31 +94,31 @@ input[type=search]:focus { outline: 1px solid var(--vscode-focusBorder) }
   color: var(--vscode-foreground) }
 .seg { display: flex; gap: 2px }
 .seg button {
-  flex: 1; padding: 3px 6px; border-radius: 3px; border: 0; font-size: 11px;
+  flex: 1; padding: 4px 6px; border-radius: 4px; border: 0; font-size: 11px;
   background: var(--vscode-input-background); color: var(--vscode-descriptionForeground);
 }
-.seg button.on { background: var(--clay); color: #fff; font-weight: 600 }
-.bar p { margin: 0; font-size: 10.5px; color: var(--vscode-descriptionForeground) }
+.seg button.on { background: var(--clay); color: #fff; font-weight: 500 }
+.bar p { margin: 0; font-size: 11px; color: var(--vscode-descriptionForeground) }
 .scope { display: flex; align-items: center; gap: 8px }
 /* filter chips, the way a messaging app filters a list */
-.chips { display: flex; gap: 6px; overflow-x: auto; padding: 1px 0 3px;
+.chips { display: flex; gap: 6px; overflow-x: auto; padding: 1px 0 4px;
   scrollbar-width: none }
 .chips::-webkit-scrollbar { display: none }
-.chip { display: flex; align-items: center; gap: 5px; flex: none; cursor: pointer;
-  padding: 5px 13px; border-radius: 16px; font-size: 12px; white-space: nowrap;
+.chip { display: flex; align-items: center; gap: 4px; flex: none; cursor: pointer;
+  padding: 4px 12px; border-radius: 12px; font-size: 12px; white-space: nowrap;
   background: none; color: var(--vscode-foreground);
   border: 1px solid var(--vscode-panel-border) }
 .chip:hover { background: var(--vscode-list-hoverBackground) }
 .chip em { font-style: normal; font-size: 11px; opacity: .65;
   font-variant-numeric: tabular-nums }
 .chip.on { background: var(--clay); color: #fff;
-  border-color: transparent; font-weight: 600 }
+  border-color: transparent; font-weight: 500 }
 .chip.on em { opacity: .85 }
 
 /* chat list ---------------------------------------------------------------- */
 .ghead {
   display: flex; align-items: center; gap: 6px; cursor: pointer;
-  padding: 10px 10px 8px; font-size: 13px; font-weight: 700;
+  padding: 10px 10px 8px; font-size: 13px; font-weight: 500;
   color: var(--vscode-foreground);
   position: sticky; top: 0; background: var(--vscode-sideBar-background); z-index: 1;
 }
@@ -132,23 +134,23 @@ svg.outline { fill: none; stroke: currentColor; stroke-width: 1.7;
 .ghead .gcount, .ghead .gcost { font-size: 11px; font-weight: 500;
   color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums }
 .ghead .gcost { font-family: var(--vscode-editor-font-family) }
-.badge { font-size: 9.5px; font-weight: 600; letter-spacing: .02em; padding: 1px 6px;
-  border-radius: 9px; background: var(--clay-dim);
+.badge { font-size: 11px; font-weight: 500; padding: 1px 6px;
+  border-radius: 8px; background: var(--clay-dim);
   color: var(--clay) }
 
-.row { display: flex; align-items: center; gap: 10px; padding: 11px 12px;
+.row { display: flex; align-items: center; gap: 10px; padding: 12px 12px;
   border-left: 2px solid transparent; cursor: pointer; position: relative }
 .row:hover { background: var(--vscode-list-hoverBackground) }
 .row.archived { opacity: .55 }
 /* the Deleted chip's list: no live state, one plain action */
 .row.deleted { cursor: default }
 .row.deleted .t { font-weight: 500; color: var(--vscode-descriptionForeground) }
-.restorebtn { flex: none; padding: 2px 9px; font-size: 11px; border-radius: 5px; cursor: pointer;
+.restorebtn { flex: none; padding: 2px 8px; font-size: 11px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
   background: none; color: var(--vscode-foreground) }
 .restorebtn:hover { background: var(--vscode-toolbar-hoverBackground) }
 .restorebtn:disabled { opacity: .5; cursor: default }
-.delnote { padding: 8px 12px 6px; font-size: 11.5px; color: var(--vscode-descriptionForeground) }
+.delnote { padding: 8px 12px 6px; font-size: 12px; color: var(--vscode-descriptionForeground) }
 .pinmark { width: 12px; height: 12px; flex: none; margin-left: -4px;
   fill: var(--clay) }
 
@@ -156,7 +158,7 @@ svg.outline { fill: none; stroke: currentColor; stroke-width: 1.7;
 .rowacts { display: none; position: absolute; right: 8px; top: 50%;
   transform: translateY(-50%); gap: 1px; padding: 2px; border-radius: 6px;
   background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
-  box-shadow: 0 1px 6px rgba(0,0,0,.3) }
+  box-shadow: 0 8px 24px rgba(0,0,0,.24) }
 .row:hover .rowacts { display: flex }
 .ract { display: flex; align-items: center; justify-content: center;
   width: 24px; height: 22px; padding: 0; border: 0; border-radius: 4px;
@@ -166,7 +168,7 @@ svg.outline { fill: none; stroke: currentColor; stroke-width: 1.7;
 .row.on { background: var(--clay-dim);
   color: var(--vscode-foreground); border-left-color: var(--vscode-focusBorder) }
 .row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 13px; font-weight: 600 }
+  font-size: 13px; font-weight: 500 }
 .row .age { font-size: 11px; color: var(--vscode-descriptionForeground);
   font-variant-numeric: tabular-nums; flex: none }
 .spark-ico { width: 14px; height: 14px; flex: none; fill: #d97757 }
@@ -177,7 +179,7 @@ svg.outline { fill: none; stroke: currentColor; stroke-width: 1.7;
 /* steady and filled, against the busy ring's turning outline */
 .dot.idle { background: var(--sage) }
 .dot.off { background: transparent }
-.more { padding: 6px 12px 10px 35px; font-size: 11.5px; cursor: pointer;
+.more { padding: 6px 12px 10px 35px; font-size: 12px; cursor: pointer;
   color: var(--vscode-descriptionForeground) }
 .more:hover { color: var(--vscode-textLink-foreground) }
 
@@ -194,57 +196,57 @@ body { height: 100vh; display: flex; flex-direction: column; overflow: hidden }
   position: sticky; top: 0; z-index: 5; flex: none;
   background: var(--vscode-sideBar-background);
   border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
-  padding: 7px 8px 6px;
+  padding: 8px 8px 6px;
 }
 .dtop { display: flex; align-items: center; gap: 4px }
 .dtop h2 { flex: 1; margin: 0; font-size: 13px; line-height: 1.3; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap }
 .iconbtn { background: none; border: 0; color: var(--vscode-descriptionForeground);
-  padding: 2px 6px; border-radius: 3px; font-size: 13px; line-height: 1 }
+  padding: 2px 6px; border-radius: 4px; font-size: 13px; line-height: 1 }
 .iconbtn:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground) }
-input.rename { flex: 1; font-size: 13px; padding: 2px 6px; border-radius: 3px;
+input.rename { flex: 1; font-size: 13px; padding: 2px 6px; border-radius: 4px;
   border: 1px solid var(--vscode-focusBorder); background: var(--vscode-input-background);
   color: var(--vscode-input-foreground); font-family: inherit }
-.facts { font-size: 10.5px; color: var(--vscode-descriptionForeground);
-  margin: 4px 0 7px; font-variant-numeric: tabular-nums }
+.facts { font-size: 11px; color: var(--vscode-descriptionForeground);
+  margin: 4px 0 8px; font-variant-numeric: tabular-nums }
 .acts { display: flex; flex-wrap: wrap; gap: 4px }
 .btn { border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px;
   background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground);
-  padding: 3px 8px; font-size: 11px }
+  padding: 4px 8px; font-size: 11px }
 .btn:hover { background: var(--vscode-button-secondaryHoverBackground) }
 .btn.pri { background: var(--clay); color: #fff }
-.btn.pri:hover { background: #c9663f }
+.btn.pri:hover { background: color-mix(in srgb, var(--clay) 88%, #000) }
 
 /* one resume button + a where-to dropdown */
 .split { position: relative; display: flex }
 .split .btn { border-radius: 4px 0 0 4px }
-.split .caret { border-radius: 0 4px 4px 0; padding: 3px 6px; margin-left: 1px }
-.menu { position: absolute; top: 100%; left: 0; margin-top: 3px; z-index: 20; min-width: 190px;
+.split .caret { border-radius: 0 4px 4px 0; padding: 4px 6px; margin-left: 1px }
+.menu { position: absolute; top: 100%; left: 0; margin-top: 4px; z-index: 20; min-width: 190px;
   background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
   border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border));
-  border-radius: 5px; padding: 3px; box-shadow: 0 4px 14px rgba(0,0,0,.35) }
-.menuitem { display: flex; width: 100%; align-items: baseline; gap: 7px; text-align: left;
-  background: none; border: 0; border-radius: 3px; padding: 5px 8px; font-size: 11.5px;
+  border-radius: 6px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.24) }
+.menuitem { display: flex; width: 100%; align-items: baseline; gap: 8px; text-align: left;
+  background: none; border: 0; border-radius: 4px; padding: 4px 8px; font-size: 12px;
   color: var(--vscode-menu-foreground, var(--vscode-foreground)) }
 .menuitem:hover { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
   color: var(--vscode-menu-selectionForeground, inherit) }
-.menuitem em { font-style: normal; font-size: 10px; opacity: .6; margin-left: auto }
+.menuitem em { font-style: normal; font-size: 11px; opacity: .6; margin-left: auto }
 
-.find { display: flex; align-items: center; gap: 3px; margin-top: 6px }
-.find input { flex: 1 1 auto; min-width: 0; height: 32px; padding: 3px 10px; border-radius: 8px;
+.find { display: flex; align-items: center; gap: 4px; margin-top: 6px }
+.find input { flex: 1 1 auto; min-width: 0; height: 32px; padding: 4px 10px; border-radius: 8px;
   border: 1px solid var(--vscode-input-border, transparent);
   background: var(--vscode-input-background); color: var(--vscode-input-foreground);
-  font: inherit; font-size: 11.5px }
+  font: inherit; font-size: 12px }
 .find input:focus { outline: 1px solid var(--vscode-focusBorder) }
-.find .cnt { font-size: 10.5px; color: var(--vscode-descriptionForeground);
+.find .cnt { font-size: 11px; color: var(--vscode-descriptionForeground);
   min-width: 34px; text-align: right; font-variant-numeric: tabular-nums }
 
 /* messages ---------------------------------------------------------------- */
-.msgs { flex: 1; overflow: auto; padding: 10px 8px 22px; display: flex; flex-direction: column; gap: 10px }
+.msgs { flex: 1; overflow: auto; padding: 10px 8px 24px; display: flex; flex-direction: column; gap: 10px }
 .msg { display: flex; flex-direction: column; max-width: 100% }
-.msg .bubble { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; line-height: 1.55 }
+.msg .bubble { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.55 }
 .msg .when { display: flex; align-items: center; gap: 4px; margin-top: 2px;
-  font-size: 9.5px; color: var(--vscode-descriptionForeground) }
+  font-size: 11px; color: var(--vscode-descriptionForeground) }
 .msg .when .whot { opacity: .8 }
 
 /* you: a right-aligned bubble. Tinted, not solid - a solid accent made every code
@@ -255,10 +257,10 @@ input.rename { flex: 1; font-size: 13px; padding: 2px 6px; border-radius: 3px;
   background: rgba(64,120,220,.13);
   background: color-mix(in srgb, var(--vscode-textLink-foreground) 13%, transparent);
   color: var(--vscode-foreground);
-  padding: 11px 14px; max-width: 94%;
+  padding: 12px 16px; max-width: 94%;
   border: 1px solid rgba(96,150,240,.30);
   border-color: color-mix(in srgb, var(--vscode-textLink-foreground) 32%, transparent);
-  border-radius: 14px 14px 4px 14px;
+  border-radius: 12px 12px 4px 12px;
 }
 .msg.user .when { justify-content: flex-end }
 
@@ -267,68 +269,68 @@ input.rename { flex: 1; font-size: 13px; padding: 2px 6px; border-radius: 3px;
 .msg.assistant .bubble { background: none; padding: 0; color: var(--vscode-foreground) }
 
 .tools { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px }
-.tool { font-family: var(--vscode-editor-font-family); font-size: 10.5px;
-  border: 1px solid var(--vscode-panel-border); border-radius: 10px; padding: 1px 7px;
+.tool { font-family: var(--vscode-editor-font-family); font-size: 11px;
+  border: 1px solid var(--vscode-panel-border); border-radius: 8px; padding: 1px 8px;
   color: var(--vscode-descriptionForeground) }
-mark { background: var(--vscode-editor-findMatchHighlightBackground); color: inherit; border-radius: 2px }
+mark { background: var(--vscode-editor-findMatchHighlightBackground); color: inherit; border-radius: 4px }
 mark.on { background: var(--amber); color: #000 }
 
 /* usage */
 #card { padding: 12px }
-.huge { font-size: 34px; font-weight: 700; line-height: 1; letter-spacing: -.02em; margin: 2px 0 0 }
+.huge { font-size: 34px; font-weight: 500; line-height: 1; letter-spacing: -.02em; margin: 2px 0 0 }
 .huge span { font-size: 13px; font-weight: 500; opacity: .6; margin-left: 6px }
-.cost { font-family: var(--vscode-editor-font-family); font-size: 16px; margin-top: 5px;
+.cost { font-family: var(--vscode-editor-font-family); font-size: 15px; margin-top: 4px;
   color: var(--sage) }
-.cost em { font-style: normal; font-size: 10.5px; opacity: .7; margin-left: 6px;
+.cost em { font-style: normal; font-size: 11px; opacity: .7; margin-left: 6px;
   font-family: var(--vscode-font-family); color: var(--vscode-descriptionForeground) }
-.eyebrow { font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
-  color: var(--vscode-descriptionForeground); font-weight: 600 }
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 6px; margin-top: 14px }
-.tile { background: var(--vscode-textBlockQuote-background); border-radius: 5px; padding: 8px }
-.tile b { display: block; font-size: 16px; font-variant-numeric: tabular-nums }
-.tile span { font-size: 9px; letter-spacing: .07em; text-transform: uppercase;
+.eyebrow { font-size: 11px;
+  color: var(--vscode-descriptionForeground); font-weight: 500 }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 6px; margin-top: 16px }
+.tile { background: var(--vscode-textBlockQuote-background); border-radius: 6px; padding: 8px }
+.tile b { display: block; font-size: 15px; font-variant-numeric: tabular-nums }
+.tile span { font-size: 11px;
   color: var(--vscode-descriptionForeground) }
-.mrow { display: flex; gap: 8px; font-size: 11.5px; padding: 3px 0; align-items: center }
+.mrow { display: flex; gap: 8px; font-size: 12px; padding: 4px 0; align-items: center }
 .mrow .nm { flex: 1 }
 .mrow .tk, .mrow .ct { font-family: var(--vscode-editor-font-family); font-variant-numeric: tabular-nums }
 .mrow .ct { color: var(--sage) }
-.mtable { margin-top: 14px; border-top: 1px solid var(--vscode-panel-border); padding-top: 9px }
-.bar-split { display: flex; height: 4px; border-radius: 2px; overflow: hidden; margin-top: 7px;
+.mtable { margin-top: 16px; border-top: 1px solid var(--vscode-panel-border); padding-top: 8px }
+.bar-split { display: flex; height: 4px; border-radius: 4px; overflow: hidden; margin-top: 8px;
   background: var(--vscode-input-background) }
 #trend { padding: 0 12px 24px }
-#trend h3 { font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--vscode-descriptionForeground); margin: 14px 0 7px }
+#trend h3 { font-size: 11px;
+  color: var(--vscode-descriptionForeground); margin: 16px 0 8px }
 .spark { display: flex; align-items: flex-end; gap: 2px; height: 66px }
-.spark i { flex: 1; min-height: 1px; border-radius: 2px 2px 0 0;
+.spark i { flex: 1; min-height: 1px; border-radius: 4px 4px 0 0;
   background: var(--clay) }
 .spark i:hover { background: var(--sand) }
 
-.empty { padding: 26px 16px; text-align: center; color: var(--vscode-descriptionForeground); font-size: 12px }
+.empty { padding: 28px 16px; text-align: center; color: var(--vscode-descriptionForeground); font-size: 12px }
 
 /* rendered markdown ------------------------------------------------------- */
 .bubble > :first-child, .membody > :first-child { margin-top: 0 }
 .bubble > :last-child, .membody > :last-child { margin-bottom: 0 }
 .bubble p, .membody p { margin: 0 0 8px }
 .bubble h3, .bubble h4, .bubble h5, .bubble h6, .membody h3, .membody h4, .membody h5, .membody h6 {
-  margin: 14px 0 6px; line-height: 1.3; font-weight: 600 }
-.bubble h3, .membody h3 { font-size: 14px } .bubble h4 { font-size: 13px }
-.bubble h5, .bubble h6, .membody h5, .membody h6 { font-size: 12.5px; color: var(--vscode-descriptionForeground) }
+  margin: 16px 0 6px; line-height: 1.3; font-weight: 500 }
+.bubble h3, .membody h3 { font-size: 15px } .bubble h4 { font-size: 13px }
+.bubble h5, .bubble h6, .membody h5, .membody h6 { font-size: 13px; color: var(--vscode-descriptionForeground) }
 .bubble ul, .bubble ol, .membody ul, .membody ol { margin: 0 0 8px; padding-left: 20px }
 .bubble li, .membody li { margin: 2px 0 }
 .bubble code, .membody code {
-  font-family: var(--vscode-editor-font-family); font-size: 11.5px;
+  font-family: var(--vscode-editor-font-family); font-size: 12px;
   background: var(--vscode-textCodeBlock-background, rgba(127,127,127,.18));
-  padding: 1px 4px; border-radius: 3px }
+  padding: 1px 4px; border-radius: 4px }
 /* Wrap long lines rather than scrolling sideways - a chat column is too narrow
    for a horizontal scrollbar to be usable. */
 .bubble pre.code, .membody pre.code {
-  margin: 0 0 8px; padding: 9px 11px; border-radius: 6px;
+  margin: 0 0 8px; padding: 8px 12px; border-radius: 6px;
   white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
   max-width: 100%;
   background: var(--vscode-editor-background);
   color: var(--vscode-editor-foreground);
   border: 1px solid var(--vscode-panel-border) }
-.bubble pre.code code, .membody pre.code code { background: none; padding: 0; font-size: 11.5px; line-height: 1.5;
+.bubble pre.code code, .membody pre.code code { background: none; padding: 0; font-size: 12px; line-height: 1.5;
   white-space: inherit; overflow-wrap: inherit }
 .bubble code, .membody code { overflow-wrap: anywhere }
 .bubble blockquote, .membody blockquote {
@@ -341,12 +343,12 @@ mark.on { background: var(--amber); color: #000 }
 .pathlink { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px }
 .pathlink:hover { text-decoration-style: solid; color: var(--vscode-textLink-activeForeground) }
 .bubble a code, .membody a code { color: inherit }
-.bubble strong, .membody strong { font-weight: 600 }
+.bubble strong, .membody strong { font-weight: 500 }
 .tablewrap { overflow-x: auto; margin: 0 0 8px }
-.bubble table, .membody table { border-collapse: collapse; font-size: 11.5px; width: 100% }
+.bubble table, .membody table { border-collapse: collapse; font-size: 12px; width: 100% }
 .bubble th, .bubble td, .membody th, .membody td {
   border: 1px solid var(--vscode-panel-border); padding: 4px 8px; text-align: left; vertical-align: top }
-.bubble th, .membody th { background: var(--vscode-textCodeBlock-background, rgba(127,127,127,.14)); font-weight: 600 }
+.bubble th, .membody th { background: var(--vscode-textCodeBlock-background, rgba(127,127,127,.14)); font-weight: 500 }
 .bubble code, .membody code { color: var(--vscode-textPreformat-foreground, inherit) }
 .bubble pre.code code, .membody pre.code code { color: inherit }
 
@@ -356,9 +358,9 @@ mark.on { background: var(--amber); color: #000 }
 .lbars { display: flex; gap: 6px; height: 5px; padding: 0 4px }
 /* The empty part of the track has to be visible on its own - the editor's input
    background is near-identical to the panel, so a used bar looked full. */
-.lbar { flex: 1 1 0; border-radius: 3px; overflow: hidden;
+.lbar { flex: 1 1 0; border-radius: 4px; overflow: hidden;
   background: rgba(127,127,127,.34); display: block }
-.lbar b { display: block; height: 100%; border-radius: 3px }
+.lbar b { display: block; height: 100%; border-radius: 4px }
 .lbar.five b { background: var(--sage) }
 .lbar.week b { background: var(--amber) }
 .lbar.warning b { background: var(--amber) }
@@ -370,54 +372,54 @@ mark.on { background: var(--amber); color: #000 }
   display: block; position: absolute; left: 6px; right: 6px; top: 8px;
   background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
   border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
-  border-radius: 7px; padding: 8px 10px; box-shadow: 0 6px 20px rgba(0,0,0,.35);
+  border-radius: 6px; padding: 8px 10px; box-shadow: 0 8px 24px rgba(0,0,0,.24);
 }
-.lrow { display: flex; align-items: center; gap: 7px; padding: 2px 0; font-size: 11.5px }
+.lrow { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 12px }
 .lrow em { width: 7px; height: 7px; border-radius: 50%; flex: none }
 .lrow em.five { background: var(--sage) }
 .lrow em.week { background: var(--amber) }
-.lrow .lname { font-weight: 600 }
-.lrow .lpct { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 700 }
+.lrow .lname { font-weight: 500 }
+.lrow .lpct { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 500 }
 .lrow .lreset { color: var(--vscode-descriptionForeground); min-width: 96px; text-align: right }
 .lfoot { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px;
-  padding-top: 5px; border-top: 1px solid var(--vscode-panel-border);
-  font-size: 10px; color: var(--vscode-descriptionForeground) }
+  padding-top: 4px; border-top: 1px solid var(--vscode-panel-border);
+  font-size: 11px; color: var(--vscode-descriptionForeground) }
 
 /* images shared into a chat */
 /* images follow the side their message is on */
 .imgs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; max-width: 100% }
 .msg.user .imgs { justify-content: flex-end }
-.msg.assistant .imgs { justify-content: flex-start; padding-left: 18px }
+.msg.assistant .imgs { justify-content: flex-start; padding-left: 20px }
 .imgs img { max-width: 190px; max-height: 140px; border-radius: 6px; cursor: zoom-in;
   border: 1px solid var(--vscode-panel-border); object-fit: cover }
 .imgs img.full { max-width: 100%; max-height: none; object-fit: contain; cursor: zoom-out }
 
 /* usage card extras */
-.tile i { display: block; font-style: normal; font-size: 9.5px; margin-top: 2px }
+.tile i { display: block; font-style: normal; font-size: 11px; margin-top: 2px }
 .tile i.up { color: var(--rise) }
 .tile i.down { color: var(--fall) }
 .tile i.flat { color: var(--vscode-descriptionForeground) }
-.note { font-size: 11.5px; color: var(--vscode-descriptionForeground);
+.note { font-size: 12px; color: var(--vscode-descriptionForeground);
   background: var(--vscode-textBlockQuote-background); border-radius: 6px;
-  padding: 7px 10px; margin: 14px 0 0 }
+  padding: 8px 10px; margin: 16px 0 0 }
 .note b { color: var(--vscode-foreground) }
 #trend h3 { display: flex; justify-content: space-between; align-items: baseline }
 #trend h3 em { font-style: normal; text-transform: none; letter-spacing: 0; opacity: .8 }
-.days { display: flex; align-items: flex-end; gap: 3px; height: 92px }
+.days { display: flex; align-items: flex-end; gap: 4px; height: 92px }
 .day { flex: 1; display: flex; flex-direction: column; justify-content: flex-end;
   align-items: stretch; height: 100%; gap: 4px }
-.day i { display: block; border-radius: 3px 3px 0 0;
+.day i { display: block; border-radius: 4px 4px 0 0;
   background: var(--clay); min-height: 2px }
 .day.last i { background: var(--sage) }
 .day:hover i { filter: brightness(1.3) }
-.day span { font-size: 9px; text-align: center; color: var(--vscode-descriptionForeground) }
+.day span { font-size: 11px; text-align: center; color: var(--vscode-descriptionForeground) }
 
 /* resume split button - the picker shows where Resume will go */
-.btn.pri { display: flex; align-items: center; gap: 5px }
+.btn.pri { display: flex; align-items: center; gap: 4px }
 .runico { width: 12px; height: 12px; fill: currentColor }
 .tgtico { width: 13px; height: 13px }
-.split .caret { gap: 3px }
-.tcaret { font-size: 9px; opacity: .8 }
+.split .caret { gap: 4px }
+.tcaret { font-size: 11px; opacity: .8 }
 .menuitem .mico { width: 14px; height: 14px; flex: none }
 .menuitem.on { background: var(--clay-dim);
   color: var(--vscode-foreground) }
@@ -437,7 +439,7 @@ mark.on { background: var(--amber); color: #000 }
 .shot.gone { background: var(--vscode-input-background); cursor: default }
 .shot.gone::after { content: 'screenshot no longer cached'; position: absolute;
   inset: 0; display: flex; align-items: center; justify-content: center;
-  padding: 0 14px; text-align: center; font-size: 10.5px;
+  padding: 0 16px; text-align: center; font-size: 11px;
   color: var(--vscode-descriptionForeground) }
 
 /* refresh affordances */
@@ -447,108 +449,108 @@ mark.on { background: var(--amber); color: #000 }
 .lfoot button { border: 0; background: none; padding: 0 2px; font-size: 11px;
   color: var(--vscode-descriptionForeground) }
 .lfoot button:hover { color: var(--vscode-foreground) }
-.lwarn { margin-top: 5px; font-size: 10px; color: var(--amber) }
+.lwarn { margin-top: 4px; font-size: 11px; color: var(--amber) }
 
 /* search results: a summary, then one card per chat */
 .found { padding: 4px 10px 16px }
 .fsum { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-  padding: 12px 2px 14px; border-bottom: 1px solid var(--vscode-panel-border) }
-.fstatbox b { display: block; font-size: 19px; font-weight: 700; line-height: 1.1;
+  padding: 12px 2px 16px; border-bottom: 1px solid var(--vscode-panel-border) }
+.fstatbox b { display: block; font-size: 17px; font-weight: 500; line-height: 1.1;
   font-variant-numeric: tabular-nums }
-.fstatbox span { font-size: 10.5px; color: var(--vscode-descriptionForeground) }
-.fmeta { display: flex; gap: 12px; flex: 1; font-size: 10.5px;
+.fstatbox span { font-size: 11px; color: var(--vscode-descriptionForeground) }
+.fmeta { display: flex; gap: 12px; flex: 1; font-size: 11px;
   color: var(--vscode-descriptionForeground) }
 .fmeta .warn { color: var(--amber) }
-.fclear { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 4px 11px;
+.fclear { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 4px 12px;
   font-size: 11px; background: none; color: var(--vscode-foreground) }
 .fclear:hover { background: var(--vscode-list-hoverBackground) }
 
-.fcard { border: 1px solid var(--vscode-panel-border); border-radius: 10px;
+.fcard { border: 1px solid var(--vscode-panel-border); border-radius: 8px;
   margin-top: 10px; overflow: hidden }
-.fhead2 { display: flex; align-items: center; gap: 8px; padding: 11px 12px; cursor: pointer }
+.fhead2 { display: flex; align-items: center; gap: 8px; padding: 12px 12px; cursor: pointer }
 .fhead2:hover { background: var(--vscode-list-hoverBackground) }
 .fhead2 .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; font-size: 13px; font-weight: 600 }
-.fhead2 .count { min-width: 17px; height: 16px; padding: 0 5px; border-radius: 8px;
-  display: flex; align-items: center; justify-content: center; font-size: 9.5px; font-weight: 700;
+  white-space: nowrap; font-size: 13px; font-weight: 500 }
+.fhead2 .count { min-width: 17px; height: 16px; padding: 0 4px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 500;
   background: var(--clay-dim); color: var(--clay) }
 .ffacts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 0 12px 10px 33px; font-size: 10.5px; color: var(--vscode-descriptionForeground) }
-.fopen { flex: none; border: 0; border-radius: 5px; padding: 3px 10px; font-size: 11px;
+  padding: 0 12px 10px 33px; font-size: 11px; color: var(--vscode-descriptionForeground) }
+.fopen { flex: none; border: 0; border-radius: 6px; padding: 4px 10px; font-size: 11px;
   background: var(--clay); color: #fff }
-.fopen:hover { background: #c9663f }
+.fopen:hover { background: color-mix(in srgb, var(--clay) 88%, #000) }
 .fhits { border-top: 1px solid var(--vscode-panel-border) }
-.fhit { display: flex; gap: 8px; padding: 7px 12px 7px 33px; cursor: pointer; font-size: 11.5px;
+.fhit { display: flex; gap: 8px; padding: 8px 12px 8px 33px; cursor: pointer; font-size: 12px;
   color: var(--vscode-descriptionForeground); line-height: 1.5 }
 .fhit:hover { background: var(--vscode-list-hoverBackground) }
-.fhit .who { flex: none; font-size: 10px; font-weight: 600; opacity: .7; padding-top: 1px }
+.fhit .who { flex: none; font-size: 11px; font-weight: 500; opacity: .7; padding-top: 1px }
 .fhit.you .who { color: var(--vscode-textLink-foreground) }
 .fhit .snip { flex: 1; min-width: 0; overflow-wrap: anywhere }
-.fmore { padding: 7px 12px 9px 33px; font-size: 10.5px;
+.fmore { padding: 8px 12px 8px 33px; font-size: 11px;
   color: var(--vscode-descriptionForeground); opacity: .8 }
 
 /* chat footer: context, cache, cost, turns, and the files the chat changed */
 .foot { flex: none; border-top: 1px solid var(--vscode-panel-border);
   background: var(--vscode-sideBar-background) }
-.fmeta { display: flex; align-items: center; gap: 12px; padding: 7px 12px }
+.fmeta { display: flex; align-items: center; gap: 12px; padding: 8px 12px }
 .spark2 { flex: none; width: 120px; height: 30px }
 .spark2 svg { width: 100%; height: 100% }
 .sline { fill: none; stroke: var(--clay); stroke-width: 1.4;
   vector-effect: non-scaling-stroke }
 .sfill { fill: var(--clay); opacity: .14; stroke: none }
-.fnums { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11.5px;
+.fnums { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px;
   font-variant-numeric: tabular-nums; color: var(--vscode-descriptionForeground) }
 .fstat { white-space: nowrap }
-.fstat.hot { color: var(--amber); font-weight: 600 }
+.fstat.hot { color: var(--amber); font-weight: 500 }
 .fnums .fstat:not(:last-child)::after { content: ' ·'; opacity: .5 }
 
 .fchanged { display: flex; align-items: center; gap: 8px; cursor: pointer;
   padding: 8px 12px; border-top: 1px solid var(--vscode-panel-border); font-size: 12px }
 .fchanged:hover { background: var(--vscode-list-hoverBackground) }
-.chev2 { font-size: 9px; opacity: .6 }
+.chev2 { font-size: 11px; opacity: .6 }
 .adds { color: var(--sage); font-variant-numeric: tabular-nums }
 .dels { color: var(--loss); font-variant-numeric: tabular-nums }
 .ftree { max-height: 190px; overflow: auto; border-top: 1px solid var(--vscode-panel-border) }
-.frowf { display: flex; align-items: baseline; gap: 8px; padding: 5px 12px 5px 26px;
-  font-size: 11.5px; cursor: pointer }
+.frowf { display: flex; align-items: baseline; gap: 8px; padding: 4px 12px 4px 28px;
+  font-size: 12px; cursor: pointer }
 .frowf:hover { background: var(--vscode-list-hoverBackground) }
-.frowf .fname { font-weight: 600; flex: none }
+.frowf .fname { font-weight: 500; flex: none }
 .frowf .fdir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; font-size: 10.5px; color: var(--vscode-descriptionForeground) }
-.frowf .fedits { font-size: 10px; color: var(--vscode-descriptionForeground) }
+  white-space: nowrap; font-size: 11px; color: var(--vscode-descriptionForeground) }
+.frowf .fedits { font-size: 11px; color: var(--vscode-descriptionForeground) }
 
 
 /* what a single turn changed */
 .tchange { margin-top: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 8px;
   overflow: hidden; background: var(--vscode-editorWidget-background) }
-.thead { display: flex; align-items: center; gap: 8px; padding: 8px 11px; font-size: 12px;
+.thead { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px;
   border-bottom: 1px solid var(--vscode-panel-border) }
 .tcount { color: var(--vscode-descriptionForeground); font-size: 11px; flex: 1 }
-.trow { display: flex; align-items: center; gap: 6px; padding: 7px 11px; cursor: pointer;
-  font-size: 11.5px; font-family: var(--vscode-editor-font-family) }
+.trow { display: flex; align-items: center; gap: 6px; padding: 8px 12px; cursor: pointer;
+  font-size: 12px; font-family: var(--vscode-editor-font-family) }
 .trow:hover { background: var(--vscode-list-hoverBackground) }
 .tico { width: 13px; height: 13px; flex: none; color: var(--vscode-descriptionForeground) }
 .tdir { color: var(--vscode-descriptionForeground); min-width: 0; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; direction: rtl }
-.tfile { font-weight: 600; flex: 1 }
+.tfile { font-weight: 500; flex: 1 }
 .tacts { display: flex; gap: 1px; opacity: 0 }
 .trow:hover .tacts { opacity: 1 }
 
 /* what Claude did, in words rather than raw tool names */
-.twork { margin-top: 7px }
+.twork { margin-top: 8px }
 .thead2 { display: flex; align-items: center; gap: 6px; cursor: pointer;
   color: var(--vscode-descriptionForeground); font-size: 12px; padding: 2px 0 }
 .thead2:hover { color: var(--vscode-foreground) }
 .tsum { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 /* one card per call: what ran, then the command itself, wrapped not clipped */
-.tdetail { margin: 7px 0 2px; padding-left: 18px }
+.tdetail { margin: 8px 0 2px; padding-left: 20px }
 .tcard { position: relative; border: 1px solid var(--vscode-panel-border);
-  border-radius: 8px; padding: 9px 11px; margin-bottom: 7px;
+  border-radius: 8px; padding: 8px 12px; margin-bottom: 8px;
   background: var(--vscode-editorWidget-background) }
-.tcardhead { display: flex; align-items: center; gap: 7px; margin-bottom: 7px }
-.tcardhead b { font-size: 11.5px; color: var(--clay) }
+.tcardhead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px }
+.tcardhead b { font-size: 12px; color: var(--clay) }
 .tcardico { width: 13px; height: 13px; color: var(--clay) }
-.tcode { margin: 0; font-family: var(--vscode-editor-font-family); font-size: 11.5px;
+.tcode { margin: 0; font-family: var(--vscode-editor-font-family); font-size: 12px;
   line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
   color: var(--vscode-editor-foreground) }
 .tcard .codecopy { top: 6px; right: 6px }
@@ -559,73 +561,73 @@ mark.on { background: var(--amber); color: #000 }
 /* digest */
 #view-digest.on { overflow: auto }
 #digest { padding: 4px 12px 24px }
-.dtitle { margin: 6px 0 2px; font-size: 19px; font-weight: 700 }
-.dspan { margin: 0 0 14px; font-size: 11.5px; color: var(--vscode-descriptionForeground) }
+.dtitle { margin: 6px 0 2px; font-size: 17px; font-weight: 500 }
+.dspan { margin: 0 0 16px; font-size: 12px; color: var(--vscode-descriptionForeground) }
 .dgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 8px }
-.dtile { border: 1px solid var(--vscode-panel-border); border-radius: 9px; padding: 11px 12px }
-.dtile b { display: block; font-size: 21px; font-variant-numeric: tabular-nums }
-.dtile span { font-size: 9.5px; font-weight: 600; letter-spacing: .06em;
+.dtile { border: 1px solid var(--vscode-panel-border); border-radius: 8px; padding: 12px 12px }
+.dtile b { display: block; font-size: 22px; font-variant-numeric: tabular-nums }
+.dtile span { font-size: 11px; font-weight: 500;
   color: var(--vscode-descriptionForeground) }
-.dtile i { display: block; margin-top: 4px; font-style: normal; font-size: 10.5px }
+.dtile i { display: block; margin-top: 4px; font-style: normal; font-size: 11px }
 .dtile i.up { color: var(--rise) }
 .dtile i.down { color: var(--fall) }
 .dtile i.flat { color: var(--vscode-descriptionForeground) }
-.dnote { margin: 14px 0 0; padding: 11px 13px; border-radius: 9px; font-size: 12px; line-height: 1.5;
+.dnote { margin: 16px 0 0; padding: 12px 12px; border-radius: 8px; font-size: 12px; line-height: 1.5;
   background: var(--vscode-textBlockQuote-background) }
 .dhead3 { display: flex; justify-content: space-between; align-items: baseline;
-  margin: 22px 0 9px; font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  margin: 24px 0 8px; font-size: 11px; font-weight: 500;
   color: var(--vscode-descriptionForeground) }
 .dhead3 em { font-style: normal; letter-spacing: 0; text-transform: none }
 /* fixed-width columns: a wide panel should not stretch the bars into slabs */
 .ddays { display: flex; gap: 10px; justify-content: flex-start }
 .dday { width: 56px; flex: none; text-align: center }
-.dday .dbox { height: 62px; border-radius: 7px; background: var(--vscode-input-background);
+.dday .dbox { height: 62px; border-radius: 6px; background: var(--vscode-input-background);
   display: flex; align-items: flex-end; overflow: visible; padding: 2px }
 /* past days in sand, today in full clay, so today stands out in the panel's
    own colours */
 .dday .dbox i { display: block; width: 100%; border-radius: 6px;
   background: var(--sand); opacity: .8 }
 .dday.today .dbox i { background: var(--clay); opacity: 1 }
-.dday span { display: block; margin-top: 5px; font-size: 10px;
+.dday span { display: block; margin-top: 4px; font-size: 11px;
   color: var(--vscode-descriptionForeground) }
-.dday.today span { color: var(--vscode-foreground); font-weight: 700 }
-.dmodel { margin-bottom: 13px }
-.dmtop { display: flex; justify-content: space-between; font-size: 12.5px; margin-bottom: 5px }
+.dday.today span { color: var(--vscode-foreground); font-weight: 500 }
+.dmodel { margin-bottom: 12px }
+.dmtop { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px }
 .dmtop span { color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums }
-.dmbar { height: 6px; border-radius: 3px; background: var(--vscode-input-background); overflow: hidden }
+.dmbar { height: 6px; border-radius: 4px; background: var(--vscode-input-background); overflow: hidden }
 .dmbar i { display: block; height: 100%; background: var(--sand) }
-.dmodel p { margin: 5px 0 0; font-size: 10.5px; color: var(--vscode-descriptionForeground) }
-.dproj { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 7px;
-  border: 1px solid var(--vscode-panel-border); border-radius: 9px; font-size: 12px }
-.dproj .rank { width: 20px; height: 20px; flex: none; border-radius: 5px; font-size: 11px;
-  display: flex; align-items: center; justify-content: center; font-weight: 700;
+.dmodel p { margin: 4px 0 0; font-size: 11px; color: var(--vscode-descriptionForeground) }
+.dproj { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 8px;
+  border: 1px solid var(--vscode-panel-border); border-radius: 8px; font-size: 12px }
+.dproj .rank { width: 20px; height: 20px; flex: none; border-radius: 6px; font-size: 11px;
+  display: flex; align-items: center; justify-content: center; font-weight: 500;
   background: var(--clay-dim); color: var(--clay) }
-.dproj .pname { font-weight: 600; flex: 1; min-width: 0; overflow: hidden;
+.dproj .pname { font-weight: 500; flex: 1; min-width: 0; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap }
-.dproj .pmeta { font-size: 10.5px; color: var(--vscode-descriptionForeground) }
+.dproj .pmeta { font-size: 11px; color: var(--vscode-descriptionForeground) }
 .dproj .pcost { font-variant-numeric: tabular-nums; color: var(--sage) }
-.dfoot { margin: 20px 0 0; font-size: 10.5px; color: var(--vscode-descriptionForeground) }
+.dfoot { margin: 20px 0 0; font-size: 11px; color: var(--vscode-descriptionForeground) }
 .dday.idle span { opacity: .45 }
 
 /* the day panel under the day-by-day row */
 .dday { cursor: pointer }
 .dday.sel .dbox { outline: 1.5px solid var(--vscode-focusBorder); outline-offset: 1px }
-.dpanel { margin-top: 14px; border: 1px solid var(--vscode-panel-border); border-radius: 9px;
-  padding: 12px 14px }
+.dpanel { margin-top: 16px; border: 1px solid var(--vscode-panel-border); border-radius: 8px;
+  padding: 12px 16px }
 .dpanel:empty { display: none }
-.dptitle { font-size: 13px; font-weight: 700; padding-bottom: 9px; margin-bottom: 4px;
+.dptitle { font-size: 13px; font-weight: 500; padding-bottom: 8px; margin-bottom: 4px;
   border-bottom: 1px solid var(--vscode-panel-border) }
 .dprow { display: flex; justify-content: space-between; align-items: baseline;
-  padding: 5px 0; font-size: 12.5px; color: var(--vscode-descriptionForeground) }
+  padding: 4px 0; font-size: 13px; color: var(--vscode-descriptionForeground) }
 .dprow b { color: var(--vscode-foreground); font-variant-numeric: tabular-nums; font-size: 13px }
-.dpsub { font-size: 10.5px; color: var(--vscode-descriptionForeground); opacity: .8;
+.dpsub { font-size: 11px; color: var(--vscode-descriptionForeground); opacity: .8;
   margin: -3px 0 2px }
 /* keep the sections below from jumping as the panel opens and closes */
 .dpanel { min-height: 0; transition: none }
 
 /* digest: window navigation, streaks, hours */
-.dnav { display: flex; align-items: center; gap: 6px; margin: 4px 0 14px }
-.dnav .iconbtn { font-size: 17px; padding: 2px 9px }
+.dnav { display: flex; align-items: center; gap: 6px; margin: 4px 0 16px }
+.dnav .iconbtn { font-size: 17px; padding: 2px 8px }
 .dnav .iconbtn:disabled { opacity: .3; cursor: default }
 .dnavmid { flex: 1; text-align: center }
 .dnavmid .dtitle { margin: 0 }
@@ -634,55 +636,55 @@ mark.on { background: var(--amber); color: #000 }
 .dhours { display: flex; align-items: flex-end; gap: 2px; height: 58px }
 .dhour { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end;
   position: relative }
-.dhour i { display: block; background: var(--sand); border-radius: 2px 2px 0 0 }
+.dhour i { display: block; background: var(--sand); border-radius: 4px 4px 0 0 }
 .dhour.idle i { background: var(--vscode-input-background); height: 3px }
-.dhour span { position: absolute; bottom: -16px; left: 0; font-size: 9px;
+.dhour span { position: absolute; bottom: -16px; left: 0; font-size: 11px;
   color: var(--vscode-descriptionForeground) }
 .dhours + .dhead3 { margin-top: 34px }
 
 /* tags, analytics sheet */
 
 .sheet { position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,.45);
-  display: flex; align-items: flex-start; justify-content: center; padding: 26px 14px }
-.sheetbox { width: 100%; max-width: 520px; max-height: 100%; overflow: auto; padding: 16px 18px 24px;
+  display: flex; align-items: flex-start; justify-content: center; padding: 28px 16px }
+.sheetbox { width: 100%; max-width: 520px; max-height: 100%; overflow: auto; padding: 16px 20px 24px;
   border-radius: 12px; background: var(--vscode-editorWidget-background);
   border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)) }
-.sheethead { display: flex; align-items: center; gap: 10px; margin-bottom: 14px }
-.sheethead b { flex: 1; font-size: 14px }
+.sheethead { display: flex; align-items: center; gap: 10px; margin-bottom: 16px }
+.sheethead b { flex: 1; font-size: 15px }
 
 /* terminal rhythm: a marker on each reply, work indented under it */
-.msgs { gap: 3px }
+.msgs { gap: 4px }
 .msg { padding: 4px 0 }
 /* drawn, not written: a ::before never lands in the clipboard */
-.msg.assistant .bubble { position: relative; padding-left: 18px }
+.msg.assistant .bubble { position: relative; padding-left: 20px }
 .msg.assistant .bubble::before {
   content: ''; position: absolute; left: 3px; top: 8px;
   width: 5px; height: 5px; border-radius: 50%;
   background: var(--vscode-foreground); opacity: .85;
 }
-.msg.assistant .when, .msg.worked .when { padding-left: 18px }
+.msg.assistant .when, .msg.worked .when { padding-left: 20px }
 /* a run of tool calls with no prose sits quietly between the replies */
 .msg.worked { padding: 0 0 2px }
-.msg.worked .twork { margin-top: 0; padding-left: 18px }
-.msg.worked .tchange { margin-left: 18px }
+.msg.worked .twork { margin-top: 0; padding-left: 20px }
+.msg.worked .tchange { margin-left: 20px }
 .msg.user + .msg.assistant { margin-top: 8px }
 .msg.assistant + .msg.user { margin-top: 12px }
 
 /* Claude's own markers: the away recap, and where a chat was compacted */
-.note-card { margin: 12px 0; border-radius: 8px; padding: 10px 13px;
+.note-card { margin: 12px 0; border-radius: 8px; padding: 10px 12px;
   background: var(--vscode-textBlockQuote-background);
   border-left: 3px solid var(--clay) }
 .note-card.compact { border-left-color: var(--vscode-descriptionForeground); opacity: .85 }
-.nhead { display: flex; align-items: center; gap: 7px; margin-bottom: 6px }
-.nhead b { font-size: 10px; font-weight: 700; letter-spacing: .09em;
+.nhead { display: flex; align-items: center; gap: 8px; margin-bottom: 6px }
+.nhead b { font-size: 11px; font-weight: 500;
   color: var(--vscode-descriptionForeground) }
-.nhead span { margin-left: auto; font-size: 10.5px; color: var(--vscode-descriptionForeground) }
+.nhead span { margin-left: auto; font-size: 11px; color: var(--vscode-descriptionForeground) }
 .nico { width: 13px; height: 13px; flex: none; color: var(--clay) }
 .note-card.compact .nico { color: var(--vscode-descriptionForeground) }
-.nbody { font-size: 12.5px; line-height: 1.55 }
+.nbody { font-size: 13px; line-height: 1.55 }
 .nbody > :first-child { margin-top: 0 }
 .nbody > :last-child { margin-bottom: 0 }
-.nbody p { margin: 0 0 7px }
+.nbody p { margin: 0 0 8px }
 
 /* copy button on a code block - outside the <pre>, so it never joins a selection */
 .codewrap { position: relative }
@@ -703,10 +705,10 @@ mark.on { background: var(--amber); color: #000 }
 .btn.ico { display: flex; align-items: center; justify-content: center;
   width: 30px; height: 26px; padding: 0 }
 .btn.ico svg { width: 14px; height: 14px }
-.acts { gap: 5px; align-items: center }
+.acts { gap: 4px; align-items: center }
 .find { margin-top: 8px; gap: 4px }
 .find input { font-size: 12px }
-.find .iconbtn { padding: 4px 7px; font-size: 14px }
+.find .iconbtn { padding: 4px 8px; font-size: 15px }
 
 /* Nothing may widen the panel. A flex child defaults to min-width:auto, so one
    long unbroken string (a path, a URL, a wide image) pushes the whole column
@@ -732,17 +734,17 @@ mark.on { background: var(--amber); color: #000 }
   max-height: 0; opacity: 0; margin-top: 0; margin-bottom: 0; pointer-events: none }
 
 /* the + chip, and the group picker on a row */
-.chip.add { padding: 5px 11px; font-size: 14px; line-height: 1;
+.chip.add { padding: 4px 12px; font-size: 15px; line-height: 1;
   color: var(--vscode-descriptionForeground) }
 .chip.add:hover { color: var(--vscode-foreground) }
 /* row menu: every action in one place, groups as a submenu */
-.ctx { position: fixed; z-index: 70; min-width: 210px; padding: 5px;
+.ctx { position: fixed; z-index: 70; min-width: 210px; padding: 4px;
   background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
   border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, var(--vscode-panel-border)));
-  border-radius: 9px; box-shadow: 0 10px 30px rgba(0,0,0,.45) }
+  border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.24) }
 .ctx.sub { min-width: 175px }
 .ctxitem { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
-  background: none; border: 0; border-radius: 6px; padding: 7px 9px; font-size: 12.5px;
+  background: none; border: 0; border-radius: 6px; padding: 8px 8px; font-size: 13px;
   color: var(--vscode-menu-foreground, var(--vscode-foreground)) }
 .ctxitem:hover { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
   color: var(--vscode-menu-selectionForeground, inherit) }
@@ -756,12 +758,12 @@ mark.on { background: var(--amber); color: #000 }
   color: var(--vscode-foreground) }
 /* the tick column keeps every name on the same left edge, ticked or not */
 .ctx.sub .ctxitem { gap: 8px }
-.ctxitem .tick { flex: none; width: 13px; font-size: 12px; font-weight: 700;
+.ctxitem .tick { flex: none; width: 13px; font-size: 12px; font-weight: 500;
   color: var(--vscode-textLink-foreground) }
-.ctxitem.picked { font-weight: 600 }
+.ctxitem.picked { font-weight: 500 }
 .ctxitem.new { color: var(--vscode-textLink-foreground) }
 .ctxsep { height: 1px; margin: 4px 6px; background: var(--vscode-panel-border) }
-input.rowrename { flex: 1; min-width: 0; font: inherit; font-size: 13px; font-weight: 600;
+input.rowrename { flex: 1; min-width: 0; font: inherit; font-size: 13px; font-weight: 500;
   padding: 2px 6px; border-radius: 4px; background: var(--vscode-input-background);
   color: var(--vscode-input-foreground); border: 1px solid var(--vscode-focusBorder) }
 
@@ -775,29 +777,28 @@ input.rowrename { flex: 1; min-width: 0; font: inherit; font-size: 13px; font-we
 .row:has(.spinner) .t { color: var(--vscode-foreground) }
 /* the svg needs an explicit size, or the button renders empty */
 #boardbtn { margin-left: auto }
-#dash { margin-left: 2px; padding: 4px 7px; display: flex; align-items: center }
+#dash { margin-left: 2px; padding: 4px 8px; display: flex; align-items: center }
 #dash svg { width: 15px; height: 15px }
 #dash + #newchat { margin-left: 6px }
 
 /* the card, shown as the picture it will be */
 #view-usage.on { overflow: auto }
-#usagebody { padding: 0 10px 22px }
-#preview { border-radius: 10px; overflow: hidden; border: 1px solid var(--vscode-panel-border) }
+#usagebody { padding: 0 10px 24px }
+#preview { border-radius: 8px; overflow: hidden; border: 1px solid var(--vscode-panel-border) }
 #cardimg { display: block; width: 100%; height: auto }
-.opth { margin: 18px 0 8px; font-size: 10px; font-weight: 700; letter-spacing: .08em;
-  text-transform: uppercase; color: var(--vscode-descriptionForeground) }
-.opts { border: 1px solid var(--vscode-panel-border); border-radius: 10px; overflow: hidden }
+.opth { margin: 20px 0 8px; font-size: 11px; font-weight: 500; color: var(--vscode-descriptionForeground) }
+.opts { border: 1px solid var(--vscode-panel-border); border-radius: 8px; overflow: hidden }
 .opts label { display: grid; grid-template-columns: 1fr auto; align-items: center;
-  gap: 2px 12px; padding: 11px 13px; cursor: pointer;
+  gap: 2px 12px; padding: 12px 12px; cursor: pointer;
   border-top: 1px solid var(--vscode-panel-border) }
 .opts label:first-child { border-top: 0 }
 .opts label:hover { background: var(--vscode-list-hoverBackground) }
-.opts .oname { font-size: 12.5px }
-.opts em { grid-column: 1; font-style: normal; font-size: 10.5px;
+.opts .oname { font-size: 13px }
+.opts em { grid-column: 1; font-style: normal; font-size: 11px;
   color: var(--vscode-descriptionForeground) }
 .opts input { position: absolute; opacity: 0; pointer-events: none }
 .opts .sw { grid-column: 2; grid-row: 1 / span 2; width: 34px; height: 19px; flex: none;
-  border-radius: 10px; background: var(--vscode-input-background);
+  border-radius: 8px; background: var(--vscode-input-background);
   border: 1px solid var(--vscode-panel-border); position: relative;
   transition: background .14s ease }
 .opts .sw::after { content: ''; position: absolute; top: 2px; left: 2px;
@@ -806,49 +807,49 @@ input.rowrename { flex: 1; min-width: 0; font: inherit; font-size: 13px; font-we
 .opts input:checked + .sw { background: var(--clay); border-color: transparent }
 .opts input:checked + .sw::after { transform: translateX(15px); background: #fff }
 .opts input:focus-visible + .sw { outline: 1px solid var(--clay); outline-offset: 2px }
-.cardbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px }
-#shot, #shotcopy { display: flex; align-items: center; justify-content: center; gap: 7px;
+.cardbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 16px }
+#shot, #shotcopy { display: flex; align-items: center; justify-content: center; gap: 8px;
   border: 1px solid var(--vscode-button-border, transparent); border-radius: 8px;
-  padding: 9px 12px; font-size: 12px;
+  padding: 8px 12px; font-size: 12px;
   background: var(--vscode-button-secondaryBackground);
   color: var(--vscode-button-secondaryForeground) }
 #shot { background: var(--clay); color: #fff }
 #shot svg, #shotcopy svg { width: 14px; height: 14px }
 #shotcopy:hover { background: var(--vscode-button-secondaryHoverBackground) }
-#shot:hover { background: #c9663f }
-.cardnote { margin: 9px 0 0; font-size: 10.5px; text-align: center;
+#shot:hover { background: color-mix(in srgb, var(--clay) 88%, #000) }
+.cardnote { margin: 8px 0 0; font-size: 11px; text-align: center;
   color: var(--vscode-descriptionForeground) }
 
 /* instant tooltip - the native one is too slow to be useful here */
 .tip { position: fixed; z-index: 95; pointer-events: none; max-width: 240px;
-  padding: 5px 9px; border-radius: 6px; font-size: 11.5px; line-height: 1.4;
+  padding: 4px 8px; border-radius: 6px; font-size: 12px; line-height: 1.4;
   background: var(--vscode-editorHoverWidget-background, #241a16);
   color: var(--vscode-editorHoverWidget-foreground, #fff);
   border: 1px solid var(--vscode-editorHoverWidget-border, transparent);
-  box-shadow: 0 6px 20px rgba(0,0,0,.4) }
+  box-shadow: 0 8px 24px rgba(0,0,0,.24) }
 
 /* memories: cards you can read in place */
 #view-memory.on { flex: 1; min-height: 0 }
 #memrows { overflow: auto; flex: 1; min-height: 0; padding: 0 10px 16px }
 #memread { display: flex; flex-direction: column; flex: 1; min-height: 0 }
-.memcard { border: 1px solid var(--vscode-panel-border); border-radius: 10px;
-  padding: 11px 13px; margin-bottom: 8px; cursor: pointer }
+.memcard { border: 1px solid var(--vscode-panel-border); border-radius: 8px;
+  padding: 12px 12px; margin-bottom: 8px; cursor: pointer }
 .memcard:hover { background: var(--vscode-list-hoverBackground); border-color: var(--clay) }
-.memtop { display: flex; align-items: center; gap: 9px }
+.memtop { display: flex; align-items: center; gap: 8px }
 .memtop b { flex: 1; min-width: 0; font-size: 13px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap }
-.memtype { flex: none; font-size: 9px; font-weight: 700; letter-spacing: .07em;
-  padding: 2px 7px; border-radius: 9px; background: var(--clay-dim); color: var(--clay) }
+.memtype { flex: none; font-size: 11px; font-weight: 500;
+  padding: 2px 8px; border-radius: 8px; background: var(--clay-dim); color: var(--clay) }
 .memtype.feedback { background: rgba(224,163,62,.16); color: var(--amber) }
 .memtype.project { background: var(--sage-dim); color: var(--sage) }
-.memtype.index, .memtype.user { background: rgba(176,137,104,.18); color: #b08968 }
-.memdesc { margin: 6px 0 0; font-size: 11.5px; line-height: 1.5;
+.memtype.index, .memtype.user { background: var(--clay-dim); color: var(--sand) }
+.memdesc { margin: 6px 0 0; font-size: 12px; line-height: 1.5;
   color: var(--vscode-descriptionForeground);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden }
-.memwhen { display: block; margin-top: 7px; font-size: 10px;
+.memwhen { display: block; margin-top: 8px; font-size: 11px;
   color: var(--vscode-descriptionForeground); opacity: .8 }
-.membody { flex: 1; overflow: auto; padding: 12px 12px 26px; font-size: 12.5px; line-height: 1.6 }
-#memread .dtop h2 { font-size: 13.5px }
+.membody { flex: 1; overflow: auto; padding: 12px 12px 28px; font-size: 13px; line-height: 1.6 }
+#memread .dtop h2 { font-size: 13px }
 .memcard.isindex { background: var(--clay-dim); border-color: transparent }
 .memico { width: 14px; height: 14px; flex: none; color: var(--clay) }
 a.memlink { color: var(--clay); text-decoration: none; border-bottom: 1px solid transparent }
@@ -880,8 +881,8 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
   display: flex; align-items: center; justify-content: center;
   width: 38px; height: 38px; padding: 0; border-radius: 50%;
   background: var(--clay); border: 0; color: #fff;
-  box-shadow: 0 4px 18px rgba(0,0,0,.5) }
-.tobottom:hover { background: #c9663f }
+  box-shadow: 0 8px 24px rgba(0,0,0,.24) }
+.tobottom:hover { background: color-mix(in srgb, var(--clay) 88%, #000) }
 .jumpico { width: 18px; height: 18px; transform: rotate(90deg); stroke-width: 2.6 }
 /* borderless like the other toolbar icons - the box only appears on hover */
 .foldall { display: flex; align-items: center; justify-content: center; flex: none;
@@ -897,16 +898,16 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 /* branch lineage: where a chat came from, and what came out of it */
 .lineage { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px }
 .blink { display: flex; align-items: center; gap: 6px; max-width: 100%;
-  border: 1px solid var(--vscode-panel-border); border-radius: 14px;
-  padding: 3px 10px 3px 8px; font-size: 11px; background: none;
+  border: 1px solid var(--vscode-panel-border); border-radius: 12px;
+  padding: 4px 10px 4px 8px; font-size: 11px; background: none;
   color: var(--vscode-descriptionForeground) }
 .blink:hover { border-color: var(--clay); color: var(--vscode-foreground) }
 .blink span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .bico { width: 12px; height: 12px; flex: none; color: var(--clay) }
 .branchmark { width: 12px; height: 12px; flex: none; margin-left: -4px; color: var(--clay) }
 .gitrow { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px }
-.gitchip { display: flex; align-items: center; gap: 5px; font-size: 10.5px;
-  padding: 2px 9px 2px 7px; border-radius: 12px;
+.gitchip { display: flex; align-items: center; gap: 4px; font-size: 11px;
+  padding: 2px 8px 2px 8px; border-radius: 12px;
   background: var(--clay-dim); color: var(--clay) }
 
 /* sub-agents ---------------------------------------------------------------
@@ -915,37 +916,37 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
    agent can spawn its own and a flat list hides who asked for what. */
 .acards { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 2px }
 .acard { border: 1px solid var(--vscode-panel-border); border-left: 3px solid var(--sage);
-  border-radius: 8px; padding: 9px 11px 10px;
+  border-radius: 8px; padding: 8px 12px 10px;
   background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background)) }
 .acard.running { border-left-color: var(--amber) }
 .acard.stopped { border-left-color: var(--vscode-descriptionForeground) }
-.ahead { display: flex; align-items: center; gap: 7px }
+.ahead { display: flex; align-items: center; gap: 8px }
 .aico { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--sage);
   stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round }
 .aname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; font-size: 12.5px; font-weight: 700 }
-.atype { flex: none; font-size: 10px; padding: 1px 7px; border-radius: 9px;
+  white-space: nowrap; font-size: 13px; font-weight: 500 }
+.atype { flex: none; font-size: 11px; padding: 1px 8px; border-radius: 8px;
   background: var(--sage-dim); color: var(--sage) }
-.astate { flex: none; font-size: 10.5px; font-weight: 600; letter-spacing: .02em }
+.astate { flex: none; font-size: 11px; font-weight: 500; }
 .astate.done { color: var(--sage) }
 .astate.running { color: var(--amber) }
 .astate.stopped { color: var(--vscode-descriptionForeground) }
-.ameta { margin-top: 3px; font-size: 11px; color: var(--vscode-descriptionForeground);
+.ameta { margin-top: 4px; font-size: 11px; color: var(--vscode-descriptionForeground);
   font-variant-numeric: tabular-nums }
 
 /* the brief and the answer, folded away - an agent prompt is usually longer
    than the message that spawned it */
-.afold { margin-top: 7px }
-.afoldhead { display: flex; align-items: center; gap: 5px; width: 100%;
-  padding: 3px 0; border: 0; background: none; font-size: 11.5px; font-weight: 600;
+.afold { margin-top: 8px }
+.afoldhead { display: flex; align-items: center; gap: 4px; width: 100%;
+  padding: 4px 0; border: 0; background: none; font-size: 12px; font-weight: 500;
   color: var(--vscode-descriptionForeground) }
 .afoldhead:hover { color: var(--vscode-foreground) }
-.afoldbody { padding: 4px 0 2px 14px; font-size: 12px; line-height: 1.55;
-  border-left: 1px solid var(--vscode-panel-border); margin-left: 3px }
+.afoldbody { padding: 4px 0 2px 16px; font-size: 12px; line-height: 1.55;
+  border-left: 1px solid var(--vscode-panel-border); margin-left: 4px }
 .afoldbody p:first-child { margin-top: 0 }
 .afoldbody pre { max-width: 100%; overflow-x: auto }
 .aopen { display: flex; align-items: center; gap: 4px; margin-top: 8px;
-  padding: 4px 9px; border: 0; border-radius: 6px; font-size: 11.5px; font-weight: 600;
+  padding: 4px 8px; border: 0; border-radius: 6px; font-size: 12px; font-weight: 500;
   background: var(--sage-dim); color: var(--sage) }
 .aopen:hover { background: var(--sage); color: #fff }
 .agoico { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.4;
@@ -961,7 +962,7 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
   background: var(--vscode-editor-background, var(--vscode-sideBar-background));
   border: 1px solid var(--vscode-panel-border);
   color: var(--vscode-descriptionForeground);
-  box-shadow: 0 4px 18px rgba(0,0,0,.5) }
+  box-shadow: 0 8px 24px rgba(0,0,0,.24) }
 /* a translucent hover colour would let the text behind it back in, so the hover
    state is a solid fill rather than a tint */
 .afab:hover { background: var(--vscode-editorWidget-background,
@@ -971,23 +972,23 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 .afabico { width: 18px; height: 18px; fill: none; stroke: currentColor;
   stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round }
 .afabn { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px;
-  padding: 0 4px; border-radius: 8px; font-size: 10px; font-weight: 700; line-height: 16px;
+  padding: 0 4px; border-radius: 8px; font-size: 11px; font-weight: 500; line-height: 16px;
   background: var(--vscode-badge-background); color: var(--vscode-badge-foreground) }
 /* the one place colour still earns its keep: something is running right now */
 .afab.busy .afabn { background: var(--amber); color: #1b1b1b }
 
 .apanel { position: absolute; right: 16px; top: 58px; z-index: 7;
   width: min(340px, calc(100% - 32px)); max-height: 60%; overflow-y: auto;
-  padding: 4px 0 6px; border-radius: 10px;
+  padding: 4px 0 6px; border-radius: 8px;
   background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
   border: 1px solid var(--vscode-panel-border);
-  box-shadow: 0 8px 28px rgba(0,0,0,.55) }
-.apanelhead { display: flex; align-items: center; gap: 7px; padding: 9px 11px 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.24) }
+.apanelhead { display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px;
   border-bottom: 1px solid var(--vscode-panel-border) }
-.aptitle { flex: 1; font-size: 12.5px; font-weight: 700 }
+.aptitle { flex: 1; font-size: 13px; font-weight: 500 }
 .apdone { font-size: 11px; color: var(--vscode-descriptionForeground) }
 .arow { display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 7px 11px; border: 0; background: none; text-align: left;
+  padding: 8px 12px; border: 0; background: none; text-align: left;
   color: var(--vscode-foreground) }
 .arow:hover { background: var(--vscode-list-hoverBackground) }
 .adot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--sage) }
@@ -995,9 +996,9 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 .adot.stopped { background: var(--vscode-descriptionForeground) }
 .arname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; font-size: 12px }
-.artime { flex: none; font-size: 10.5px; color: var(--vscode-descriptionForeground);
+.artime { flex: none; font-size: 11px; color: var(--vscode-descriptionForeground);
   font-variant-numeric: tabular-nums }
-.armodel { flex: none; font-size: 10.5px; color: var(--vscode-descriptionForeground) }
+.armodel { flex: none; font-size: 11px; color: var(--vscode-descriptionForeground) }
 .apos { font-size: 11px; color: var(--vscode-descriptionForeground);
   font-variant-numeric: tabular-nums; padding: 0 2px }
 /* an agent that was killed or errored - not every one finishes */
@@ -1025,7 +1026,7 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
   border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)) }
 .srcbtn:hover { background: var(--vscode-list-hoverBackground) }
 .srcbtn .spark-ico, .srcbtn .codex-ico { width: 15px; height: 15px }
-.srcbtn .tcaret { font-size: 9px; opacity: .7 }
+.srcbtn .tcaret { font-size: 11px; opacity: .7 }
 .srcmenu .mico, .srcmenu .spark-ico, .srcmenu .codex-ico { width: 14px; height: 14px; flex: none }
 .srcmenu .menuitem em { margin-left: auto; font-style: normal; opacity: .6;
   font-variant-numeric: tabular-nums }
@@ -1038,29 +1039,28 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
   display: flex; flex-direction: column; gap: 12px }
 /* each group is its own card, so where one setting ends and the next begins is
    drawn rather than inferred from a rule across the panel */
-.setcard { padding: 13px 14px 6px; border-radius: 12px;
+.setcard { padding: 12px 16px 6px; border-radius: 12px;
   border: 1px solid var(--vscode-panel-border);
   background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background)) }
-.sechead { display: flex; align-items: center; gap: 9px }
+.sechead { display: flex; align-items: center; gap: 8px }
 .secico { width: 15px; height: 15px; flex: none; fill: currentColor;
   color: var(--vscode-descriptionForeground) }
-.setcard h3 { flex: 1; margin: 0; font-size: 13px; font-weight: 700 }
-.setnote { margin: 5px 0 0 24px; font-size: 11.5px; line-height: 1.55;
+.setcard h3 { flex: 1; margin: 0; font-size: 13px; font-weight: 500 }
+.setnote { margin: 4px 0 0 24px; font-size: 12px; line-height: 1.55;
   color: var(--vscode-descriptionForeground) }
-.seclabel { display: block; margin: 14px 0 6px; font-size: 10px; font-weight: 700;
-  letter-spacing: .08em; text-transform: uppercase;
+.seclabel { display: block; margin: 16px 0 6px; font-size: 11px; font-weight: 500;
   color: var(--vscode-descriptionForeground) }
 
-.setrow { display: flex; align-items: center; gap: 12px; padding: 11px 0 }
+.setrow { display: flex; align-items: center; gap: 12px; padding: 12px 0 }
 .setrow + .setrow { border-top: 1px solid var(--vscode-panel-border) }
 .settxt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px }
-.settxt b { font-size: 12.5px; font-weight: 600 }
+.settxt b { font-size: 13px; font-weight: 500 }
 .settxt em { font-style: normal; font-size: 11px;
   color: var(--vscode-descriptionForeground) }
 
 /* dropdowns and the number box, styled rather than left to the platform */
 .setrow select, .setnum, .segsel {
-  font: inherit; font-size: 12px; padding: 5px 26px 5px 9px; border-radius: 7px;
+  font: inherit; font-size: 12px; padding: 4px 28px 4px 8px; border-radius: 6px;
   appearance: none; -webkit-appearance: none; cursor: pointer;
   background: var(--vscode-input-background) no-repeat right 8px center;
   background-image: linear-gradient(45deg, transparent 50%, var(--vscode-descriptionForeground) 50%),
@@ -1070,17 +1070,17 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
   color: var(--vscode-input-foreground);
   border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)) }
 .setrow select:hover, .segsel:hover { border-color: var(--vscode-focusBorder) }
-.setnum { width: 64px; padding-right: 9px; background-image: none; cursor: text }
+.setnum { width: 64px; padding-right: 8px; background-image: none; cursor: text }
 
 /* a stepper, because a number input's spinner arrows cannot be restyled */
-.stepper { display: flex; align-items: stretch; flex: none; border-radius: 7px;
+.stepper { display: flex; align-items: stretch; flex: none; border-radius: 6px;
   overflow: hidden; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
   background: var(--vscode-input-background) }
 .stepbtn { width: 26px; padding: 0; border: 0; background: none; font-size: 13px;
   line-height: 1; color: var(--vscode-descriptionForeground) }
 .stepbtn:hover { background: var(--vscode-toolbar-hoverBackground);
   color: var(--vscode-foreground) }
-.stepval { width: 34px; padding: 5px 0; border: 0; background: none; text-align: center;
+.stepval { width: 34px; padding: 4px 0; border: 0; background: none; text-align: center;
   font: inherit; font-size: 12px; font-variant-numeric: tabular-nums;
   color: var(--vscode-input-foreground) }
 .stepval:focus { outline: 0 }
@@ -1089,7 +1089,7 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 /* the switch, borrowed from the card options so both read the same */
 .swrap { position: relative; display: inline-flex; flex: none; cursor: pointer }
 .swrap input { position: absolute; opacity: 0; width: 0; height: 0 }
-.swrap .sw { width: 34px; height: 19px; border-radius: 10px; position: relative;
+.swrap .sw { width: 34px; height: 19px; border-radius: 8px; position: relative;
   background: var(--vscode-input-background);
   border: 1px solid var(--vscode-panel-border); transition: background .14s ease }
 .swrap .sw::after { content: ''; position: absolute; top: 2px; left: 2px;
@@ -1106,24 +1106,24 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
   background: rgba(255,255,255,.09) }
 .pvtrack b { display: block; height: 100%; border-radius: 4px }
 
-.seg-row { display: flex; align-items: flex-start; gap: 9px; padding: 8px 0 }
+.seg-row { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0 }
 .seg-row + .seg-row { border-top: 1px solid var(--vscode-panel-border) }
-.segnum { flex: none; width: 20px; height: 20px; border-radius: 6px; margin-top: 3px;
-  font-size: 11px; font-weight: 700; line-height: 20px; text-align: center; color: #10100f }
-.segright { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px }
+.segnum { flex: none; width: 20px; height: 20px; border-radius: 6px; margin-top: 4px;
+  font-size: 11px; font-weight: 500; line-height: 20px; text-align: center; color: #10100f }
+.segright { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px }
 .segsel { width: 100% }
-.swatches { display: flex; gap: 5px; flex-wrap: wrap }
+.swatches { display: flex; gap: 4px; flex-wrap: wrap }
 .swatch { width: 20px; height: 20px; flex: none; padding: 0; border-radius: 6px;
   border: 2px solid transparent }
 .swatch.on { border-color: var(--vscode-foreground) }
 .swatch:hover { transform: scale(1.08) }
-.segdrop { flex: none; margin-top: 3px; width: 22px; height: 22px; padding: 0;
-  border: 0; border-radius: 6px; font-size: 14px; background: none;
+.segdrop { flex: none; margin-top: 4px; width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: 6px; font-size: 15px; background: none;
   color: var(--vscode-descriptionForeground) }
 .segdrop:hover { background: var(--vscode-toolbar-hoverBackground);
   color: var(--vscode-foreground) }
 .segadd { display: flex; align-items: center; gap: 6px; margin-top: 10px;
-  padding: 6px 10px; border-radius: 7px; font-size: 12px; font-weight: 600;
+  padding: 6px 10px; border-radius: 6px; font-size: 12px; font-weight: 500;
   background: none; color: var(--vscode-descriptionForeground);
   border: 1px dashed var(--vscode-panel-border) }
 .segadd:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder) }
@@ -1133,13 +1133,13 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 /* the source mark on a memory card, sized to sit with the title */
 .memtop .spark-ico, .memtop .codex-ico { width: 13px; height: 13px; flex: none }
 /* standing instructions are not a learned fact - label them apart */
-.memtype.instructions { background: rgba(122,157,255,.16); color: #7a9dff }
+.memtype.instructions { background: rgba(143,179,201,.16); color: var(--fall) }
 /* a quota read from a window that has since turned over - shown, but hatched
    so it is not mistaken for a live figure */
 .lbar.stale { opacity: .5 }
 /* resume from a search result, beside Open - quieter, so Open stays the main action */
 .fresume { flex: none; display: flex; align-items: center; justify-content: center;
-  width: 28px; height: 24px; padding: 0; border-radius: 5px;
+  width: 28px; height: 24px; padding: 0; border-radius: 6px;
   background: none; color: var(--clay); border: 1px solid var(--clay) }
 .fresume:hover { background: var(--clay-dim) }
 .fresico { width: 11px; height: 11px; fill: currentColor }
@@ -1148,15 +1148,15 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 .laygrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
   gap: 8px; margin: 12px 0 4px }
 .laycard { display: flex; flex-direction: column; align-items: center; gap: 6px;
-  padding: 8px 6px 7px; border-radius: 9px; background: none;
+  padding: 8px 6px 8px; border-radius: 8px; background: none;
   border: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground);
-  font-size: 10.5px }
+  font-size: 11px }
 .laycard:hover { border-color: var(--vscode-focusBorder); color: var(--vscode-foreground) }
 .laycard.on { border-color: var(--clay); background: var(--clay-dim); color: var(--vscode-foreground) }
-.laypic { display: grid; gap: 2px; width: 100%; aspect-ratio: 16 / 10; padding: 3px;
-  border-radius: 5px; background: rgba(255,255,255,.04);
+.laypic { display: grid; gap: 2px; width: 100%; aspect-ratio: 16 / 10; padding: 4px;
+  border-radius: 6px; background: rgba(255,255,255,.04);
   border: 1px solid var(--vscode-panel-border) }
-.laypic i { border-radius: 2px }
+.laypic i { border-radius: 4px }
 .laypic i.code { background: rgba(255,255,255,.13) }
 .laypic i.chat { background: var(--clay) }
 /* the panel is a strip under the editor rather than a split of it */
@@ -1192,7 +1192,7 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 @keyframes legA { 0% { visibility: visible } 50% { visibility: hidden } }
 @keyframes legB { 0% { visibility: hidden } 50% { visibility: visible } }
 @keyframes bob { 0% { transform: translateY(0) } 50% { transform: translateY(-1px) } }
-.runlabel { flex: none; font-size: 11px; font-weight: 600; color: var(--clay) }
+.runlabel { flex: none; font-size: 11px; font-weight: 500; color: var(--clay) }
 .runlabel::after { content: ''; display: inline-block; width: 1.2em; text-align: left;
   animation: dots 1.2s steps(4) infinite }
 @keyframes dots { 0% { content: '' } 25% { content: '.' } 50% { content: '..' } 75% { content: '...' } }
@@ -1208,28 +1208,28 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 .note-card.peer { border-left-color: var(--fall) }
 
 /* resources: only the exceptions are shown */
-.resbadge { flex: none; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 8px;
+.resbadge { flex: none; font-size: 11px; font-weight: 500; padding: 1px 6px; border-radius: 8px;
   background: rgba(224,163,62,.18); color: var(--amber); font-variant-numeric: tabular-nums }
-.fstat.resstat.hot { color: var(--amber); font-weight: 600 }
-.leftovers { margin: 8px 8px 4px; padding: 9px 11px; border-radius: 9px;
+.fstat.resstat.hot { color: var(--amber); font-weight: 500 }
+.leftovers { margin: 8px 8px 4px; padding: 8px 12px; border-radius: 8px;
   border: 1px solid rgba(224,163,62,.5); background: rgba(224,163,62,.09) }
-.lohead { font-size: 12px; font-weight: 700; color: var(--amber); margin-bottom: 6px }
-.lorow { display: flex; align-items: center; gap: 10px; padding: 5px 0 }
+.lohead { font-size: 12px; font-weight: 500; color: var(--amber); margin-bottom: 6px }
+.lorow { display: flex; align-items: center; gap: 10px; padding: 4px 0 }
 .lorow + .lorow { border-top: 1px solid var(--vscode-panel-border) }
-.lotxt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 11.5px }
+.lotxt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px }
 .lotxt span { color: var(--vscode-descriptionForeground) }
-.locmd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px;
+.locmd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;
   color: var(--vscode-descriptionForeground) }
-.lostop { flex: none; padding: 4px 12px; border-radius: 6px; font-size: 11.5px; font-weight: 600;
+.lostop { flex: none; padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 500;
   border: 1px solid var(--amber); background: none; color: var(--amber) }
 .lostop:hover { background: var(--amber); color: #1b1714 }
 /* footer figures in two labelled groups, Claude and Laptop */
-.fnums { gap: 3px 16px }
+.fnums { gap: 4px 16px }
 .fgroup { display: flex; align-items: baseline; gap: 4px 8px; flex-wrap: wrap }
 .fgroup + .fgroup { padding-left: 16px; border-left: 1px solid var(--vscode-panel-border) }
 .fnums.stacked .fgroup + .fgroup { padding-left: 0; border-left: none }
 .fnums.stacked .fglabel { display: inline-block }
-.fglabel { font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+.fglabel { font-size: 11px; font-weight: 500;
   color: var(--vscode-descriptionForeground); opacity: .8 }
 /* the dot separators run within a group, not across the label or the groups */
 .fnums .fstat:not(:last-child)::after { content: none }
@@ -1237,73 +1237,70 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 
 /* ---- live board: every running chat on one page */
 body.boardmode #tabs, body.boardmode #limits, body.boardmode #lnudges { display: none }
-#view-board { padding: 18px 20px 30px; overflow-y: auto; display: block }
+#view-board { padding: 20px 24px 32px; overflow-y: auto; display: block }
 #view-board:not(.on) { display: none }
-.bhead { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 14px }
-.bhead h1 { font-size: 17px; margin: 0 }
+.bhead { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 16px }
+.bhead h1 { font-size: 17px; font-weight: 500; margin: 0 }
 /* the counts, each a filter */
 .bfilters { display: flex; flex-wrap: wrap; gap: 6px }
-.bfilter { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 10px; border-radius: 13px; cursor: pointer;
+.bfilter { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 10px; border-radius: 8px; cursor: pointer;
   background: none; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-panel-border) }
-.bfilter em { font-style: normal; font-weight: 700; color: var(--vscode-foreground) }
+.bfilter em { font-style: normal; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--vscode-foreground) }
 .bfilter:hover { color: var(--vscode-foreground) }
-.bfilter.on { border-color: var(--clay, #d97757); color: var(--vscode-foreground); background: rgba(217,119,87,.10) }
-.bfnew { font-style: normal; font-size: 10.5px; font-weight: 700; color: var(--clay, #d97757) }
+.bfilter.on { border-color: var(--vscode-foreground); color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground, rgba(127,127,127,.12)) }
+.bfnew { font-style: normal; font-size: 11px; font-weight: 500; color: var(--clay, #d97757) }
 /* sections: what needs you, what is working, what is older */
-.bsec { margin-bottom: 18px }
-.bsechead { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+.bsec { margin-bottom: 24px }
+.bsechead { font-size: 12px; font-weight: 500;
   color: var(--vscode-descriptionForeground); margin: 0 0 8px }
 .bsechead:empty { display: none }
 #view-board[data-filter="needs"] #sec-work, #view-board[data-filter="needs"] #sec-old,
 #view-board[data-filter="working"] #sec-needs, #view-board[data-filter="working"] #sec-old,
 #view-board[data-filter="earlier"] #sec-needs, #view-board[data-filter="earlier"] #sec-work { display: none }
-#bwork { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; align-items: start }
+#bwork { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-items: start }
 /* a working chat: title, what it is doing, what you asked - nothing to answer yet */
 .bcard.slim .bcask { padding-bottom: 10px }
-#bgrid { display: flex; gap: 14px; align-items: flex-start }
-.bcol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px }
+#bgrid { display: flex; gap: 12px; align-items: flex-start }
+.bcol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px }
 .bcempty { padding: 6px 12px 12px; font-size: 12px; color: var(--vscode-descriptionForeground) }
-.bcard { border: 1px solid var(--vscode-panel-border); border-radius: 10px; overflow: hidden;
+.bcard { border: 1px solid var(--vscode-panel-border); border-radius: 12px; overflow: hidden;
   display: flex; flex-direction: column; background: var(--vscode-editorWidget-background, transparent) }
 .bctop { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 8px 8px 12px;
-  border-bottom: 1px solid var(--vscode-panel-border); box-shadow: inset 3px 0 0 var(--agent) }
-/* a light wash and an edge in the agent's colour: enough to find a card by, not to shout */
-.bctop.claude { --agent: #d97757; background: rgba(217,119,87,.045) }
-.bctop.codex { --agent: #7c6cff; background: rgba(124,108,255,.05) }
+  border-bottom: 1px solid var(--vscode-panel-border) }
+/* the logo already says which agent; the header stays neutral so state can carry the colour */
 .bctop .spark-ico, .bctop .codex-ico { width: 14px; height: 14px; flex: none }
-.bctitle { font-weight: 700; font-size: 13.5px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.bctitle { font-weight: 500; font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .bcacts { display: flex; gap: 2px; flex: none }
-.bcicon { display: flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0;
+.bcicon { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0;
   border: 0; border-radius: 6px; background: none; color: var(--vscode-descriptionForeground); cursor: pointer }
 .bcicon svg { width: 15px; height: 15px }
 .bcicon:hover { background: var(--vscode-toolbar-hoverBackground, rgba(127,127,127,.15)); color: var(--vscode-foreground) }
-.bcstatus { display: flex; align-items: center; gap: 7px; padding: 9px 12px 0; font-size: 12px;
+.bcstatus { display: flex; align-items: center; gap: 8px; padding: 8px 12px 0; font-size: 12px;
   color: var(--vscode-descriptionForeground) }
-.bcstatus { font-weight: 600 }
+.bcstatus { font-weight: 500 }
 .bcard.busy .bcstext { color: var(--clay, #d97757) }
 /* stopped on something only you can answer: approval, a question, a plan */
 .bcard.needs { border-color: var(--amber, #e0a33e) }
 .bcard.needs .bcstext, .bcard.needs:not(.busy) .bcstext { color: var(--amber, #e0a33e) }
 .dot.needs { background: var(--amber, #e0a33e) }
-/* a reply you have not looked at yet, and ones you have */
-.bcnew { display: none; font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
-  padding: 1px 6px; border-radius: 8px; background: var(--clay, #d97757); color: #fff }
+.bcard .dot.idle { background: var(--vscode-descriptionForeground) }
+/* a reply you have not looked at yet: a filled dot, the word kept for screen readers */
+.bcnew { display: none; width: 6px; height: 6px; border-radius: 50%; overflow: hidden; font-size: 0;
+  background: var(--clay, #d97757) }
 .bcard.unseen .bcnew { display: inline-block }
-.bcard.unseen { border-color: rgba(217,119,87,.55) }
 .bcard.read { opacity: .66; transition: opacity .15s }
 .bcard.read:hover, .bcard.read:focus-within { opacity: 1 }
 .bcard:not(.busy) .bcstext { color: var(--vscode-descriptionForeground); font-weight: 500 }
 .bcwarn, .bcres:not(:empty) { color: var(--amber, #e0a33e) }
-.bcwarn::before, .bcres:not(:empty)::before { content: '·'; margin-right: 7px; color: var(--vscode-descriptionForeground) }
-.bclabel { font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
-  color: var(--vscode-descriptionForeground) }
+.bcwarn::before, .bcres:not(:empty)::before { content: '·'; margin-right: 8px; color: var(--vscode-descriptionForeground) }
+.bclabel { font-size: 11px; font-weight: 500; color: var(--vscode-descriptionForeground) }
 .bcask { display: flex; align-items: baseline; gap: 8px; padding: 8px 12px 0; min-width: 0 }
 .bcasktext { flex: 1; min-width: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .85 }
-.bcreply { display: flex; flex-direction: column; gap: 4px; margin: 10px 12px 12px; padding-top: 9px;
+.bcreply { display: flex; flex-direction: column; gap: 4px; margin: 12px 12px 12px; padding-top: 8px;
   border-top: 1px solid var(--vscode-panel-border) }
 .bcrhead { display: flex; align-items: center; justify-content: space-between }
 .bcrhead .msgcopy { opacity: 1; position: static }
-.bcbody { max-height: 96px; overflow: hidden; font-size: 12.5px; position: relative }
+.bcbody { max-height: 96px; overflow: hidden; font-size: 13px; position: relative }
 /* the reply behind a question, folded until asked for */
 .bcreply.folded .bcrhead, .bcreply.folded .bcbody { display: none }
 .bcreply.folded { padding-top: 0; border-top: 0; margin-top: 6px }
@@ -1312,47 +1309,45 @@ body.boardmode #tabs, body.boardmode #limits, body.boardmode #lnudges { display:
 .bcbody.clipped { -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent) }
 .bcbody.open { max-height: none; -webkit-mask-image: none; mask-image: none }
 .bcbody .tablewrap, .bcbody table { max-width: 100% }
-.bcmore { align-self: flex-start; font-size: 11.5px; padding: 2px 0; border: 0; background: none;
+.bcmore { align-self: flex-start; font-size: 12px; padding: 2px 0; border: 0; background: none;
   color: var(--vscode-textLink-foreground); cursor: pointer }
 .bcnone { font-size: 12px; color: var(--vscode-descriptionForeground) }
 /* reply from the card, typed into the chat's terminal */
 .bcsend { display: flex; align-items: flex-end; gap: 6px; margin: 0 12px 12px }
-.bcinput { flex: 1; min-width: 0; resize: none; overflow-y: auto; max-height: 140px; padding: 5px 9px;
-  font: inherit; font-size: 12.5px; line-height: 1.4; border-radius: 7px; color: var(--vscode-input-foreground);
+.bcinput { flex: 1; min-width: 0; resize: none; overflow-y: auto; max-height: 140px; padding: 6px 8px;
+  font: inherit; font-size: 13px; line-height: 1.4; border-radius: 8px; color: var(--vscode-input-foreground);
   background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)) }
 .bcinput:focus { outline: none; border-color: var(--vscode-focusBorder) }
 .bcgo { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0;
-  border: 0; border-radius: 7px; cursor: pointer; background: var(--clay, #d97757); color: #fff }
+  border: 0; border-radius: 8px; cursor: pointer; background: var(--clay, #d97757); color: #fff }
 .bcgo svg { width: 13px; height: 13px; fill: currentColor }
 .bcgo:disabled { opacity: .5; cursor: default }
 .bcsendwrap { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 12px 12px }
 .bcsendwrap .bcsend { flex: 1 1 200px; margin: 0 }
-.bcquick { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 }
-.bcchip { font-size: 11.5px; padding: 3px 10px; border-radius: 12px; cursor: pointer; background: none;
+.bcquick { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 }
+.bcchip { font-size: 12px; padding: 4px 10px; border-radius: 8px; cursor: pointer; background: none;
   color: var(--vscode-foreground); border: 1px solid var(--vscode-panel-border) }
-.bcchip:hover { border-color: var(--clay, #d97757); color: var(--clay, #d97757) }
+.bcchip:hover { border-color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground, rgba(127,127,127,.12)) }
 .bcchip:disabled { opacity: .5; cursor: default }
-/* the question a finished reply ends with, set apart above the report */
-.bcq { margin: 10px 12px 0; padding: 8px 10px; border-radius: 8px; display: flex; flex-direction: column; gap: 3px;
-  background: rgba(217,119,87,.10); border-left: 3px solid var(--clay, #d97757) }
-.bcq .bclabel { color: var(--clay, #d97757) }
-.bcqtext { font-size: 13px; font-weight: 600 }
+/* the question a finished reply ends with: the one thing on the board set large */
+.bcq { margin: 12px 12px 0; display: flex; flex-direction: column; gap: 4px }
+.bcqtext { font-size: 15px; font-weight: 600; line-height: 1.4 }
 .bcqtext p { margin: 0 }
 .bcbody.short { max-height: 110px }
-.setwide { width: 210px; text-align: left; padding: 5px 9px; background-image: none; cursor: text }
+.setwide { width: 210px; text-align: left; padding: 4px 8px; background-image: none; cursor: text }
 /* chats left waiting more than a day, folded to one line each */
 #bold { display: flex; flex-direction: column; gap: 6px }
 #bold:empty { display: none }
-.boldhead { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+.boldhead { font-size: 12px; font-weight: 500;
   color: var(--vscode-descriptionForeground); margin-bottom: 2px }
-.bold-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; border-radius: 8px; cursor: pointer;
+.bold-row { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; border-radius: 8px; cursor: pointer;
   border: 1px solid var(--vscode-panel-border) }
 .bold-row:hover { background: var(--vscode-list-hoverBackground) }
 .bold-row .spark-ico, .bold-row .codex-ico { width: 13px; height: 13px; flex: none }
-.bold-row .chev2 { width: 10px; font-size: 10px; color: var(--vscode-descriptionForeground) }
-.boldtitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600 }
+.bold-row .chev2 { width: 10px; font-size: 11px; color: var(--vscode-descriptionForeground) }
+.boldtitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500 }
 .boldage { flex: none; font-size: 11px; color: var(--vscode-descriptionForeground) }
-#bold > .bcard { margin: 0 0 6px 18px }
+#bold > .bcard { margin: 0 0 6px 20px }
 
 /* in the sidebar, refresh lives in the view's own title bar beside open-in-editor */
 body[data-mode="sidebar"] #rescan { display: none !important }
@@ -1365,14 +1360,14 @@ body[data-mode="sidebar"] #rescan { display: none !important }
    use it - and a bar heading for empty gets a red track */
 .lbar.unused b { background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.35) 0 3px, transparent 3px 7px) }
 .lbar.runout { background: rgba(217,96,90,.45) }
-.ladvice { font-size: 11.5px; margin-top: 6px; padding: 6px 8px; border-radius: 6px;
+.ladvice { font-size: 12px; margin-top: 6px; padding: 6px 8px; border-radius: 6px;
   background: rgba(224,163,62,.10); color: var(--vscode-foreground) }
 /* the always-visible line for a flagged window, under nothing and over the bars */
-.lnudge { display: flex; align-items: center; gap: 8px; margin: 4px 8px 6px; padding: 5px 6px 5px 10px;
-  border-radius: 6px; font-size: 11.5px; line-height: 1.35;
+.lnudge { display: flex; align-items: center; gap: 8px; margin: 4px 8px 6px; padding: 4px 6px 4px 10px;
+  border-radius: 6px; font-size: 12px; line-height: 1.35;
   background: rgba(224,163,62,.12); border: 1px solid rgba(224,163,62,.35) }
 .lnudge span { flex: 1; min-width: 0 }
-.lnudge b { font-weight: 700 }
+.lnudge b { font-weight: 500 }
 .lnudge.runout { background: rgba(217,96,90,.12); border-color: rgba(217,96,90,.4) }
 .lnx { flex: none; border: 0; background: none; color: var(--vscode-descriptionForeground); cursor: pointer;
   font-size: 11px; padding: 2px 4px; border-radius: 4px }
@@ -1381,13 +1376,13 @@ body[data-mode="sidebar"] #rescan { display: none !important }
 /* resetting soon without much left: the same line, a step quieter than unused */
 .lnudge.soon { background: rgba(127,127,127,.10); border-color: rgba(224,163,62,.25) }
 /* new chat from inside a chat, at the end of its title row */
-.newinchat { display: flex; align-items: center; justify-content: center; padding: 3px 5px }
+.newinchat { display: flex; align-items: center; justify-content: center; padding: 4px 4px }
 .newinchat svg { width: 15px; height: 15px }
 /* a new chat waiting for its first message */
-.pendingchat { display: flex; align-items: center; gap: 9px; padding: 22px 16px; font-size: 12.5px;
+.pendingchat { display: flex; align-items: center; gap: 8px; padding: 24px 16px; font-size: 13px;
   color: var(--vscode-descriptionForeground) }
 /* connect buttons for the chat-history tools */
-.mcpbtn { flex: none; font-size: 11.5px; padding: 4px 12px; border-radius: 6px; cursor: pointer;
+.mcpbtn { flex: none; font-size: 12px; padding: 4px 12px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--vscode-panel-border); background: none; color: var(--vscode-foreground) }
 .mcpbtn.on { background: var(--clay, #d97757); border-color: var(--clay, #d97757); color: #fff }
 .mcpbtn:disabled { opacity: .6; cursor: default }
@@ -1395,45 +1390,45 @@ body[data-mode="sidebar"] #rescan { display: none !important }
 .settxt em.exportdir { font-family: var(--vscode-editor-font-family); font-style: normal;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 /* the Agents page: what agents looked at */
-#view-agents { overflow-y: auto; display: block; padding: 12px 10px 30px }
+#view-agents { overflow-y: auto; display: block; padding: 12px 10px 32px }
 #view-agents:not(.on) { display: none }
 .aghead { display: flex; align-items: center; gap: 6px; margin: 2px 4px 12px }
-.aghead h2 { margin: 0; font-size: 15px; font-weight: 700 }
+.aghead h2 { margin: 0; font-size: 15px; font-weight: 500 }
 .aginfo { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0;
   border: 0; border-radius: 50%; background: none; cursor: pointer; color: var(--vscode-descriptionForeground) }
 .aginfo svg { width: 16px; height: 16px }
 .aginfo:hover { color: var(--vscode-foreground); background: rgba(127,127,127,.15) }
-.agpop { position: fixed; z-index: 30; width: min(340px, calc(100vw - 16px)); padding: 12px 14px; border-radius: 10px;
+.agpop { position: fixed; z-index: 30; width: min(340px, calc(100vw - 16px)); padding: 12px 16px; border-radius: 8px;
   font-size: 12px; line-height: 1.5; background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
-  border: 1px solid var(--vscode-panel-border); box-shadow: 0 8px 28px rgba(0,0,0,.45) }
+  border: 1px solid var(--vscode-panel-border); box-shadow: 0 8px 24px rgba(0,0,0,.24) }
 .agpop p { margin: 0 0 8px }
-.agpop h4 { display: flex; align-items: center; gap: 6px; margin: 12px 0 4px; font-size: 9.5px; letter-spacing: .07em; text-transform: uppercase;
+.agpop h4 { display: flex; align-items: center; gap: 6px; margin: 12px 0 4px; font-size: 11px;
   color: var(--vscode-descriptionForeground) }
 .agpop ul { margin: 0; padding-left: 16px }
-.agcardtitle { font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; margin-bottom: 6px;
+.agcardtitle { font-size: 11px; font-weight: 500; margin-bottom: 6px;
   color: var(--vscode-descriptionForeground) }
 .agrow { display: flex; align-items: center; gap: 10px; padding: 8px 0 }
 .agrow + .agrow { border-top: 1px solid var(--vscode-panel-border) }
 .agrow > .spark-ico, .agrow > .codex-ico { width: 18px; height: 18px; flex: none }
 .agrowtxt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px }
-.agrowtxt b { font-size: 12.5px }
+.agrowtxt b { font-size: 13px }
 .agstate { font-size: 11px; color: var(--vscode-descriptionForeground) }
 .agstate.on { color: #7fb069 }
-.agstate.on::before { content: '● '; font-size: 9px }
+.agstate.on::before { content: '● '; font-size: 11px }
 .agnote { margin: 6px 0 0; font-size: 11px; color: var(--vscode-descriptionForeground) }
 
 .actstats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 10px }
 .actstat { display: flex; flex-direction: column; padding: 8px 10px; border-radius: 8px; background: rgba(127,127,127,.08) }
 .actstat b { font-size: 17px; line-height: 1.2 }
-.actstat span { font-size: 10.5px; color: var(--vscode-descriptionForeground) }
+.actstat span { font-size: 11px; color: var(--vscode-descriptionForeground) }
 .acttop { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px }
-.actseg { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: rgba(127,127,127,.10) }
-.actseg button { border: 0; background: none; padding: 3px 9px; border-radius: 5px; font-size: 11px; cursor: pointer;
+.actseg { display: flex; gap: 2px; padding: 2px; border-radius: 6px; background: rgba(127,127,127,.10) }
+.actseg button { border: 0; background: none; padding: 4px 8px; border-radius: 6px; font-size: 11px; cursor: pointer;
   color: var(--vscode-descriptionForeground) }
 .actseg button.on { background: var(--vscode-editorWidget-background, rgba(127,127,127,.25)); color: var(--vscode-foreground) }
-.actclear { border: 0; background: none; padding: 3px 0; font-size: 11px; cursor: pointer; color: var(--vscode-descriptionForeground) }
+.actclear { border: 0; background: none; padding: 4px 0; font-size: 11px; cursor: pointer; color: var(--vscode-descriptionForeground) }
 .actclear:hover { color: var(--vscode-foreground); text-decoration: underline }
-.actday { font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; margin: 12px 0 2px;
+.actday { font-size: 11px; font-weight: 500; margin: 12px 0 2px;
   color: var(--vscode-descriptionForeground) }
 .actgroup { border-top: 1px solid var(--vscode-panel-border) }
 .acthead { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 0; border: 0; background: none;
@@ -1442,19 +1437,19 @@ body[data-mode="sidebar"] #rescan { display: none !important }
 .acthead .chev2 { width: 10px; flex: none; color: var(--vscode-descriptionForeground) }
 .acthead > .spark-ico, .acthead > .codex-ico { width: 15px; height: 15px; flex: none }
 .actheadtxt { display: flex; flex-direction: column; min-width: 0; flex: 1 }
-.actfrom { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-.actfrom .actchat { color: var(--vscode-foreground); font-weight: 600 }
+.actfrom { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.actfrom .actchat { color: var(--vscode-foreground); font-weight: 500 }
 .actanon { color: var(--vscode-descriptionForeground); font-weight: 400 }
 .actmeta { font-size: 11px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .actright { display: flex; flex-direction: column; align-items: flex-end; flex: none; gap: 1px }
-.actn { min-width: 20px; padding: 0 6px; border-radius: 9px; font-size: 10.5px; font-weight: 700; text-align: center;
+.actn { min-width: 20px; padding: 0 6px; border-radius: 8px; font-size: 11px; font-weight: 500; text-align: center;
   background: rgba(127,127,127,.18) }
-.acttime2 { font-size: 10.5px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums }
+.acttime2 { font-size: 11px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums }
 /* the lookups of one chat, as a small timeline */
 .actlist { position: relative; margin: 0 0 8px 23px; padding-left: 12px; border-left: 1px solid var(--vscode-panel-border) }
-.actrow { padding: 3px 0 }
-.actline { display: flex; align-items: center; gap: 7px; font-size: 12px; min-width: 0 }
-.acttime { flex: none; width: 52px; font-size: 10.5px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums }
+.actrow { padding: 4px 0 }
+.actline { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0 }
+.acttime { flex: none; width: 52px; font-size: 11px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums }
 .actico { width: 13px; height: 13px; flex: none; color: var(--vscode-descriptionForeground) }
 .actwhat { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .actchat { border: 0; background: none; padding: 0; font: inherit; cursor: pointer; text-align: left;
@@ -1463,9 +1458,14 @@ body[data-mode="sidebar"] #rescan { display: none !important }
 .actcount { flex: none; border: 0; background: none; padding: 0; font-size: 11px; cursor: pointer;
   color: var(--vscode-descriptionForeground) }
 .actcount:hover { color: var(--vscode-foreground); text-decoration: underline }
-.actchips { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 3px 0 4px 79px; font-size: 11.5px }
+.actchips { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 4px 0 4px 79px; font-size: 12px }
 .actrow.failed .actwhat { opacity: .75 }
 .actfail { flex: none; font-size: 11px; color: var(--loss, #d9605a) }
 .actmore { margin-top: 6px; border: 0; background: none; padding: 4px 0; font-size: 12px; cursor: pointer;
   color: var(--vscode-textLink-foreground) }
 .agpopico { width: 13px; height: 13px; flex: none; color: var(--vscode-foreground); opacity: .8 }
+
+/* glyph buttons drawn with the shared icon set */
+.renamepen svg, .sheethead .iconbtn svg { width: 14px; height: 14px; display: block }
+.ctxitem .tick svg { width: 12px; height: 12px; display: block }
+#qclear svg, .lnx svg { display: block }

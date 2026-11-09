@@ -81,6 +81,8 @@ const ICONS = {
     'M12 5.2a3.2 3.2 0 0 1 6 1.3 2.8 2.8 0 0 1 1.2 4.6A3 3 0 0 1 18 16.4a3 3 0 0 1-6 .6z',
     'M12 5.2V17'],
   plus: ['M12 5v14', 'M5 12h14'],
+  close: ['M6 6l12 12', 'M18 6 6 18'],
+  check: 'M5 12.5 10 17.5 19 7',
   list: ['M4 6.5h.01', 'M4 12h.01', 'M4 17.5h.01', 'M9 6.5h11', 'M9 12h11', 'M9 17.5h11'],
   // the expand-all / collapse-all glyph you supplied, on its own 16 grid
   expand: ['M9 9H4v1h5V9z', 'M7 12V7H6v5h1z',
@@ -103,7 +105,7 @@ const ICONS = {
 const OUTLINE = new Set(['shield', 'info', 'find', 'eye', 'scan', 'diff', 'bell', 'pulse', 'folder', 'chevron', 'terminal', 'desktop', 'vscode',
   'pencil', 'split', 'open', 'copy', 'fork', 'chart', 'reload', 'export',
   'history', 'compact', 'dots', 'message', 'card', 'calendar', 'book', 'plus', 'list', 'brief',
-  'agent', 'gear', 'layout'])
+  'agent', 'gear', 'layout', 'close', 'check'])
 
 // where Resume goes, remembered by the host between windows
 const TARGETS = {
@@ -250,7 +252,7 @@ document.addEventListener('contextmenu', e => {
 })
 
 const TABICON = { chats: 'message', usage: 'card', digest: 'calendar', memory: 'book', agents: 'agent', settings: 'gear' }
-const TABNAME = { chats: 'All chats', usage: 'Card', digest: 'Digest', memory: 'Memory', agents: 'Agents', settings: 'Settings' }
+const TABNAME = { chats: 'Chats', usage: 'Card', digest: 'Digest', memory: 'Memory', agents: 'Agents', settings: 'Settings' }
 let TAB = 'chats'
 
 document.querySelectorAll('.tab').forEach(b => {
@@ -357,7 +359,7 @@ function drawLimits (l) {
         : x.pace.unused
           ? `<b>${esc(x.label)}</b> ${100 - x.percent}% unused · resets in ${until(x.resetsAt)}`
           : `<b>${esc(x.label)}</b> resets in ${until(x.resetsAt)} · ${100 - x.percent}% left`}</span>
-      <button class="lnx" title="Hide for now - it comes back as the deadline gets closer">✕</button></div>`).join('')}`
+      <button class="lnx" title="Hide for now - it comes back as the deadline gets closer" aria-label="Hide"><svg class="outline" viewBox="0 0 24 24" width="12" height="12"><path d="M6 6l12 12M18 6 6 18"></path></svg></button></div>`).join('')}`
   wrap.innerHTML = `
     <div class="lbars">${items.map(x => `
       <i class="lbar ${tone(x)} ${/^(normal|warning|critical)$/.test(x.severity) ? x.severity : 'normal'}${x.stale ? ' stale' : ''} ${flag(x)}">
@@ -719,11 +721,6 @@ function draw () {
   }
   if (q.length >= 2) rows.appendChild(messageMatches(q))
 
-  const label = document.querySelector('.tab[data-tab="chats"] .tlabel')
-  if (label) {
-    label.textContent = FILTER === 'all' ? 'All chats'
-      : FILTER === 'pinned' ? 'Favourites' : FILTER
-  }
   const spend = list.reduce((n, s) => n + s.cost, 0)
   $('#listmeta').textContent =
     `${list.length} sessions` + (spend ? ` · ${money(spend)}` : '')
@@ -746,8 +743,6 @@ function drawDeleted (q) {
     rows.appendChild(r)
   }
   if (!list.length) rows.appendChild(el('div', 'empty', 'No deleted chats match that.'))
-  const label = document.querySelector('.tab[data-tab="chats"] .tlabel')
-  if (label) label.textContent = 'Deleted chats'
   $('#listmeta').textContent = `${list.length} deleted`
 }
 
@@ -1629,7 +1624,8 @@ function showDetail (t, live) {
     if (t.agentType) top.appendChild(el('span', 'atype', t.agentType))
     top.appendChild(el('span', 'astate ' + statusClass(t.status), t.status))
   } else {
-    const pen = el('button', 'iconbtn renamepen', '✎')
+    const pen = el('button', 'iconbtn renamepen')
+    pen.appendChild(icon('pencil'))
     pen.title = 'Rename chat'
     pen.onclick = () => startRename(h, t)
     top.appendChild(pen)
@@ -2160,7 +2156,9 @@ function rowMenu (s, x, y) {
     const on = s.group === name
     const b = el('button', 'ctxitem' + (on ? ' picked' : ''))
     // a tick marks the group it is in; choosing it again takes it out
-    b.append(el('span', 'tick', on ? '✓' : ''), el('span', '', name))
+    const tick = el('span', 'tick')
+    if (on) tick.appendChild(icon('check'))
+    b.append(tick, el('span', '', name))
     b.onclick = e => {
       e.stopPropagation()
       send({ type: 'group', id: s.id, assign: on ? null : name })
@@ -2253,7 +2251,9 @@ function showAnalytics (a) {
   const box = el('div', 'sheetbox')
   const head = el('div', 'sheethead')
   head.append(el('b', '', a.title || '(untitled)'))
-  const x = el('button', 'iconbtn', '✕')
+  const x = el('button', 'iconbtn')
+  x.appendChild(icon('close'))
+  x.title = 'Close'
   x.onclick = () => sheet.remove()
   head.appendChild(x)
   box.appendChild(head)

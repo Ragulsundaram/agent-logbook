@@ -530,11 +530,41 @@ function paintQuotaItem (l) {
     : x.pace.unused
       ? `$(clock) ${x.label} ${100 - x.percent}% unused · resets ${fmtSpan(left)}`
       : `$(clock) ${x.label} resets in ${fmtSpan(left)} · ${100 - x.percent}% left`
-  QUOTA_ITEM.tooltip = hit.map(y => y.pace.runoutIn
-    ? `${y.label}: at this pace it runs out in about ${fmtSpan(y.pace.runoutIn)}, before it resets in ${fmtSpan(y.resetsAt - Date.now())}`
-    : `${y.label}: ${100 - y.percent}% ${y.pace.unused ? 'still unused' : 'left'}, resets in ${fmtSpan(y.resetsAt - Date.now())}`).join('\n')
+  QUOTA_ITEM.tooltip = quotaTooltip(l)
   QUOTA_ITEM.backgroundColor = x.pace.runoutIn ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined
   QUOTA_ITEM.show()
+}
+
+/**
+ * The hover card for the status bar flag: every window as a row with a bar,
+ * what is left and when it resets, then one line per window that needs
+ * attention. Hovers only allow color and background-color on spans, so the
+ * bar is two runs of spaces with a background.
+ */
+const htmlEsc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+function quotaTooltip (l) {
+  const now = Date.now()
+  const W = 24
+  const tone = x => x.pace?.runoutIn ? 'yellow' : 100 - x.percent <= 10 ? 'red' : 'green'
+  const run = (n, bg) => n ? `<span style="background-color:var(--vscode-${bg});">${'&nbsp;'.repeat(n)}</span>` : ''
+  const rows = (l.items || []).map(x => {
+    const left = Math.max(0, 100 - x.percent)
+    const fill = Math.round(left / 100 * W)
+    const c = `charts-${tone(x)}`
+    return `<tr><td>${htmlEsc(x.label)}&nbsp;&nbsp;</td>` +
+      `<td>${run(fill, c)}${run(W - fill, 'editorWidget-border')}&nbsp;&nbsp;</td>` +
+      `<td align="right"><span style="color:var(--vscode-${c});"><b>${left}%</b></span>&nbsp;&nbsp;</td>` +
+      `<td>${x.resetsAt > now ? fmtSpan(x.resetsAt - now) : ''}` +
+      // the one warning worth words: it empties before the reset
+      `${x.pace?.runoutIn ? `&nbsp;&nbsp;<span style="color:var(--vscode-charts-yellow);">empty in ~${fmtSpan(x.pace.runoutIn)}</span>` : ''}</td></tr>`
+  })
+  const md = new vscode.MarkdownString([
+    `<table><tr><td><b>Plan limits</b></td><td></td><td align="right">Left&nbsp;&nbsp;</td><td>Resets</td></tr>${rows.join('')}</table>`,
+    `[Open](command:claudeHistory.focus)${l.fetchedAt ? ` · updated ${fmtSpan(now - l.fetchedAt)} ago` : ''}`,
+  ].join('\n\n'))
+  md.supportHtml = true
+  md.isTrusted = { enabledCommands: ['claudeHistory.focus'] }
+  return md
 }
 
 /** Ask Anthropic for the current plan usage, then hand the webview the fresh numbers. */
