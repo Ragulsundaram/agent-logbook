@@ -1,0 +1,53 @@
+# CodeRabbit review settings. Reviews are advisory; the Check workflow and the
+# maintainer's read stay the gate. Schema: https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches: [main]
+  path_filters:
+    - '!**/*.vsix'
+    - '!CHANGELOG.md'
+  path_instructions:
+    - path: '**/*'
+      instructions: |
+        This VS Code extension reads private Claude Code and Codex transcripts.
+        Hold every change to the hard rules in AGENTS.md and flag any break as a blocker:
+        1. No dependencies, install scripts, bundler or build step.
+        2. No network calls except the plan-usage request to api.anthropic.com in scan.js.
+        3. No real transcripts, .jsonl files or screenshots of real chats.
+        4. No shell strings: execFile with an argument array; sendText only from validated values.
+        5. Webview text escaped with esc() or textContent; CSP and nonce in extension.js unchanged.
+        6. Any new write location must be added to README.md "What it reads and writes".
+        Also flag changes outside the linked issue's scope and edits to CHANGELOG.md or the package.json version.
+    - path: '{scan.js,mcp-server.js,mcp-setup.js,extension.js}'
+      instructions: |
+        Sensitive file. Trace where every new file path, process argument, URL and
+        webview string comes from. Flag anything that could send transcript content
+        off the machine or write outside the documented locations.
+    - path: 'media/**'
+      instructions: |
+        Check every innerHTML, outerHTML and insertAdjacentHTML for unescaped
+        transcript text, and flag any remote script, style or font.
+    - path: '.github/**'
+      instructions: |
+        Workflows must keep pull_request (never pull_request_target), read-only
+        permissions, and actions pinned to full commit SHAs. Flag any weakening of check.js.
+    - path: 'package.json'
+      instructions: |
+        Flag any dependencies, devDependencies, install/prepare scripts, version change,
+        or setting outside the claudeHistory. prefix.
+  tools:
+    gitleaks:
+      enabled: true
+    actionlint:
+      enabled: true
+
+chat:
+  auto_reply: true
