@@ -10,6 +10,7 @@ There is no build step and no dependencies.
 git clone https://github.com/Ragulsundaram/agent-logbook.git
 cd agent-logbook
 code --extensionDevelopmentPath="$PWD"
+Or simply press F5 in VS Code to launch the Extension Development Host.   
 ```
 
 That opens a new editor window with your copy of the extension loaded. After a
