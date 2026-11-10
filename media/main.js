@@ -1627,6 +1627,7 @@ function showDetail (t, live) {
     const pen = el('button', 'iconbtn renamepen')
     pen.appendChild(icon('pencil'))
     pen.title = 'Rename chat'
+    pen.setAttribute('aria-label', 'Rename chat')
     pen.onclick = () => startRename(h, t)
     top.appendChild(pen)
   }
@@ -2159,6 +2160,7 @@ function rowMenu (s, x, y) {
     const tick = el('span', 'tick')
     if (on) tick.appendChild(icon('check'))
     b.append(tick, el('span', '', name))
+    b.setAttribute('aria-pressed', String(on))
     b.onclick = e => {
       e.stopPropagation()
       send({ type: 'group', id: s.id, assign: on ? null : name })
@@ -2254,6 +2256,7 @@ function showAnalytics (a) {
   const x = el('button', 'iconbtn')
   x.appendChild(icon('close'))
   x.title = 'Close'
+  x.setAttribute('aria-label', 'Close')
   x.onclick = () => sheet.remove()
   head.appendChild(x)
   box.appendChild(head)

@@ -548,6 +548,8 @@ function quotaTooltip (l) {
   const tone = x => x.pace?.runoutIn ? 'yellow' : 100 - x.percent <= 10 ? 'red' : 'green'
   const run = (n, bg) => n ? `<span style="background-color:var(--vscode-${bg});">${'&nbsp;'.repeat(n)}</span>` : ''
   const rows = (l.items || []).map(x => {
+    // a window that has reset since it was read says so, rather than showing old figures as current
+    if (x.stale) return `<tr><td>${htmlEsc(x.label)}&nbsp;&nbsp;</td><td colspan="3">no recent reading</td></tr>`
     const left = Math.max(0, 100 - x.percent)
     const fill = Math.round(left / 100 * W)
     const c = `charts-${tone(x)}`
@@ -560,7 +562,7 @@ function quotaTooltip (l) {
   })
   const md = new vscode.MarkdownString([
     `<table><tr><td><b>Plan limits</b></td><td></td><td align="right">Left&nbsp;&nbsp;</td><td>Resets</td></tr>${rows.join('')}</table>`,
-    `[Open](command:claudeHistory.focus)${l.fetchedAt ? ` · updated ${fmtSpan(now - l.fetchedAt)} ago` : ''}`,
+    `[Open](command:claudeHistory.focus)${l.fetchedAt ? ` · Claude updated ${fmtSpan(now - l.fetchedAt)} ago` : ''}`,
   ].join('\n\n'))
   md.supportHtml = true
   md.isTrusted = { enabledCommands: ['claudeHistory.focus'] }
