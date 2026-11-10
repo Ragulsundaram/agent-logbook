@@ -3407,8 +3407,9 @@ document.addEventListener('copy', e => {
       // brackets and spaces in the address are encoded, so a ")" inside it
       // cannot end the link early; the address still opens the same page
       const dest = href.replace(/[()<>\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
-      // and brackets in the text are escaped, so "a]b" cannot close the label
-      return `[${inner.replace(/[[\]]/g, '\\$&')}](${dest})`
+      // and brackets in the text are escaped, so "a]b" cannot close the label -
+      // backslashes too, or one already in the text would cancel the escape
+      return `[${inner.replace(/[\\[\]]/g, '\\$&')}](${dest})`
     }
     if ((tag === 'strong' || tag === 'b') && inner.trim()) return `**${inner}**`
     if ((tag === 'em' || tag === 'i') && inner.trim()) return `_${inner}_`
