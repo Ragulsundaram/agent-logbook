@@ -3395,21 +3395,24 @@ document.addEventListener('copy', e => {
   // The plain text is written as Markdown, the same as the copy button's. Slack
   // builds a paste from the plain text and turns its Markdown into formatting,
   // so a selection copied as bare words lost every link and bold on the way.
-  const walk = node => {
-    if (node.nodeType === 3) return node.nodeValue
+  // `label` is set inside a link's text: plain text there has its brackets and
+  // backslashes escaped so "a]b" cannot close the label early, while code
+  // inside the link is left as it is - Markdown reads a code span literally.
+  const walk = (node, label = false) => {
+    if (node.nodeType === 3) return label ? node.nodeValue.replace(/[\\[\]]/g, '\\$&') : node.nodeValue
     const tag = node.nodeName.toLowerCase()
     if (tag === 'button' || node.classList?.contains('msgcopy')) return ''
-    const inner = [...node.childNodes].map(walk).join('')
+    const inside = tag === 'a' ? true : tag === 'code' ? false : label
+    const inner = [...node.childNodes].map(n => walk(n, inside)).join('')
     if (tag === 'a') {
       const href = node.getAttribute('href') || ''
-      if (!/^https?:\/\//i.test(href)) return inner
-      if (inner.trim() === href) return href
+      const plain = node.textContent.trim()
+      if (!/^https?:\/\//i.test(href)) return [...node.childNodes].map(n => walk(n, label)).join('')
+      if (plain === href) return href
       // brackets and spaces in the address are encoded, so a ")" inside it
       // cannot end the link early; the address still opens the same page
       const dest = href.replace(/[()<>\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
-      // and brackets in the text are escaped, so "a]b" cannot close the label -
-      // backslashes too, or one already in the text would cancel the escape
-      return `[${inner.replace(/[\\[\]]/g, '\\$&')}](${dest})`
+      return `[${inner}](${dest})`
     }
     if ((tag === 'strong' || tag === 'b') && inner.trim()) return `**${inner}**`
     if ((tag === 'em' || tag === 'i') && inner.trim()) return `_${inner}_`
