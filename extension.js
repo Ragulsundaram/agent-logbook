@@ -550,7 +550,8 @@ function quotaTooltip (l) {
   const rows = (l.items || []).map(x => {
     // a window that has reset since it was read says so, rather than showing old figures as current
     if (x.stale) return `<tr><td>${htmlEsc(x.label)}&nbsp;&nbsp;</td><td colspan="3">no recent reading</td></tr>`
-    const left = Math.max(0, 100 - x.percent)
+    // clamped so a bad reading cannot make repeat() a negative count and throw
+    const left = Math.min(100, Math.max(0, 100 - x.percent))
     const fill = Math.round(left / 100 * W)
     const c = `charts-${tone(x)}`
     return `<tr><td>${htmlEsc(x.label)}&nbsp;&nbsp;</td>` +

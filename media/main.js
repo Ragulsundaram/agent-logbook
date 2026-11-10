@@ -455,6 +455,7 @@ function renderChips () {
   }
   const chip = (key, label, n, isGroup) => {
     const b = el('button', 'chip' + (FILTER === key ? ' on' : ''))
+    b.setAttribute('aria-pressed', String(FILTER === key))
     b.appendChild(el('span', '', label))
     if (n) b.appendChild(el('em', '', String(n)))
     b.onclick = () => { FILTER = key; SHOWN.clear(); renderList() }

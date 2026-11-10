@@ -938,7 +938,10 @@ function limits () {
       fetchedAt: u?.fetchedAtMs || 0,
       ...usageState(),
       items: list.map(l => {
-        const resetsAt = l.resets_at ? Date.parse(l.resets_at) : 0
+        // a limit without its own reset time takes it from the matching window
+        const win = l.kind === 'session' ? u.utilization.five_hour : l.kind === 'weekly_all' ? u.utilization.seven_day : null
+        const at = l.resets_at || win?.resets_at
+        const resetsAt = at ? Date.parse(at) || 0 : 0
         return {
           key: l.kind, label: label(l),
           // The field arrives either as 0-100 or as a 0-1 fraction; a whole number
