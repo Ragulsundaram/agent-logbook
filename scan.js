@@ -937,15 +937,20 @@ function limits () {
     return {
       fetchedAt: u?.fetchedAtMs || 0,
       ...usageState(),
-      items: list.map(l => ({
-        key: l.kind, label: label(l),
-        // The field arrives either as 0-100 or as a 0-1 fraction; a whole number
-        // is always read as a percentage so "1" never becomes "100%".
-        percent: Math.round(pct(l.percent)),
-        severity: l.severity || 'normal',
-        resetsAt: l.resets_at ? Date.parse(l.resets_at) : 0,
-        active: !!l.is_active,
-      })).concat(codexLimits()),
+      items: list.map(l => {
+        const resetsAt = l.resets_at ? Date.parse(l.resets_at) : 0
+        return {
+          key: l.kind, label: label(l),
+          // The field arrives either as 0-100 or as a 0-1 fraction; a whole number
+          // is always read as a percentage so "1" never becomes "100%".
+          percent: Math.round(pct(l.percent)),
+          severity: l.severity || 'normal',
+          resetsAt,
+          active: !!l.is_active,
+          // a cached reading from before its window reset is history, not the current figure
+          stale: resetsAt > 0 && resetsAt < Date.now(),
+        }
+      }).concat(codexLimits()),
     }
   } catch { return { fetchedAt: 0, items: codexLimits(), ...usageState() } }
 }

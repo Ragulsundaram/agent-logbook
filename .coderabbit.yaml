@@ -15,6 +15,9 @@ reviews:
   pre_merge_checks:
     # Only the maintainer can wave a failing check through, not the PR author.
     override_requested_reviewers_only: true
+    # The codebase documents why in short comments, not a docstring on every function.
+    docstrings:
+      mode: off
     description:
       mode: error
     custom_checks:
