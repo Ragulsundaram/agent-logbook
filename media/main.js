@@ -375,7 +375,7 @@ function drawLimits (l) {
         </div>`).join('')}
       ${advice.map(a => `<div class="ladvice">${a}</div>`).join('')}
       <div class="lfoot">${items.map(x => `${esc(x.label)} ${x.percent}% used`).join(' · ')}
-        <span>read ${age} <button id="lrefresh" title="Fetch usage again">↻</button></span></div>
+        <span>read ${age} <button id="lrefresh" title="Fetch usage again" aria-label="Fetch usage again">↻</button></span></div>
       ${note ? `<div class="lwarn">${note}</div>` : ''}
     </div>`
   $('#lrefresh').onclick = ev => { ev.stopPropagation(); send({ type: 'refreshLimits' }) }
@@ -1352,11 +1352,13 @@ function agentActs (t) {
   if (all.length > 1 && at >= 0) {
     const prev = el('button', 'btn ico'); prev.textContent = '‹'
     prev.title = 'Previous agent'
+    prev.setAttribute('aria-label', prev.title)
     if (at === 0) prev.disabled = true
     else prev.onclick = () => openAgent(t.sessionId, all[at - 1].id)
     const pos = el('span', 'apos', `${at + 1} of ${all.length}`)
     const next = el('button', 'btn ico'); next.textContent = '›'
     next.title = 'Next agent'
+    next.setAttribute('aria-label', next.title)
     if (at === all.length - 1) next.disabled = true
     else next.onclick = () => openAgent(t.sessionId, all[at + 1].id)
     acts.append(prev, pos, next)
@@ -1451,6 +1453,52 @@ const MORE_DRAW = 150    // drawn each time you scroll near the top
 let SHOWN_FROM = 0       // the oldest block on screen
 let ALL_BLOCKS = []
 
+/** Only the end of an assistant reply is a navigation stop, not quoted drafts. */
+function questionBlocks (blocks) {
+  const found = []
+  let text = '', last = -1
+  const finish = () => {
+    const plain = text.replace(/```[\s\S]*?(?:```|$)/g, '')
+      .replace(/~~~[\s\S]*?(?:~~~|$)/g, '')
+      .split('\n').filter(line => !/^\s*>/.test(line)).join('\n').trim()
+    if (/\?[*_]*$/.test(plain) && claudeAsks(plain)) found.push(last)
+    text = ''; last = -1
+  }
+  blocks.forEach((block, i) => {
+    if (block.role !== 'assistant') { finish(); return }
+    if (block.text) { text += (text ? '\n\n' : '') + block.text; last = i }
+  })
+  finish()
+  return found
+}
+
+function refreshQuestions () {
+  const nav = $('.questionnav')
+  if (!nav) return
+  const count = questionBlocks(ALL_BLOCKS).length
+  nav.querySelector('span').textContent = `${count} questions`
+  for (const button of nav.querySelectorAll('button')) button.disabled = count === 0
+}
+
+function stepQuestion (dir) {
+  const body = $('.msgs')
+  if (!body) return
+  const questions = questionBlocks(ALL_BLOCKS)
+  const top = body.getBoundingClientRect().top
+  const visible = [...body.children].filter(n => n.dataset.bi != null)
+  const first = visible.find(n => n.getBoundingClientRect().top >= top - 2)
+  const anchor = first ? Number(first.dataset.bi) : ALL_BLOCKS.length
+  const target = dir < 0 ? questions.filter(i => i < anchor).pop()
+    : questions.find(i => i > anchor || (i === anchor &&
+      first.getBoundingClientRect().top > top + 2))
+  if (target == null) return
+  FOLLOW = false
+  AUTO_UNTIL = Date.now() + 200
+  if (target < SHOWN_FROM) drawEarlier(SHOWN_FROM - target)
+  const node = body.querySelector(`[data-bi="${target}"]`)
+  if (node) node.scrollIntoView({ block: 'start' })
+}
+
 /** Step back to where a run of same-speaker blocks starts, so it is drawn whole. */
 function runStart (blocks, i) {
   while (i > 0 && blocks[i - 1].role === blocks[i].role && blocks[i].role !== 'note') i--
@@ -1527,6 +1575,7 @@ function updateLive (t) {
   }
   ALL_BLOCKS = blocks
   LAST_SIGS = sigs
+  refreshQuestions()
   // the title moves too: a new chat is untitled until Claude names it, and a
   // rename made in the terminal lands here (left alone while you type one)
   const h2 = $('#detail .dtop h2')
@@ -1796,7 +1845,20 @@ function showDetail (t, live) {
     paintFold()
   }
   paintFold()
-  find.append(fi, cnt, foldAll)
+  const questions = el('div', 'questionnav acts')
+  questions.setAttribute('role', 'group')
+  questions.setAttribute('aria-label', 'Question navigation')
+  for (const [label, dir] of [['Previous question', -1], ['Next question', 1]]) {
+    const button = el('button', 'btn', dir < 0 ? 'Previous ?' : 'Next ?')
+    button.title = label
+    button.setAttribute('aria-label', label)
+    button.onclick = () => stepQuestion(dir)
+    questions.appendChild(button)
+  }
+  const questionCount = el('span', 'cnt')
+  questionCount.setAttribute('aria-live', 'polite')
+  questions.appendChild(questionCount)
+  find.append(fi, cnt, questions, foldAll)
   head.appendChild(find)
   d.appendChild(head)
 
@@ -1850,6 +1912,7 @@ function showDetail (t, live) {
     : live && ALL_BLOCKS.length ? SHOWN_FROM : Infinity
   ALL_BLOCKS = blocks
   SHOWN_FROM = Math.min(wasFrom, runStart(blocks, Math.max(0, blocks.length - FIRST_DRAW)))
+  refreshQuestions()
   renderBlocks(t, blocks, SHOWN_FROM, body)
   LAST_SIGS = sigsOf(blocks, t)
   const stage = el('div', 'stage')     // holds the messages and the floating button
@@ -4592,3 +4655,4 @@ function renderSettings () {
       'a .source.jsonl beside the markdown, with every tool result in full - secrets a tool printed included', false)
   }
 }
+
