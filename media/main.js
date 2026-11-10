@@ -3369,7 +3369,17 @@ document.addEventListener('copy', e => {
   if (!inMsg(range.commonAncestorContainer)) return
   // Even part of one line comes through here: left to the browser, a phrase
   // picked out of a list item kept its bold in a form Slack ignores.
+  // A copy of part of a numbered list loses the items before it, so each item's
+  // real number is read from the page first and travels with the copy.
+  const ancEl = n => (n.nodeType === 3 ? n.parentElement : n)
+  const scope = ancEl(range.commonAncestorContainer).closest('ol') || ancEl(range.commonAncestorContainer)
+  const numbered = [...scope.querySelectorAll('ol > li')]
+  for (const li of numbered) {
+    const ol = li.parentElement
+    li.dataset.copyN = String((Number(ol.getAttribute('start')) || 1) + [...ol.children].indexOf(li))
+  }
   const frag = range.cloneContents()
+  for (const li of numbered) delete li.dataset.copyN
   const host = document.createElement('div')
   host.appendChild(frag)
   // items picked from inside one list come without their list: put it back,
@@ -3393,16 +3403,27 @@ document.addEventListener('copy', e => {
     if (tag === 'a') {
       const href = node.getAttribute('href') || ''
       if (!/^https?:\/\//i.test(href)) return inner
-      return inner.trim() === href ? href : `[${inner}](${href})`
+      if (inner.trim() === href) return href
+      // brackets and spaces in the address are encoded, so a ")" inside it
+      // cannot end the link early; the address still opens the same page
+      const dest = href.replace(/[()<>\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
+      return `[${inner}](${dest})`
     }
     if ((tag === 'strong' || tag === 'b') && inner.trim()) return `**${inner}**`
     if ((tag === 'em' || tag === 'i') && inner.trim()) return `_${inner}_`
-    if (tag === 'code' && node.parentElement?.nodeName !== 'PRE') return '`' + inner + '`'
+    if (tag === 'code' && node.parentElement?.nodeName !== 'PRE') {
+      // a fence longer than any run of backticks inside, padded where the code
+      // starts or ends with one, so it stays a single code span
+      const longest = Math.max(0, ...(inner.match(/`+/g) || []).map(r => r.length))
+      const fence = '`'.repeat(longest + 1)
+      const pad = /^`|`$/.test(inner) ? ' ' : ''
+      return fence + pad + inner + pad + fence
+    }
     if (tag === 'li') {
-      // numbered lists keep their numbers, counting from where the list starts
+      // numbered items keep the number they had on the page
       const list = node.parentElement
-      const n = list?.nodeName === 'OL'
-        ? (Number(list.getAttribute('start')) || 1) + [...list.children].indexOf(node) + '. '
+      const n = list?.nodeName === 'OL' || node.dataset.copyN
+        ? (node.dataset.copyN || (Number(list?.getAttribute('start')) || 1) + [...(list?.children || [])].indexOf(node)) + '. '
         : '- '
       return n + inner.trim() + '\n'
     }
