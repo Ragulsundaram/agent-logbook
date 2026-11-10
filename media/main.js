@@ -3382,12 +3382,30 @@ document.addEventListener('copy', e => {
     host.appendChild(list)
   }
 
+  // The plain text is written as Markdown, the same as the copy button's. Slack
+  // builds a paste from the plain text and turns its Markdown into formatting,
+  // so a selection copied as bare words lost every link and bold on the way.
   const walk = node => {
     if (node.nodeType === 3) return node.nodeValue
     const tag = node.nodeName.toLowerCase()
     if (tag === 'button' || node.classList?.contains('msgcopy')) return ''
     const inner = [...node.childNodes].map(walk).join('')
-    if (tag === 'li') return '- ' + inner.trim() + '\n'
+    if (tag === 'a') {
+      const href = node.getAttribute('href') || ''
+      if (!/^https?:\/\//i.test(href)) return inner
+      return inner.trim() === href ? href : `[${inner}](${href})`
+    }
+    if ((tag === 'strong' || tag === 'b') && inner.trim()) return `**${inner}**`
+    if ((tag === 'em' || tag === 'i') && inner.trim()) return `_${inner}_`
+    if (tag === 'code' && node.parentElement?.nodeName !== 'PRE') return '`' + inner + '`'
+    if (tag === 'li') {
+      // numbered lists keep their numbers, counting from where the list starts
+      const list = node.parentElement
+      const n = list?.nodeName === 'OL'
+        ? (Number(list.getAttribute('start')) || 1) + [...list.children].indexOf(node) + '. '
+        : '- '
+      return n + inner.trim() + '\n'
+    }
     if (tag === 'br') return '\n'
     if (['p', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'ul', 'ol', 'table'].includes(tag)) {
       return inner.trim() + '\n\n'
