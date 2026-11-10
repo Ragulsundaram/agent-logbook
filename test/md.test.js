@@ -50,3 +50,13 @@ test('keeps ordinary Markdown working', () => {
   assert.ok(html.includes('<a href="https://example.com" title="https://example.com">link</a>'))
   assert.ok(html.includes('<pre class="code" data-lang="js"><code>const x = 1</code></pre>'))
 })
+
+test('keeps single line breaks inside a paragraph', () => {
+  const html = md('Colour: blue' + nl + 'Size: **large**' + nl + nl + 'Next paragraph')
+  assert.equal(html, '<p>Colour: blue<br>Size: <strong>large</strong></p><p>Next paragraph</p>')
+})
+
+test('a line break does not let bold run across lines', () => {
+  const html = md('a **b' + nl + 'c** d')
+  assert.doesNotMatch(html, /<strong>/)
+})
