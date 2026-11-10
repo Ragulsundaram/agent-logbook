@@ -718,13 +718,15 @@ function draw () {
   }
   tips(rows)                             // row actions, rebuilt on every draw
   if (!list.length && !RESULTS && !SEARCHING) {
-    rows.appendChild(el('div', 'empty', q ? 'No chats match that.' : 'No chats yet.'))
+    rows.appendChild(el('div', 'empty', q ? 'No chats match that.' : FILTER !== 'all' ? 'No chats in this filter.' : 'No chats yet.'))
   }
   if (q.length >= 2) rows.appendChild(messageMatches(q))
 
   const spend = list.reduce((n, s) => n + s.cost, 0)
+  // the chip row scrolls, so name the active filter here too
+  const filterName = FILTER === 'all' ? '' : ` in ${FILTER === 'pinned' ? 'Favourites' : FILTER}`
   $('#listmeta').textContent =
-    `${list.length} sessions` + (spend ? ` · ${money(spend)}` : '')
+    `${list.length} sessions${filterName}` + (spend ? ` · ${money(spend)}` : '')
 }
 
 /** The Deleted chip: chats moved out of the list, each with Restore. */
