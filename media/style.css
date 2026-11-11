@@ -1260,6 +1260,11 @@ body.boardmode #tabs, body.boardmode #limits, body.boardmode #lnudges { display:
 #bwork { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-items: start }
 /* a working chat: title, what it is doing, what you asked - nothing to answer yet */
 .bcard.slim .bcask { padding-bottom: 10px }
+/* a working chat's reply so far: a few lines, the rest behind Show all */
+.bcard.slim:has(.bclatest) .bcask { padding-bottom: 0 }
+.bclatest { display: flex; flex-direction: column; gap: 3px; margin: 8px 12px 10px; padding-top: 8px;
+  border-top: 1px solid var(--vscode-panel-border) }
+.bcbody.bcshort { max-height: 58px }
 #bgrid { display: flex; gap: 12px; align-items: flex-start }
 .bcol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px }
 .bcempty { padding: 6px 12px 12px; font-size: 12px; color: var(--vscode-descriptionForeground) }

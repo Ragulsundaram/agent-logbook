@@ -2272,7 +2272,13 @@ function nowDoing (raw, id, status) {
   const since = Date.parse(last.timestamp || '') || 0
   if (last.type === 'user') return { doing: 'Thinking', since }
   const tool = blocksOf(last).filter(b => b?.type === 'tool_use').pop()
-  if (!tool) return { doing: 'Writing a reply', since }
+  if (!tool) {
+    // Claude has answered, but the turn stays open while background agents it
+    // started are still running - say that, not "writing a reply"
+    const { launch, finish } = agentSignals(null, raw)
+    const running = Object.keys(launch).filter(k => !finish[k]).length
+    return { doing: running ? `Waiting for ${running} ${running === 1 ? 'agent' : 'agents'}` : 'Writing a reply', since }
+  }
   const inp = tool.input || {}
   const n = tool.name
   const doing = n === 'Edit' || n === 'MultiEdit' || n === 'Write' ? `Editing ${base(inp.file_path)}`

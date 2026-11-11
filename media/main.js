@@ -3619,7 +3619,32 @@ function boardCard (c) {
     card.appendChild(ask)
   }
   // a working chat needs nothing from you yet: what it is doing is enough
-  if (c.status === 'busy' && !c.waiting) { card.classList.add('slim'); return card }
+  if (c.status === 'busy' && !c.waiting) {
+    card.classList.add('slim')
+    // a reply Claude has already written - often while background agents run -
+    // is shown short, so it is not hidden until the whole turn ends
+    if (c.reply && (c.replyTs || 0) >= (c.askTs || 0)) {
+      const latest = el('div', 'bclatest')
+      const body = el('div', 'bubble bcbody bcshort')
+      body.dataset.src = c.reply
+      body.innerHTML = window.md(c.reply)
+      const more = el('button', 'bcmore', 'Show all')
+      more.hidden = true
+      more.onclick = () => {
+        const open = body.classList.toggle('open')
+        body.classList.toggle('clipped', !open)
+        more.textContent = open ? 'Show less' : 'Show all'
+      }
+      latest.append(el('span', 'bclabel', 'Latest from Claude'), body, more)
+      card.appendChild(latest)
+      requestAnimationFrame(() => {
+        const cut = body.scrollHeight > body.clientHeight + 4
+        body.classList.toggle('clipped', cut)
+        more.hidden = !cut
+      })
+    }
+    return card
+  }
   if (!c.reply && !c.ask) {
     card.appendChild(el('div', 'bcempty', 'Nothing asked yet'))
     return card
