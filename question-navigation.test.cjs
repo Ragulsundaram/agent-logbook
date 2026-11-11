@@ -49,6 +49,26 @@ test('keeps clarification questions after a drafting request', () => {
 test('does not mistake a message report for a draft introduction', () => {
   assert.deepEqual(find([block('assistant', "There's a new message. What should happen next?")]), [0])
   assert.deepEqual(find([block('assistant', 'There is a new message. Should I read it?')]), [0])
+  for (const text of [
+    'Here is the error message: timeout. What should I check?',
+    'Here is the error message:\n\nTimeout.\n\nWhat should I check?',
+    'Here is an existing message. What should happen next?',
+    'Here is your message from yesterday:\n\nShould I investigate?'
+  ]) assert.deepEqual(find([block('assistant', text)]), [0])
+  for (const intro of ['Here is your draft:', "Here's a draft message:", 'Here is your email:']) {
+    assert.deepEqual(find([block('assistant', intro + '\n\nCould you extend the deadline?')]), [])
+  }
+})
+
+test('keeps the question source block when later blocks contain only excluded content', () => {
+  for (const tail of ['```js\nconst value = 1\n```', '~~~\nHidden?\n~~~', '> Quoted question?', '   ']) {
+    assert.deepEqual(find([block('assistant', 'Continue?'), block('assistant', tail)]), [0])
+  }
+  assert.deepEqual(find([block('assistant', 'Continue?\n\n```js'),
+    block('assistant', 'Hidden?\n```')]), [0])
+  assert.deepEqual(find([block('assistant', 'Continue?'), block('assistant', 'All done.')]), [])
+  assert.deepEqual(find([block('assistant', 'Summary.'), block('assistant', 'Continue?'),
+    block('assistant', '```\nHidden?\n```')]), [1])
 })
 
 test('matches fence characters and lengths and resumes at genuine prose', () => {
@@ -115,4 +135,42 @@ test('question cache is replaced when blocks are replaced', () => {
   assert.deepEqual(Array.from(cached.QUESTIONS), [0])
   cached.setQuestionBlocks([block('assistant', 'Complete.')])
   assert.deepEqual(Array.from(cached.QUESTIONS), [])
+})
+
+test('locates the final prose question rather than questions in code or quotations', () => {
+  const texts = [
+    { textContent: 'First question?', parentElement: { closest: () => null } },
+    { textContent: 'Final question?', parentElement: { closest: () => null } },
+    { textContent: 'Code question?', parentElement: { closest: () => ({}) } }
+  ]
+  let chosen, start, end
+  const positions = vm.createContext({ NodeFilter: { SHOW_TEXT: 4 }, document: {
+    createTreeWalker: () => { let i = 0; return { nextNode: () => texts[i++] } },
+    createRange: () => ({ setStart: (text, offset) => { chosen = text; start = offset },
+      setEnd: (text, offset) => { end = offset }, getBoundingClientRect: () => ({ top: 450 }) })
+  } })
+  vm.runInContext(section('function questionTop (', 'function stepQuestion ('), positions)
+  assert.equal(positions.questionTop({ querySelector: () => ({}) }), 450)
+  assert.equal(chosen, texts[1])
+  assert.equal(start, texts[1].textContent.indexOf('?'))
+  assert.equal(end, start + 1)
+})
+
+test('navigation is harmless at boundaries and during an active jump', () => {
+  const { nav, body, callbacks } = navigation({ 0: 100 })
+  nav.stepQuestion(-1)
+  nav.stepQuestion(1)
+  assert.equal(body.scrollTop, 0)
+  assert.equal(callbacks.length, 0)
+  nav.QUESTION_JUMP = true
+  nav.stepQuestion(1)
+  assert.equal(callbacks.length, 0)
+})
+
+test('missing rendered question nodes do not throw or move the reader', () => {
+  const { nav, body } = navigation({}, { questions: [0] })
+  nav.stepQuestion(1)
+  nav.stepQuestion(-1)
+  assert.equal(body.scrollTop, 0)
+  assert.equal(nav.QUESTION_JUMP, false)
 })

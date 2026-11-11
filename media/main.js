@@ -1461,28 +1461,37 @@ function setQuestionBlocks (blocks) {
 /** Only the end of an assistant reply is a navigation stop, not quoted drafts. */
 function questionBlocks (blocks) {
   const found = []
-  let text = '', last = -1, drafting = false
+  let parts = [], drafting = false
   const finish = () => {
     let fence = null
-    const plain = text.split('\n').filter(line => {
+    let last = -1
+    // Keep each line's source block while filtering: trailing code or quotes
+    // must not move a retained question to a different bubble.
+    const lines = parts.flatMap(({ text, index }) =>
+      [...text.split('\n'), ''].map(line => ({ line, index })))
+    const plain = lines.filter(({ line, index }) => {
       const mark = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
       if (fence) {
         if (mark && mark[1][0] === fence[0] && mark[1].length >= fence.length && !mark[2].trim()) fence = null
         return false
       }
       if (mark) { fence = mark[1]; return false }
-      return !/^\s*>/.test(line)
-    }).join('\n').trim()
+      if (/^\s*>/.test(line)) return false
+      if (line.trim()) last = index
+      return true
+    }).map(({ line }) => line).join('\n').trim()
     const paragraphs = plain.split(/\n\s*\n/).filter(Boolean)
     const ending = (paragraphs.at(-1) || '').trim()
     // An email's question belongs to its recipient. Only a separate follow-up
     // about the assistant's next action is a stop after a drafting request.
-    const draft = /(?:\bhere(?:'s| is)\b[^\n]*(?:draft|email|message)|^\s*(?:dear|subject:)\s)/im.test(plain) ||
+    const introduction = /^\s*here(?:'s| is)\s+(?:(?:your|a|an|the)\s+)?(?:(?:revised|updated|polished|suggested|sample)\s+)?draft(?:\s+(?:email|message|letter|reply|post|comment))?\s*[:.!]?\s*$/im.test(plain) ||
+      /^\s*here(?:'s| is)\s+your\s+(?:(?:revised|updated|polished)\s+)?(?:email|message|letter|reply|post|comment)\s*[:.!]?\s*$/im.test(plain)
+    const draft = introduction || /^\s*(?:dear\s|subject:\s)/im.test(plain) ||
       (drafting && /^(?:hi|hello|hey)\s+[^\n,]+,/im.test(plain))
     const followUp = /^(?:would you like me to|do you want me to|want me to|should i|shall i|may i|can i)\b/i.test(ending)
     const outsideDraft = paragraphs.length > 1 && followUp && !/^\s*(?:dear|subject:)\s/im.test(ending)
     if ((!draft || outsideDraft) && /\?[*_]*$/.test(plain) && claudeAsks(plain)) found.push(last)
-    text = ''; last = -1
+    parts = []
   }
   blocks.forEach((block, i) => {
     if (block.role !== 'assistant') {
@@ -1492,7 +1501,7 @@ function questionBlocks (blocks) {
       }
       return
     }
-    if (block.text) { text += (text ? '\n\n' : '') + block.text; last = i }
+    if (block.text) parts.push({ text: block.text, index: i })
   })
   finish()
   return found
