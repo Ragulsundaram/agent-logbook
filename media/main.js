@@ -1456,16 +1456,29 @@ let ALL_BLOCKS = []
 /** Only the end of an assistant reply is a navigation stop, not quoted drafts. */
 function questionBlocks (blocks) {
   const found = []
-  let text = '', last = -1
+  let text = '', last = -1, drafting = false
   const finish = () => {
     const plain = text.replace(/```[\s\S]*?(?:```|$)/g, '')
       .replace(/~~~[\s\S]*?(?:~~~|$)/g, '')
       .split('\n').filter(line => !/^\s*>/.test(line)).join('\n').trim()
-    if (/\?[*_]*$/.test(plain) && claudeAsks(plain)) found.push(last)
+    const paragraphs = plain.split(/\n\s*\n/).filter(Boolean)
+    const ending = (paragraphs.at(-1) || '').trim()
+    // An email's question belongs to its recipient. Only a separate follow-up
+    // about the assistant's next action is a stop after a drafting request.
+    const draft = drafting || /(?:here(?:'s| is)\b[^\n]*(?:draft|email|message)|^\s*(?:dear|subject:)\s)/im.test(plain)
+    const followUp = /^(?:would you like me to|do you want me to|want me to|should i|shall i|may i|can i)\b/i.test(ending)
+    const outsideDraft = paragraphs.length > 1 && followUp && !/^\s*(?:dear|subject:)\s/im.test(ending)
+    if ((!draft || outsideDraft) && /\?[*_]*$/.test(plain) && claudeAsks(plain)) found.push(last)
     text = ''; last = -1
   }
   blocks.forEach((block, i) => {
-    if (block.role !== 'assistant') { finish(); return }
+    if (block.role !== 'assistant') {
+      finish()
+      if (block.role === 'user') {
+        drafting = /\b(?:write|draft|compose|rewrite|translate|polish)\b[\s\S]*\b(?:email|mail|letter|message|reply|post|comment|draft)\b/i.test(block.text || '')
+      }
+      return
+    }
     if (block.text) { text += (text ? '\n\n' : '') + block.text; last = i }
   })
   finish()

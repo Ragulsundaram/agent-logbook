@@ -31,6 +31,16 @@ test('finds questions before the initially rendered tail', () => {
   assert.deepEqual(find(blocks), [0])
 })
 
+test('ignores unquoted email questions and keeps a separate assistant follow-up', () => {
+  const request = block('user', 'Write an email to my teacher asking for more time.')
+  const draft = 'Dear Sir,\n\nCould you extend the deadline?'
+  assert.deepEqual(find([request, block('assistant', draft)]), [])
+  assert.deepEqual(find([block('assistant', "Here is your draft:\n\nCould you extend the deadline?")]), [])
+  assert.deepEqual(find([request, block('assistant', draft + '\n\nWould you like me to shorten it?')]), [1])
+  assert.deepEqual(find([request, block('assistant', draft), block('user', 'Explain the test.'),
+    block('assistant', 'Should I run it?')]), [3])
+})
+
 test('previous loads an older target and stops following live output', () => {
   let loaded = 0, scrolled = false
   const first = { dataset: { bi: '160' }, getBoundingClientRect: () => ({ top: 100 }) }
