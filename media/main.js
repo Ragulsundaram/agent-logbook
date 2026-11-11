@@ -3832,7 +3832,9 @@ function syncBoard (rows) {
 // The order is kept as chat ids, not card nodes. A status flip swaps a card for
 // a new one, and a kept node list then put the old card back on the next
 // resize - two cards for one chat, one of them stuck on an older reply.
-const BCOL_MIN = 380, BGAP = 14
+// 300px fits the shorter cards: at 380 a board just under 800px wide stayed
+// in one column, leaving half the width empty
+const BCOL_MIN = 300, BGAP = 14
 let BORDER = []
 function layoutBoard (ids) {
   BORDER = ids

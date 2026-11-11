@@ -1257,7 +1257,7 @@ body.boardmode #tabs, body.boardmode #limits, body.boardmode #lnudges { display:
 #view-board[data-filter="needs"] #sec-work, #view-board[data-filter="needs"] #sec-old,
 #view-board[data-filter="working"] #sec-needs, #view-board[data-filter="working"] #sec-old,
 #view-board[data-filter="earlier"] #sec-needs, #view-board[data-filter="earlier"] #sec-work { display: none }
-#bwork { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-items: start }
+#bwork { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; align-items: start }
 /* a working chat: title, what it is doing, what you asked - nothing to answer yet */
 .bcard.slim .bcask { padding-bottom: 10px }
 #bgrid { display: flex; gap: 12px; align-items: flex-start }
