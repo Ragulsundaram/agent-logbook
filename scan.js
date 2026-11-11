@@ -2318,6 +2318,72 @@ function commandRunning (id) {
   return false
 }
 
+/**
+ * Your last message, when it lies before the part of the file the board reads.
+ * Tool output can push it far back - a background agent's results filled a
+ * megabyte after a one-line ask - so earlier pieces are read, newest first, up
+ * to a few megabytes. Found once, it is remembered: a newer ask would be in
+ * the tail anyway.
+ */
+const EARLIER_ASK = new Map()     // chat id -> { file, end, ask: { text, ts } | null }
+
+/**
+ * The newest message of yours in bytes [floor, end) of the file, reading back
+ * from `end` a piece at a time, at most `pieces` pieces. A line cut at a piece's
+ * start is carried into the next, older piece, so no record is lost at the join.
+ * Only the text and time are kept - a turn can carry screenshots. Throws if
+ * the file cannot be read, so a failure is never remembered as "no message".
+ */
+function askBetween (rec, floor, end, codex, pieces) {
+  const fd = fs.openSync(rec.file, 'r')
+  try {
+    let carry = Buffer.alloc(0)
+    for (let stop = end, n = 0; stop > floor && n < pieces; n++) {
+      const start = Math.max(floor, stop - TAIL_BYTES)
+      const chunk = Buffer.alloc(stop - start)
+      fs.readSync(fd, chunk, 0, chunk.length, start)
+      let buf = Buffer.concat([chunk, carry])
+      carry = Buffer.alloc(0)
+      if (start > floor) {
+        // the first line may begin in the older piece: hand it over whole
+        const nl = buf.indexOf(10)
+        if (nl < 0) { carry = buf; stop = start; continue }
+        carry = buf.subarray(0, nl)
+        buf = buf.subarray(nl + 1)
+      }
+      const { turns } = codex ? parseCodex(buf.toString('utf8')) : parseTranscript(buf.toString('utf8'))
+      const t = [...turns].reverse().find(x => x.role === 'user' && x.text)
+      if (t) return { text: t.text, ts: t.ts }
+      stop = start
+    }
+    return null
+  } finally { fs.closeSync(fd) }
+}
+
+/**
+ * Your last message, when it lies before the part of the file the board reads.
+ * Tool output can push it far back - a background agent's results filled a
+ * megabyte after a one-line ask - so earlier pieces are read, newest first, up
+ * to a few megabytes. The answer is remembered; when the board's window has
+ * moved on since, only the stretch it uncovered is read before reusing it.
+ * `end` is where the board's own reading starts, on a line boundary.
+ */
+function earlierAsk (rec, end, codex) {
+  const hit = EARLIER_ASK.get(rec.id)
+  let ask
+  try {
+    if (hit && hit.file === rec.file && hit.end <= end) {
+      // a newer message may have slipped out of the tail into the uncovered stretch
+      ask = (hit.end < end && askBetween(rec, hit.end, end, codex, 8)) || hit.ask
+    } else {
+      ask = askBetween(rec, 0, end, codex, 8)
+    }
+  } catch { return hit?.file === rec.file ? hit.ask : null }   // not remembered: try again next time
+  EARLIER_ASK.set(rec.id, { file: rec.file, end, ask })
+  while (EARLIER_ASK.size > 50) EARLIER_ASK.delete(EARLIER_ASK.keys().next().value)
+  return ask
+}
+
 function board (live, folders) {
   const out = []
   // a chat belongs to this window when it ran in one of the window's folders
@@ -2328,21 +2394,24 @@ function board (live, folders) {
     const status = live[rec.id]
     if (!status || !mine(rec.cwd)) continue
     const codex = rec.provider === 'codex'
-    let raw = ''
+    let raw = '', size = 0, len = 0, tailStart = 0
     try {
       const fd = fs.openSync(rec.file, 'r')
-      const size = fs.fstatSync(fd).size
-      const len = Math.min(size, TAIL_BYTES)
+      size = fs.fstatSync(fd).size
+      len = Math.min(size, TAIL_BYTES)
       const buf = Buffer.alloc(len)
       fs.readSync(fd, buf, 0, len, size - len)
       fs.closeSync(fd)
-      raw = buf.toString('utf8')
-      if (len < size) raw = raw.slice(raw.indexOf('\n') + 1)   // drop the cut first line
+      // drop the cut first line; an earlier search starts after it, so it is read whole there
+      const nl = len < size ? buf.indexOf(10) + 1 : 0
+      tailStart = size - len + nl
+      raw = buf.subarray(nl).toString('utf8')
     } catch { continue }
     const { turns, info } = codex ? parseCodex(raw) : parseTranscript(raw)
     const now = codex ? {} : nowDoing(raw, rec.id, status)
     const said = [...turns].reverse().find(t => t.role === 'assistant' && t.text)
-    const asked = [...turns].reverse().find(t => t.role === 'user' && t.text)
+    const asked = [...turns].reverse().find(t => t.role === 'user' && t.text) ||
+      (len < size ? earlierAsk(rec, tailStart, codex) : null)
     out.push({
       id: rec.id, title: rec.title, project: rec.project || projectName(rec.cwd), status, provider: rec.provider || 'claude',
       cost: rec.cost, lastTs: rec.lastTs,
