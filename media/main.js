@@ -3397,11 +3397,10 @@ document.addEventListener('copy', e => {
   // The plain text is written as Markdown, the same as the copy button's. Slack
   // builds a paste from the plain text and turns its Markdown into formatting,
   // so a selection copied as bare words lost every link and bold on the way.
-  // `label` is set inside a link's text: plain text there has its brackets and
-  // backslashes escaped so "a]b" cannot close the label early, while code
-  // inside the link is left as it is - Markdown reads a code span literally.
+  // Escape Markdown punctuation in plain link labels so it stays literal.
+  // Code spans inside links already keep their text literal.
   const walk = (node, label = false) => {
-    if (node.nodeType === 3) return label ? node.nodeValue.replace(/[\\[\]]/g, '\\$&') : node.nodeValue
+    if (node.nodeType === 3) return label ? node.nodeValue.replace(/[\\[\]_*]/g, '\\$&') : node.nodeValue
     const tag = node.nodeName.toLowerCase()
     if (tag === 'button' || node.classList?.contains('msgcopy')) return ''
     const inside = tag === 'a' ? true : tag === 'code' ? false : label
