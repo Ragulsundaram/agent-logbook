@@ -14,6 +14,28 @@ test('finds only assistant reply endings', () => {
   assert.deepEqual(find([block('user', 'Ready?'), block('assistant', 'Shall I continue?'),
     block('user', 'Yes'), block('assistant', 'Why? Here is the explanation.')]), [1])
 })
+
+test('keeps emphasized final questions and handles Windows line endings', () => {
+  for (const text of ['**Should I continue?**', '*Should I continue?*', '_Should I continue?_',
+    'Summary.\r\n\r\nShould I continue?', '- Should I continue?']) {
+    assert.deepEqual(find([block('assistant', text)]), [0])
+  }
+})
+
+test('live changes add and remove question stops without retaining stale indices', () => {
+  const cached = vm.createContext({ ALL_BLOCKS: [], QUESTIONS: [], questionBlocks: context.questionBlocks })
+  vm.runInContext(section('function setQuestionBlocks (', '/** Only the end'), cached)
+  for (const [blocks, expected] of [
+    [[], []],
+    [[block('assistant', 'Working')], []],
+    [[block('assistant', 'Continue?')], [0]],
+    [[block('user', 'Added earlier'), block('assistant', 'Continue?')], [1]],
+    [[block('assistant', 'All complete.')], []]
+  ]) {
+    cached.setQuestionBlocks(blocks)
+    assert.deepEqual(Array.from(cached.QUESTIONS), expected)
+  }
+})
 test('groups consecutive assistant blocks and targets their final text', () => {
   assert.deepEqual(find([block('assistant', 'Ready?'), block('assistant', 'All done.')]), [])
   assert.deepEqual(find([block('assistant', 'Summary.'), block('assistant', 'Continue?'),

@@ -1490,7 +1490,8 @@ function questionBlocks (blocks) {
       (drafting && /^(?:hi|hello|hey)\s+[^\n,]+,/im.test(plain))
     const followUp = /^(?:would you like me to|do you want me to|want me to|should i|shall i|may i|can i)\b/i.test(ending)
     const outsideDraft = paragraphs.length > 1 && followUp && !/^\s*(?:dear|subject:)\s/im.test(ending)
-    if ((!draft || outsideDraft) && /\?[*_]*$/.test(plain) && claudeAsks(plain)) found.push(last)
+    const question = plain.replace(/[*_]+$/, '')
+    if ((!draft || outsideDraft) && /\?$/.test(question) && claudeAsks(question)) found.push(last)
     parts = []
   }
   blocks.forEach((block, i) => {
