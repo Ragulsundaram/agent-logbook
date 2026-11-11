@@ -55,9 +55,14 @@ test('does not mistake a message report for a draft introduction', () => {
     'Here is an existing message. What should happen next?',
     'Here is your message from yesterday:\n\nShould I investigate?'
   ]) assert.deepEqual(find([block('assistant', text)]), [0])
-  for (const intro of ['Here is your draft:', "Here's a draft message:", 'Here is your email:']) {
+  for (const intro of ['Here is your draft:', "Here's a draft message:", 'Here is your email:',
+    "Here's a draft you can send:", 'Here is a revised draft for your teacher:',
+    "Here's a draft of the reply:", 'Here is a draft that you can adapt:']) {
     assert.deepEqual(find([block('assistant', intro + '\n\nCould you extend the deadline?')]), [])
+    assert.deepEqual(find([block('assistant', intro + '\n\nCould you extend the deadline?\n\nWould you like me to shorten it?')]), [0])
   }
+  assert.deepEqual(find([block('assistant', "Here's a draft. Would you like me to edit it?")]), [0])
+  assert.deepEqual(find([block('assistant', "Here's a draft-related error. What should I check?")]), [0])
 })
 
 test('keeps the question source block when later blocks contain only excluded content', () => {

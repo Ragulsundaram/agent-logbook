@@ -1484,7 +1484,7 @@ function questionBlocks (blocks) {
     const ending = (paragraphs.at(-1) || '').trim()
     // An email's question belongs to its recipient. Only a separate follow-up
     // about the assistant's next action is a stop after a drafting request.
-    const introduction = /^\s*here(?:'s| is)\s+(?:(?:your|a|an|the)\s+)?(?:(?:revised|updated|polished|suggested|sample)\s+)?draft(?:\s+(?:email|message|letter|reply|post|comment))?\s*[:.!]?\s*$/im.test(plain) ||
+    const introduction = /^[ \t]*here(?:'s| is)\s+(?:(?:your|a|an|the)\s+)?(?:(?:revised|updated|polished|suggested|sample)\s+)?draft\b[^\n?]*$/im.test(plain) ||
       /^\s*here(?:'s| is)\s+your\s+(?:(?:revised|updated|polished)\s+)?(?:email|message|letter|reply|post|comment)\s*[:.!]?\s*$/im.test(plain)
     const draft = introduction || /^\s*(?:dear\s|subject:\s)/im.test(plain) ||
       (drafting && /^(?:hi|hello|hey)\s+[^\n,]+,/im.test(plain))
