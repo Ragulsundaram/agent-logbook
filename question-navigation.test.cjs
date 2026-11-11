@@ -42,10 +42,34 @@ test('groups consecutive assistant blocks and targets their final text', () => {
     block('assistant', '')]), [1])
 })
 test('ignores fenced code, quoted drafts and quoted questions', () => {
-  for (const text of ['```js\nReady?\n```', '~~~\nReady?\n~~~', '> Ready?', '"Ready?"']) {
+  for (const text of ['```js\nReady?\n```', '~~~\nReady?\n~~~', '> Ready?']) {
     assert.deepEqual(find([block('assistant', text)]), [])
   }
   assert.deepEqual(find([block('assistant', '> Draft question?\n\nShould I send it?')]), [0])
+})
+
+test('accepts the closing punctuation supported by claudeAsks', () => {
+  for (const text of ['Continue?"', "Continue?'", '(Should I continue?)', '[Should I continue?]',
+    '"Should I continue?"', '**(Should I continue?)**']) {
+    assert.deepEqual(find([block('assistant', text)]), [0])
+  }
+  assert.deepEqual(find([block('assistant', '> "Could you extend the deadline?"')]), [])
+})
+
+test('keeps separate draft feedback questions but excludes recipient questions', () => {
+  const draft = "Here's a draft you can send:\n\nDear Sir,\n\nCould you extend the deadline?"
+  assert.deepEqual(find([block('assistant', draft)]), [])
+  for (const followUp of ['Does this draft work for you?', 'Does this work for you?',
+    'Would this tone suit you?', 'Is the draft ready to send?', 'Should I shorten it?']) {
+    assert.deepEqual(find([block('assistant', draft + '\n\n' + followUp)]), [0])
+  }
+})
+
+test('does not classify hyphenated draft descriptions as introductions', () => {
+  for (const prefix of ["Here's a draft-related error:", 'Here is a draft-parser failure:',
+    'Here is a draft-related error report.']) {
+    assert.deepEqual(find([block('assistant', prefix + '\n\nWhat should I check?')]), [0])
+  }
 })
 test('finds questions before the initially rendered tail', () => {
   const blocks = [block('assistant', 'Continue?'), block('user', 'Yes')]

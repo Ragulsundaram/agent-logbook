@@ -1484,14 +1484,14 @@ function questionBlocks (blocks) {
     const ending = (paragraphs.at(-1) || '').trim()
     // An email's question belongs to its recipient. Only a separate follow-up
     // about the assistant's next action is a stop after a drafting request.
-    const introduction = /^[ \t]*here(?:'s| is)\s+(?:(?:your|a|an|the)\s+)?(?:(?:revised|updated|polished|suggested|sample)\s+)?draft\b[^\n?]*$/im.test(plain) ||
+    const introduction = /^[ \t]*here(?:'s| is)\s+(?:(?:your|a|an|the)\s+)?(?:(?:revised|updated|polished|suggested|sample)\s+)?draft(?=[ \t:.!]|$)[^\n?]*$/im.test(plain) ||
       /^\s*here(?:'s| is)\s+your\s+(?:(?:revised|updated|polished)\s+)?(?:email|message|letter|reply|post|comment)\s*[:.!]?\s*$/im.test(plain)
     const draft = introduction || /^\s*(?:dear\s|subject:\s)/im.test(plain) ||
       (drafting && /^(?:hi|hello|hey)\s+[^\n,]+,/im.test(plain))
-    const followUp = /^(?:would you like me to|do you want me to|want me to|should i|shall i|may i|can i)\b/i.test(ending)
+    const followUp = /^(?:would you like me to|do you want me to|want me to|should i|shall i|may i|can i|(?:does|would|will|is) (?:this|the draft))\b/i.test(ending)
     const outsideDraft = paragraphs.length > 1 && followUp && !/^\s*(?:dear|subject:)\s/im.test(ending)
     const question = plain.replace(/[*_]+$/, '')
-    if ((!draft || outsideDraft) && /\?$/.test(question) && claudeAsks(question)) found.push(last)
+    if ((!draft || outsideDraft) && /\?["')\]]*$/.test(question) && claudeAsks(question)) found.push(last)
     parts = []
   }
   blocks.forEach((block, i) => {
