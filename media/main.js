@@ -3409,7 +3409,7 @@ document.addEventListener('copy', e => {
       const href = node.getAttribute('href') || ''
       const plain = node.textContent.trim()
       if (!/^https?:\/\//i.test(href)) return [...node.childNodes].map(n => walk(n, label)).join('')
-      if (plain === href) return href
+      if (plain === href && !/[*_]/.test(plain)) return href
       // brackets and spaces in the address are encoded, so a ")" inside it
       // cannot end the link early; the address still opens the same page
       const dest = href.replace(/[()<>\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
