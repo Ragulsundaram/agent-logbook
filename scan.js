@@ -2318,6 +2318,38 @@ function commandRunning (id) {
   return false
 }
 
+/**
+ * Your last message, when it lies before the part of the file the board reads.
+ * Tool output can push it far back - a background agent's results filled a
+ * megabyte after a one-line ask - so earlier pieces are read, newest first, up
+ * to a few megabytes. Found once, it is remembered: a newer ask would be in
+ * the tail anyway.
+ */
+const EARLIER_ASK = new Map()     // chat id -> { file, end, ask }
+function earlierAsk (rec, end, codex) {
+  const hit = EARLIER_ASK.get(rec.id)
+  if (hit && hit.file === rec.file && hit.end <= end) return hit.ask
+  let ask = null
+  try {
+    const fd = fs.openSync(rec.file, 'r')
+    try {
+      for (let stop = end, n = 0; stop > 0 && n < 8 && !ask; n++) {
+        const start = Math.max(0, stop - TAIL_BYTES)
+        const buf = Buffer.alloc(stop - start)
+        fs.readSync(fd, buf, 0, buf.length, start)
+        let raw = buf.toString('utf8')
+        if (start > 0) raw = raw.slice(raw.indexOf('\n') + 1)
+        const { turns } = codex ? parseCodex(raw) : parseTranscript(raw)
+        ask = [...turns].reverse().find(t => t.role === 'user' && t.text) || null
+        stop = start
+      }
+    } finally { fs.closeSync(fd) }
+  } catch {}
+  EARLIER_ASK.set(rec.id, { file: rec.file, end, ask })
+  while (EARLIER_ASK.size > 50) EARLIER_ASK.delete(EARLIER_ASK.keys().next().value)
+  return ask
+}
+
 function board (live, folders) {
   const out = []
   // a chat belongs to this window when it ran in one of the window's folders
@@ -2328,11 +2360,11 @@ function board (live, folders) {
     const status = live[rec.id]
     if (!status || !mine(rec.cwd)) continue
     const codex = rec.provider === 'codex'
-    let raw = ''
+    let raw = '', size = 0, len = 0
     try {
       const fd = fs.openSync(rec.file, 'r')
-      const size = fs.fstatSync(fd).size
-      const len = Math.min(size, TAIL_BYTES)
+      size = fs.fstatSync(fd).size
+      len = Math.min(size, TAIL_BYTES)
       const buf = Buffer.alloc(len)
       fs.readSync(fd, buf, 0, len, size - len)
       fs.closeSync(fd)
@@ -2342,7 +2374,8 @@ function board (live, folders) {
     const { turns, info } = codex ? parseCodex(raw) : parseTranscript(raw)
     const now = codex ? {} : nowDoing(raw, rec.id, status)
     const said = [...turns].reverse().find(t => t.role === 'assistant' && t.text)
-    const asked = [...turns].reverse().find(t => t.role === 'user' && t.text)
+    const asked = [...turns].reverse().find(t => t.role === 'user' && t.text) ||
+      (len < size ? earlierAsk(rec, size - len, codex) : null)
     out.push({
       id: rec.id, title: rec.title, project: rec.project || projectName(rec.cwd), status, provider: rec.provider || 'claude',
       cost: rec.cost, lastTs: rec.lastTs,
