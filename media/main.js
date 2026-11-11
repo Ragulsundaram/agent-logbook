@@ -1477,7 +1477,7 @@ function questionBlocks (blocks) {
     const ending = (paragraphs.at(-1) || '').trim()
     // An email's question belongs to its recipient. Only a separate follow-up
     // about the assistant's next action is a stop after a drafting request.
-    const draft = /(?:here(?:'s| is)\b[^\n]*(?:draft|email|message)|^\s*(?:dear|subject:)\s)/im.test(plain) ||
+    const draft = /(?:\bhere(?:'s| is)\b[^\n]*(?:draft|email|message)|^\s*(?:dear|subject:)\s)/im.test(plain) ||
       (drafting && /^(?:hi|hello|hey)\s+[^\n,]+,/im.test(plain))
     const followUp = /^(?:would you like me to|do you want me to|want me to|should i|shall i|may i|can i)\b/i.test(ending)
     const outsideDraft = paragraphs.length > 1 && followUp && !/^\s*(?:dear|subject:)\s/im.test(ending)
@@ -1526,6 +1526,7 @@ function questionTop (node) {
 function stepQuestion (dir) {
   const body = $('.msgs')
   if (!body || QUESTION_JUMP) return
+  refreshQuestions()
   const top = body.getBoundingClientRect().top
   const candidates = dir < 0 ? [...QUESTIONS].reverse() : QUESTIONS
   const target = candidates.find(i => {

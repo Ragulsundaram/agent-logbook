@@ -46,6 +46,11 @@ test('keeps clarification questions after a drafting request', () => {
     block('assistant', 'What tone should I use?')]), [1])
 })
 
+test('does not mistake a message report for a draft introduction', () => {
+  assert.deepEqual(find([block('assistant', "There's a new message. What should happen next?")]), [0])
+  assert.deepEqual(find([block('assistant', 'There is a new message. Should I read it?')]), [0])
+})
+
 test('matches fence characters and lengths and resumes at genuine prose', () => {
   for (const text of ['````\n```\nHidden?', '```\n~~~\nHidden?', '```\n```not a closer\nHidden?']) {
     assert.deepEqual(find([block('assistant', text)]), [])
@@ -65,6 +70,7 @@ function navigation (positions, options = {}) {
     QUESTIONS: options.questions || [...nodes.keys()], QUESTION_JUMP: false,
     SHOWN_FROM: options.from || 0, FOLLOW: true, AUTO_UNTIL: 0,
     questionTop: node => node.y - body.scrollTop,
+    refreshQuestions: () => { feedback = `${nav.QUESTIONS.length} questions` },
     requestAnimationFrame: fn => callbacks.push(fn),
     drawEarlier: count => { loaded = count; return options.fail !== true } })
   vm.runInContext(section('function stepQuestion (', '/** Step back'), nav)
@@ -97,6 +103,9 @@ test('failed older-message loading reports failure without moving the reader', (
   assert.equal(body.scrollTop, 0)
   assert.equal(nav.QUESTION_JUMP, false)
   assert.equal(feedback(), 'Could not load this question')
+  nav.QUESTIONS = []
+  nav.stepQuestion(1)
+  assert.equal(feedback(), '0 questions')
 })
 
 test('question cache is replaced when blocks are replaced', () => {
