@@ -41,20 +41,69 @@ test('ignores unquoted email questions and keeps a separate assistant follow-up'
     block('assistant', 'Should I run it?')]), [3])
 })
 
-test('previous loads an older target and stops following live output', () => {
-  let loaded = 0, scrolled = false
-  const first = { dataset: { bi: '160' }, getBoundingClientRect: () => ({ top: 100 }) }
-  const body = { children: [first], getBoundingClientRect: () => ({ top: 100 }),
-    querySelector: selector => {
-      assert.equal(selector, '[data-bi="0"]')
-      return { scrollIntoView: options => { scrolled = options.block === 'start' } }
-    } }
-  const nav = vm.createContext({ Date, $: () => body, questionBlocks: () => [0],
-    ALL_BLOCKS: Array(181), SHOWN_FROM: 150, FOLLOW: true, AUTO_UNTIL: 0,
-    drawEarlier: count => { loaded = count } })
+test('keeps clarification questions after a drafting request', () => {
+  assert.deepEqual(find([block('user', 'Write an email for me.'),
+    block('assistant', 'What tone should I use?')]), [1])
+})
+
+test('matches fence characters and lengths and resumes at genuine prose', () => {
+  for (const text of ['````\n```\nHidden?', '```\n~~~\nHidden?', '```\n```not a closer\nHidden?']) {
+    assert.deepEqual(find([block('assistant', text)]), [])
+  }
+  assert.deepEqual(find([block('assistant', '```js\nHidden?\n````\n\nShould I continue?')]), [0])
+  assert.deepEqual(find([block('assistant', '~~~\nHidden?\n~~~\n\nContinue?')]), [0])
+})
+
+function navigation (positions, options = {}) {
+  const callbacks = []
+  let loaded = 0, feedback = ''
+  const nodes = new Map(Object.entries(positions).map(([i, y]) => [Number(i), { y, isConnected: true }]))
+  const body = { scrollTop: 0, getBoundingClientRect: () => ({ top: 100 }),
+    querySelector: selector => nodes.get(Number(/\d+/.exec(selector)[0])) }
+  const label = { set textContent (value) { feedback = value } }
+  const nav = vm.createContext({ Date, $: selector => selector === '.msgs' ? body : label,
+    QUESTIONS: options.questions || [...nodes.keys()], QUESTION_JUMP: false,
+    SHOWN_FROM: options.from || 0, FOLLOW: true, AUTO_UNTIL: 0,
+    questionTop: node => node.y - body.scrollTop,
+    requestAnimationFrame: fn => callbacks.push(fn),
+    drawEarlier: count => { loaded = count; return options.fail !== true } })
   vm.runInContext(section('function stepQuestion (', '/** Step back'), nav)
+  return { nav, body, callbacks, loaded: () => loaded, feedback: () => feedback }
+}
+
+test('previous loads an older target and corrects layout before releasing its guard', () => {
+  const { nav, body, callbacks, loaded } = navigation({ 0: 50 }, { from: 150 })
   nav.stepQuestion(-1)
-  assert.equal(loaded, 150)
-  assert.equal(scrolled, true)
+  assert.equal(loaded(), 150)
+  assert.equal(body.scrollTop, -50)
   assert.equal(nav.FOLLOW, false)
+  assert.equal(nav.QUESTION_JUMP, true)
+  while (callbacks.length) callbacks.shift()()
+  assert.equal(nav.QUESTION_JUMP, false)
+})
+
+test('next reaches a final reply question below the reader then advances to later questions', () => {
+  const { nav, body, callbacks } = navigation({ 0: 600, 2: 900 })
+  nav.stepQuestion(1)
+  assert.equal(body.scrollTop, 500)
+  while (callbacks.length) callbacks.shift()()
+  nav.stepQuestion(1)
+  assert.equal(body.scrollTop, 800)
+})
+
+test('failed older-message loading reports failure without moving the reader', () => {
+  const { nav, body, feedback } = navigation({ 0: 50 }, { from: 150, fail: true })
+  nav.stepQuestion(-1)
+  assert.equal(body.scrollTop, 0)
+  assert.equal(nav.QUESTION_JUMP, false)
+  assert.equal(feedback(), 'Could not load this question')
+})
+
+test('question cache is replaced when blocks are replaced', () => {
+  const cached = vm.createContext({ ALL_BLOCKS: [], QUESTIONS: [], questionBlocks: context.questionBlocks })
+  vm.runInContext(section('function setQuestionBlocks (', '/** Only the end'), cached)
+  cached.setQuestionBlocks([block('assistant', 'Continue?')])
+  assert.deepEqual(Array.from(cached.QUESTIONS), [0])
+  cached.setQuestionBlocks([block('assistant', 'Complete.')])
+  assert.deepEqual(Array.from(cached.QUESTIONS), [])
 })
