@@ -3841,7 +3841,7 @@ function syncBoard (rows) {
   if ([...STALE.keys()].some(id => live.get(id) === 'busy')) send({ type: 'board' })
   boardMeta([...BCARDS.values()].map(x => x.data).concat([...STALE.values()]))
   const view = $('#view-board'), keepTop = view.scrollTop
-  if (BCARDS.size) layoutBoard(BORDER.filter(id => BCARDS.has(id)))   // a swapped card's height may differ
+  if (BCARDS.size) { layoutBoard(BORDER.filter(id => BCARDS.has(id))); layoutWork(BWORK.filter(id => BCARDS.has(id))) }   // a swapped card's height may differ
   holdScroll(view, keepTop)
   if (!BCARDS.size && !STALE.size && !live.size) renderBoard([])
   // a chat from another window stays off the board, so it is not a reason to ask again
@@ -3861,10 +3861,12 @@ function syncBoard (rows) {
 // in one column, leaving half the width empty
 const BCOL_MIN = 300, BGAP = 14
 let BORDER = []
-function layoutBoard (ids) {
-  BORDER = ids
+function layoutBoard (ids) { BORDER = ids; layoutColumns($('#bgrid'), ids) }
+let BWORK = []
+function layoutWork (ids) { BWORK = ids; layoutColumns($('#bwork'), ids) }
+function layoutColumns (grid, ids) {
   const cards = ids.map(id => BCARDS.get(id)?.card).filter(Boolean)
-  const grid = $('#bgrid')
+  if (!cards.length) { for (const c of grid.querySelectorAll(':scope > .bcol')) c.remove(); return }
   const n = Math.max(1, Math.floor((grid.clientWidth + BGAP) / (BCOL_MIN + BGAP)))
   let cols = [...grid.querySelectorAll(':scope > .bcol')]
   if (cols.length !== n) {
@@ -3877,6 +3879,9 @@ function layoutBoard (ids) {
   // work out where every card goes first, then touch only the columns that
   // differ: re-appending every card on every update moved the page under the
   // reader and threw their scroll back
+  // a card new to the board is not in the grid yet, and a detached card reads
+  // offsetHeight 0 - put it in a column first so its height measures for real
+  for (const card of cards) if (!grid.contains(card)) cols[0].appendChild(card)
   const h = cols.map(() => 0), plan = cols.map(() => [])
   for (const card of cards) {
     const k = h.indexOf(Math.min(...h))
@@ -3890,6 +3895,7 @@ function layoutBoard (ids) {
 }
 // the column count follows the tab's width
 new ResizeObserver(() => { if (BOARD_MODE && BORDER.length) keepTyping(() => layoutBoard(BORDER)) }).observe($('#bgrid'))
+new ResizeObserver(() => { if (BOARD_MODE && BWORK.length) keepTyping(() => layoutWork(BWORK)) }).observe($('#bwork'))
 
 /**
  * The newest message rises to the top - but not under your hands. While you are
@@ -3898,7 +3904,7 @@ new ResizeObserver(() => { if (BOARD_MODE && BORDER.length) keepTyping(() => lay
  * (Holding it for as long as you were scrolled down left a chat Claude had
  * just answered sitting where it was after a reply sent from further down.)
  */
-let BOARD_SCROLLED_AT = 0, BOARD_OWN_SCROLL = false, BOARD_ORDER = [], BOARD_CATCHUP = 0
+let BOARD_SCROLLED_AT = 0, BOARD_OWN_SCROLL = false, BOARD_ORDER = [], BOARD_WORK_ORDER = [], BOARD_CATCHUP = 0
 $('#view-board').addEventListener('scroll', () => {
   if (BOARD_OWN_SCROLL) { BOARD_OWN_SCROLL = false; return }   // the board putting you back, not you
   BOARD_SCROLLED_AT = Date.now()
@@ -3912,9 +3918,11 @@ function boardCatchUp () {
   BOARD_CATCHUP = setTimeout(() => {
     if (boardReading()) return boardCatchUp()
     const want = BOARD_ORDER.filter(id => BCARDS.has(id))
-    if (want.join() === BORDER.join()) return
+    const wantWork = BOARD_WORK_ORDER.filter(id => BCARDS.has(id))
+    if (want.join() === BORDER.join() && wantWork.join() === BWORK.join()) return
     const view = $('#view-board'), top = view.scrollTop
-    keepTyping(() => layoutBoard(want))
+    if (want.join() !== BORDER.join()) keepTyping(() => layoutBoard(want))
+    if (wantWork.join() !== BWORK.join()) keepTyping(() => layoutWork(wantWork))
     holdScroll(view, top)
   }, 700)
 }
@@ -3970,6 +3978,7 @@ function renderBoard (list) {
     for (const x of BCARDS.values()) x.card.remove()
     BCARDS.clear()
     BORDER = []
+    BWORK = []
     $('#bwork').replaceChildren(); $('#sec-work').hidden = true
     $('#bneedsh').textContent = ''
     grid.replaceChildren(stale.length ? '' : el('div', 'empty', 'No chats are running. Start or resume one and it shows up here.'))
@@ -4002,19 +4011,23 @@ function renderBoard (list) {
   const rank = c => c.waiting ? 0 : isNew(c) ? 1 : 2
   const needs = order.filter(id => sectionOf(data.get(id)) === 'needs')
     .map((id, i) => [id, i]).sort((a, b) => rank(data.get(a[0])) - rank(data.get(b[0])) || a[1] - b[1]).map(x => x[0])
-  const work = $('#bwork'), wantWork = working.map(id => BCARDS.get(id).card)
-  if (work.children.length !== wantWork.length || wantWork.some((c, i) => work.children[i] !== c)) work.replaceChildren(...wantWork)
   $('#sec-work').hidden = !working.length
   $('#bworkh').textContent = working.length ? `Working · ${working.length}` : ''
   $('#sec-needs').hidden = !needs.length
   $('#bneedsh').textContent = needs.length ? `Needs you · ${needs.length}` : ''
   // while you scroll or type, the old order stands; a chat new to the board goes at the end
   BOARD_ORDER = needs
+  BOARD_WORK_ORDER = working
   const reading = boardReading()
   const placed = reading
     ? BORDER.filter(id => needs.includes(id)).concat(needs.filter(id => !BORDER.includes(id)))
     : needs
   layoutBoard(placed)
+  // working cards pack the same way, so a short one leaves no gap under it
+  const placedWork = reading
+    ? BWORK.filter(id => working.includes(id)).concat(working.filter(id => !BWORK.includes(id)))
+    : working
+  layoutWork(placedWork)
   holdScroll(view, keepTop)
   if (reading) boardCatchUp()
   paintSeen()
