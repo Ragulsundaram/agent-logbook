@@ -784,7 +784,7 @@ function fillInPlace (t) {
     if (m.p) { PENDING.set(m.fig.dataset.key, m.p); if (m.asked) SEEN.observe(m.fig) }
   }
   SHOWN_FROM += off
-  ALL_BLOCKS = blocks
+  setQuestionBlocks(blocks)
   LAST_SIGS = sigs.slice(0, off).concat(LAST_SIGS)
   CUR = t
   // the footer, the agents button and any agent card that changed, as for a live write
@@ -1452,6 +1452,123 @@ const FIRST_DRAW = 150   // messages drawn when a chat opens
 const MORE_DRAW = 150    // drawn each time you scroll near the top
 let SHOWN_FROM = 0       // the oldest block on screen
 let ALL_BLOCKS = []
+let QUESTIONS = []
+let QUESTION_JUMP = false
+
+function setQuestionBlocks (blocks) {
+  ALL_BLOCKS = blocks
+  QUESTIONS = questionBlocks(blocks)
+}
+
+/** Only the end of an assistant reply is a navigation stop, not quoted drafts. */
+function questionBlocks (blocks) {
+  const found = []
+  let parts = [], drafting = false
+  const finish = () => {
+    let fence = null
+    let last = -1
+    // Keep each line's source block while filtering: trailing code or quotes
+    // must not move a retained question to a different bubble.
+    const lines = parts.flatMap(({ text, index }) =>
+      [...text.split('\n'), ''].map(line => ({ line, index })))
+    const plain = lines.filter(({ line, index }) => {
+      const mark = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+      if (fence) {
+        if (mark && mark[1][0] === fence[0] && mark[1].length >= fence.length && !mark[2].trim()) fence = null
+        return false
+      }
+      if (mark) { fence = mark[1]; return false }
+      if (/^\s*>/.test(line)) return false
+      if (line.trim()) last = index
+      return true
+    }).map(({ line }) => line).join('\n').trim()
+    const paragraphs = plain.split(/\n\s*\n/).filter(Boolean)
+    const ending = (paragraphs.at(-1) || '').trim()
+    // An email's question belongs to its recipient. Only a separate follow-up
+    // about the assistant's next action is a stop after a drafting request.
+    const introduction = /^[ \t]*here(?:'s| is)\s+(?:(?:your|a|an|the)\s+)?(?:(?:revised|updated|polished|suggested|sample)\s+)?draft(?=[ \t:.!]|$)[^\n?]*$/im.test(plain) ||
+      /^\s*here(?:'s| is)\s+your\s+(?:(?:revised|updated|polished)\s+)?(?:email|message|letter|reply|post|comment)\s*[:.!]?\s*$/im.test(plain)
+    const draft = introduction || /^\s*(?:dear\s|subject:\s)/im.test(plain) ||
+      (drafting && /^(?:hi|hello|hey)\s+[^\n,]+,/im.test(plain))
+    const followUp = /^(?:would you like me to|do you want me to|want me to|should i|shall i|may i|can i|(?:does|would|will|is) (?:this|the draft))\b/i.test(ending)
+    const outsideDraft = paragraphs.length > 1 && followUp && !/^\s*(?:dear|subject:)\s/im.test(ending)
+    const question = plain.replace(/[*_]+$/, '')
+    if ((!draft || outsideDraft) && /\?["')\]]*$/.test(question) && claudeAsks(question)) found.push(last)
+    parts = []
+  }
+  blocks.forEach((block, i) => {
+    if (block.role !== 'assistant') {
+      finish()
+      if (block.role === 'user') {
+        drafting = /\b(?:write|draft|compose|rewrite|translate|polish)\b[\s\S]*\b(?:email|mail|letter|message|reply|post|comment|draft)\b/i.test(block.text || '')
+      }
+      return
+    }
+    if (block.text) parts.push({ text: block.text, index: i })
+  })
+  finish()
+  return found
+}
+
+function refreshQuestions () {
+  const nav = $('.questionnav')
+  if (!nav) return
+  const count = QUESTIONS.length
+  nav.querySelector('span').textContent = `${count} ${count === 1 ? 'question' : 'questions'}`
+  for (const button of nav.querySelectorAll('button')) button.disabled = count === 0
+}
+
+/** Locate the final question itself, even halfway through a tall reply. */
+function questionTop (node) {
+  const bubble = node.querySelector('.bubble')
+  if (!bubble) return node.getBoundingClientRect().top
+  const walker = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT)
+  let text, last = null
+  while ((text = walker.nextNode())) {
+    if (text.textContent.includes('?') && !text.parentElement.closest('pre, blockquote')) last = text
+  }
+  if (!last) return bubble.getBoundingClientRect().top
+  const range = document.createRange()
+  const offset = last.textContent.lastIndexOf('?')
+  range.setStart(last, offset)
+  range.setEnd(last, offset + 1)
+  return range.getBoundingClientRect().top
+}
+
+function stepQuestion (dir) {
+  const body = $('.msgs')
+  if (!body || QUESTION_JUMP) return
+  refreshQuestions()
+  const top = body.getBoundingClientRect().top
+  const candidates = dir < 0 ? [...QUESTIONS].reverse() : QUESTIONS
+  const target = candidates.find(i => {
+    if (i < SHOWN_FROM) return dir < 0
+    const node = body.querySelector(`[data-bi="${i}"]`)
+    if (!node) return false
+    const y = questionTop(node)
+    return dir < 0 ? y < top - 2 : y > top + 2
+  })
+  if (target == null) return
+  const feedback = message => { const count = $('.questionnav span'); if (count) count.textContent = message }
+  QUESTION_JUMP = true
+  if (target < SHOWN_FROM && !drawEarlier(SHOWN_FROM - target)) {
+    QUESTION_JUMP = false
+    feedback('Could not load this question')
+    return
+  }
+  const node = body.querySelector(`[data-bi="${target}"]`)
+  if (!node) { QUESTION_JUMP = false; feedback('Question unavailable'); return }
+  FOLLOW = false
+  const align = () => {
+    AUTO_UNTIL = Date.now() + 300
+    body.scrollTop += questionTop(node) - body.getBoundingClientRect().top
+  }
+  align()
+  requestAnimationFrame(() => {
+    if ($('.msgs') === body && node.isConnected) align()
+    requestAnimationFrame(() => { QUESTION_JUMP = false })
+  })
+}
 
 /** Step back to where a run of same-speaker blocks starts, so it is drawn whole. */
 function runStart (blocks, i) {
@@ -1527,8 +1644,9 @@ function updateLive (t) {
     }
     renderBlocks(t, blocks, Math.max(k, SHOWN_FROM), body)
   }
-  ALL_BLOCKS = blocks
+  setQuestionBlocks(blocks)
   LAST_SIGS = sigs
+  refreshQuestions()
   // the title moves too: a new chat is untitled until Claude names it, and a
   // rename made in the terminal lands here (left alone while you type one)
   const h2 = $('#detail .dtop h2')
@@ -1798,7 +1916,19 @@ function showDetail (t, live) {
     paintFold()
   }
   paintFold()
-  find.append(fi, cnt, foldAll)
+  const questions = el('div', 'questionnav acts')
+  questions.setAttribute('role', 'group')
+  questions.setAttribute('aria-label', 'Question navigation')
+  for (const [label, dir] of [['Previous question', -1], ['Next question', 1]]) {
+    const button = el('button', 'btn', dir < 0 ? '‹ ?' : '? ›')
+    button.setAttribute('aria-label', label)
+    button.onclick = () => stepQuestion(dir)
+    questions.appendChild(button)
+  }
+  const questionCount = el('span', 'cnt')
+  questionCount.setAttribute('aria-live', 'polite')
+  questions.appendChild(questionCount)
+  find.append(fi, cnt, questions, foldAll)
   head.appendChild(find)
   d.appendChild(head)
 
@@ -1822,7 +1952,7 @@ function showDetail (t, live) {
   }
   body.onscroll = () => {
     const y = body.scrollTop
-    if (y < 600 && SHOWN_FROM > 0) { drawEarlier(); return }
+    if (!QUESTION_JUMP && y < 600 && SHOWN_FROM > 0) { drawEarlier(); return }
     const fromEnd = body.scrollHeight - y - body.clientHeight
     jump.hidden = fromEnd < 120
     // our own scrolls, and the header settling, say nothing about what you did
@@ -1850,8 +1980,9 @@ function showDetail (t, live) {
   // a live redraw keeps whatever older messages were already drawn
   const wasFrom = fill ? Math.max(0, blocks.length - (ALL_BLOCKS.length - SHOWN_FROM))
     : live && ALL_BLOCKS.length ? SHOWN_FROM : Infinity
-  ALL_BLOCKS = blocks
+  setQuestionBlocks(blocks)
   SHOWN_FROM = Math.min(wasFrom, runStart(blocks, Math.max(0, blocks.length - FIRST_DRAW)))
+  refreshQuestions()
   renderBlocks(t, blocks, SHOWN_FROM, body)
   LAST_SIGS = sigsOf(blocks, t)
   const stage = el('div', 'stage')     // holds the messages and the floating button
@@ -4621,3 +4752,4 @@ function renderSettings () {
       'a .source.jsonl beside the markdown, with every tool result in full - secrets a tool printed included', false)
   }
 }
+
