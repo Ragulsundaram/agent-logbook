@@ -3879,6 +3879,9 @@ function layoutColumns (grid, ids) {
   // work out where every card goes first, then touch only the columns that
   // differ: re-appending every card on every update moved the page under the
   // reader and threw their scroll back
+  // a card new to the board is not in the grid yet, and a detached card reads
+  // offsetHeight 0 - put it in a column first so its height measures for real
+  for (const card of cards) if (!grid.contains(card)) cols[0].appendChild(card)
   const h = cols.map(() => 0), plan = cols.map(() => [])
   for (const card of cards) {
     const k = h.indexOf(Math.min(...h))
@@ -3901,7 +3904,7 @@ new ResizeObserver(() => { if (BOARD_MODE && BWORK.length) keepTyping(() => layo
  * (Holding it for as long as you were scrolled down left a chat Claude had
  * just answered sitting where it was after a reply sent from further down.)
  */
-let BOARD_SCROLLED_AT = 0, BOARD_OWN_SCROLL = false, BOARD_ORDER = [], BOARD_CATCHUP = 0
+let BOARD_SCROLLED_AT = 0, BOARD_OWN_SCROLL = false, BOARD_ORDER = [], BOARD_WORK_ORDER = [], BOARD_CATCHUP = 0
 $('#view-board').addEventListener('scroll', () => {
   if (BOARD_OWN_SCROLL) { BOARD_OWN_SCROLL = false; return }   // the board putting you back, not you
   BOARD_SCROLLED_AT = Date.now()
@@ -3915,9 +3918,11 @@ function boardCatchUp () {
   BOARD_CATCHUP = setTimeout(() => {
     if (boardReading()) return boardCatchUp()
     const want = BOARD_ORDER.filter(id => BCARDS.has(id))
-    if (want.join() === BORDER.join()) return
+    const wantWork = BOARD_WORK_ORDER.filter(id => BCARDS.has(id))
+    if (want.join() === BORDER.join() && wantWork.join() === BWORK.join()) return
     const view = $('#view-board'), top = view.scrollTop
-    keepTyping(() => layoutBoard(want))
+    if (want.join() !== BORDER.join()) keepTyping(() => layoutBoard(want))
+    if (wantWork.join() !== BWORK.join()) keepTyping(() => layoutWork(wantWork))
     holdScroll(view, top)
   }, 700)
 }
@@ -4012,6 +4017,7 @@ function renderBoard (list) {
   $('#bneedsh').textContent = needs.length ? `Needs you · ${needs.length}` : ''
   // while you scroll or type, the old order stands; a chat new to the board goes at the end
   BOARD_ORDER = needs
+  BOARD_WORK_ORDER = working
   const reading = boardReading()
   const placed = reading
     ? BORDER.filter(id => needs.includes(id)).concat(needs.filter(id => !BORDER.includes(id)))
