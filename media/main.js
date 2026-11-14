@@ -3726,6 +3726,8 @@ function replyBox (c) {
   ta.oninput = () => { DRAFTS.set(c.id, ta.value); fit() }
   ta.onkeydown = e => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit() }
+    // Escape throws the draft away and lets go of the box
+    if (e.key === 'Escape' && !e.isComposing) { DRAFTS.delete(c.id); ta.value = ''; fit(); ta.blur() }
   }
   go.onclick = submit
   box.append(ta, go)
