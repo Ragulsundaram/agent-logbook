@@ -3411,9 +3411,15 @@ document.addEventListener('copy', e => {
       const plain = node.textContent.trim()
       if (!/^https?:\/\//i.test(href)) return [...node.childNodes].map(n => walk(n, label)).join('')
       if (plain === href) return href
-      // brackets and spaces in the address are encoded, so a ")" inside it
-      // cannot end the link early; the address still opens the same page
-      const dest = href.replace(/[()<>\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
+      // Parentheses that pair up stay as they are, as in .../Mercury_(planet):
+      // Markdown reads a balanced pair as part of the address, and some servers
+      // treat %28 and "(" as different pages. An unpaired one, or one a
+      // backslash could escape, would end the link early, so then they are
+      // encoded. Angle brackets and spaces always are.
+      let depth = 0
+      const paired = !href.includes('\\') &&
+        [...href].every(c => (depth += c === '(' ? 1 : c === ')' ? -1 : 0) >= 0) && depth === 0
+      const dest = href.replace(paired ? /[<>\s]/g : /[()<>\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
       return `[${inner}](${dest})`
     }
     if ((tag === 'strong' || tag === 'b') && inner.trim()) return `**${inner}**`
