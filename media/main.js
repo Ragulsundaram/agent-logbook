@@ -3418,7 +3418,10 @@ document.addEventListener('copy', e => {
       // encoded. Angle brackets and spaces always are.
       let depth = 0
       const paired = !href.includes('\\') &&
-        [...href].every(c => (depth += c === '(' ? 1 : c === ')' ? -1 : 0) >= 0) && depth === 0
+        [...href].every(c => {
+          depth += c === '(' ? 1 : c === ')' ? -1 : 0
+          return depth >= 0 && depth <= 1
+        }) && depth === 0
       const dest = href.replace(paired ? /[<>\s]/g : /[()<>\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
       return `[${inner}](${dest})`
     }
