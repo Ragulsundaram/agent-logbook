@@ -16,6 +16,8 @@ file diffs each edit made. Search across every transcript, not just titles.
 extension or Claude Desktop, and reveals the terminal already running it rather
 than starting a second one. Branch forks a session with its full context;
 Branch with a brief starts a fresh one from a written handover instead.
+Claude Desktop names a resumed chat after its folder, because its `claude://resume`
+link takes no title; rename the chat there if you want the Agent Logbook title.
 
 **See the sub-agents.** Background agents keep their own transcripts. Each one
 appears as a card where it was launched, with the brief it was given and what it
