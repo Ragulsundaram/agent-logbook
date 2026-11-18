@@ -35,7 +35,7 @@ test('does not turn unsafe links or quotes into HTML attributes', () => {
   assert.equal(javascriptLink, '<p>[click](javascript:alert(1))</p>')
 
   const brokenHref = md('[x](https://a.com"onmouseover="alert(1))')
-  assert.equal(brokenHref, '<p><a href="https://a.com&quot;onmouseover=&quot;alert(1" title="https://a.com&quot;onmouseover=&quot;alert(1">x</a>)</p>')
+  assert.equal(brokenHref, '<p><a href="https://a.com&quot;onmouseover=&quot;alert(1)" title="https://a.com&quot;onmouseover=&quot;alert(1)">x</a></p>')
 })
 
 test('escapes markup inside fenced code', () => {
@@ -59,4 +59,10 @@ test('keeps single line breaks inside a paragraph', () => {
 test('a line break does not let bold run across lines', () => {
   const html = md('a **b' + nl + 'c** d')
   assert.doesNotMatch(html, /<strong>/)
+})
+
+
+test('keeps a balanced pair of parentheses in Markdown link destinations', () => {
+  const html = md('[Mercury](https://example.com/wiki/Mercury_(planet))')
+  assert.equal(html, '<p><a href="https://example.com/wiki/Mercury_(planet)" title="https://example.com/wiki/Mercury_(planet)">Mercury</a></p>')
 })
