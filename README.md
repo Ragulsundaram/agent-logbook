@@ -30,6 +30,7 @@ background (`claude -p` with streaming input and output), so your login,
 settings, MCP servers and CLAUDE.md apply as usual, and it writes the same
 transcript a terminal would. A chat already running in a terminal or another
 app is never written to twice; it can be continued here as a copy instead.
+Turn **Chat here** off in Settings to keep the logbook read-only, as before.
 
 **See the sub-agents.** Background agents keep their own transcripts. Each one
 appears as a card where it was launched, with the brief it was given and what it

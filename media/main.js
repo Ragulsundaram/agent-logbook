@@ -979,6 +979,7 @@ function openAt (id, q) {
   send({ type: 'session', id })
 }
 let JUMP = ''
+let FIND_OPEN = ''        // the chat whose find box you opened; it stays open across live redraws
 let PERF = null   // timing of an open from search, written to the host's log
 
 function ghead (name, items, open, flip) {
@@ -1775,13 +1776,24 @@ function showDetail (t, live) {
     head.appendChild(acts)
   }
 
-  // ---- in-chat search
+  // ---- in-chat search, out of the way until asked for: the magnifier, or Cmd+F
+  if (FIND_OPEN !== t.id) FIND_OPEN = ''
   const find = el('div', 'find')
+  find.hidden = !(findWas || JUMP || FIND_OPEN)
   const fi = el('input'); fi.type = 'search'; fi.placeholder = 'Find in this chat…'; fi.id = 'find'
   const cnt = el('span', 'cnt', '')
-  // Enter walks the matches, Shift+Enter goes back - no arrow buttons needed
+  // Enter walks the matches, Shift+Enter goes back - no arrow buttons needed;
+  // Escape clears the search and puts the box away
   fi.oninput = () => runFind(fi.value, cnt)
-  fi.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1) } }
+  fi.onkeydown = e => {
+    if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1) }
+    else if (e.key === 'Escape') { e.preventDefault(); closeFind() }
+  }
+  const findBtn = el('button', 'iconbtn findbtn')
+  findBtn.appendChild(icon('find'))
+  findBtn.title = 'Find in this chat (⌘F)'
+  findBtn.setAttribute('aria-label', 'Find in this chat')
+  findBtn.onclick = () => find.hidden ? openFind() : closeFind()
 
   // one switch for every "Ran N commands" block in the chat
   const foldAll = el('button', 'iconbtn foldall')
@@ -1798,7 +1810,9 @@ function showDetail (t, live) {
     paintFold()
   }
   paintFold()
-  find.append(fi, cnt, foldAll)
+  find.append(fi, cnt)
+  top.insertBefore(findBtn, fresh)
+  top.insertBefore(foldAll, fresh)
   head.appendChild(find)
   d.appendChild(head)
 
@@ -2571,6 +2585,32 @@ function startRename (h, t) {
 }
 
 // ---------------------------------------------------------------- find in chat
+function openFind () {
+  const f = $('#detail .find')
+  if (!f || !CUR) return
+  FIND_OPEN = CUR.id
+  f.hidden = false
+  $('#detail .dhead')?.classList.remove('slim')
+  $('#find').focus()
+  $('#find').select()
+}
+
+function closeFind () {
+  const f = $('#detail .find')
+  if (!f) return
+  FIND_OPEN = ''
+  if ($('#find').value) { $('#find').value = ''; runFind('', f.querySelector('.cnt')) }
+  f.hidden = true
+}
+
+// Cmd+F (Ctrl+F) on an open chat opens its find box
+document.addEventListener('keydown', e => {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'f') return
+  if ($('#detail').hidden || !$('#detail .find')) return
+  e.preventDefault()
+  openFind()
+})
+
 function runFind (q, cnt) {
   const body = $('.msgs')
   if (!body) return
@@ -4607,10 +4647,14 @@ function renderSettings () {
   toggle(resume, 'skipPermissions', 'Skip permission prompts',
     'Claude runs every tool without asking first', false)
 
-  const here = section('message', 'Chatting here', 'Chats you talk to from the box under a conversation.')
-  pick(here, 'chatPermissionMode', 'Claude may', 'each chat can change this from its box', [
-    ['default', 'Ask before edits and commands'], ['acceptEdits', 'Edit files without asking'],
-    ['plan', 'Plan first, then ask'], ['auto', 'Decide what is safe']])
+  const here = section('message', 'Chatting here', 'Talk to Claude from the logbook, or keep it read-only the way it was.')
+  toggle(here, 'chatHere', 'Chat here',
+    'a message box under each Claude chat, and "New chat here" on the + button. Off: chats are resumed in a terminal or another app', true)
+  if (CFG.chatHere !== false) {
+    pick(here, 'chatPermissionMode', 'Claude may', 'each chat can change this from its box', [
+      ['default', 'Ask before edits and commands'], ['acceptEdits', 'Edit files without asking'],
+      ['plan', 'Plan first, then ask'], ['auto', 'Decide what is safe']])
+  }
 
   const exp = section('export', 'Exporting', 'Where Export puts a chat, and what it writes there.')
   const dir = CFG.exportDirectory || ''

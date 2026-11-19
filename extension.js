@@ -11,7 +11,7 @@ const cfg = (k, dflt) => vscode.workspace.getConfiguration('claudeHistory').get(
 const SETTINGS = ['topBars', 'sort', 'showLiveFirst', 'pageSize', 'dateFormat',
   'resumeTarget', 'skipPermissions', 'exportSourceCopy', 'chatLayout',
   'limitAlerts', 'resetSoonWeeklyHours', 'resetSoonSessionMinutes', 'unusedPercent', 'boardAllWindows',
-  'finishAlerts', 'chatPermissionMode']
+  'finishAlerts', 'chatHere', 'chatPermissionMode']
 // Shown in the Settings tab but changed only through a folder dialog, never by a
 // value the webview sends: it decides where files get written.
 const SHOWN = ['exportDirectory']
@@ -1366,6 +1366,7 @@ function chatSend (msg, post) {
   const id = String(msg.id || '')
   const fail = error => post({ type: 'chatError', id, error })
   if (!/^[\w-]+$/.test(id)) return
+  if (!cfg('chatHere', true)) return fail('Chatting here is turned off in Settings.')
   const text = String(msg.text || '').replace(/\r/g, '')
   // pasted pictures: a known type and a sane size, nothing else goes through
   const images = (Array.isArray(msg.images) ? msg.images : []).slice(0, 8)
@@ -2340,6 +2341,8 @@ function activate (ctx) {
     // a settings change reaches every open view straight away
     vscode.workspace.onDidChangeConfiguration(e => {
       if (!e.affectsConfiguration('claudeHistory')) return
+      // turned off: the chats running here end, the way closing the editor ends them
+      if (e.affectsConfiguration('claudeHistory.chatHere') && !cfg('chatHere', true)) runner.stopAll()
       { const l = limitsNow(); broadcast({ type: 'limits', data: l }); paintQuotaItem(l); alertLimits(l) }   // thresholds may have moved
       broadcast({
         type: 'env',

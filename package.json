@@ -333,6 +333,11 @@
           "default": false,
           "description": "Pop up a notification when a running chat finishes and is waiting for you. A count always shows in the status bar."
         },
+        "claudeHistory.chatHere": {
+          "type": "boolean",
+          "default": true,
+          "description": "Chat with Claude from the logbook: a message box under each Claude chat, and \"New chat here\" on the + button. Off keeps the logbook read-only, the way it was: chats are resumed in a terminal or another app."
+        },
         "claudeHistory.chatPermissionMode": {
           "type": "string",
           "default": "default",

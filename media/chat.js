@@ -38,6 +38,9 @@ const FALLBACK_MODELS = [
 ]
 const MAX_IMAGE = 5 * 1024 * 1024
 
+/** The Settings switch: off keeps the logbook read-only, the way it was. */
+const chatOn = () => CFG.chatHere !== false
+
 /** The chat the panel is showing, when it is one you can talk to here. */
 function chatTarget () {
   const d = $('#detail')
@@ -72,6 +75,7 @@ function whereRunning (id) {
  */
 function chatMount () {
   if (BOARD_MODE) return
+  if (!chatOn()) { COMPOSER?.root.remove(); return }
   const t = chatTarget()
   if (!t) return
   const d = $('#detail')
@@ -81,7 +85,9 @@ function chatMount () {
     send({ type: 'chatState', id: t.id })
   }
   const focused = document.activeElement === COMPOSER.ta
-  if (d.lastElementChild !== COMPOSER.root) d.appendChild(COMPOSER.root)
+  // right under the conversation; the chat's numbers and changed files sit below it
+  const foot = d.querySelector(':scope > .foot')
+  if (COMPOSER.root.parentNode !== d || COMPOSER.root.nextSibling !== foot) d.insertBefore(COMPOSER.root, foot)
   if (focused && document.activeElement !== COMPOSER.ta) COMPOSER.ta.focus()
   if (t.pending) pendingIntro(t.id)
   placeLive()
@@ -186,7 +192,11 @@ function buildComposer (id) {
   const go = el('button', 'cgo')
   bar.append(model, mode, effort, status, go)
   const live = el('div', 'chatlive')
-  root.append(asks, block, imgs, ta, slash, bar)
+  // the text and its pickers share one box, the way a chat app's input reads
+  const box = el('div', 'cbox')
+  box.append(imgs, ta, bar)
+  box.onclick = e => { if (e.target === box || e.target === bar) ta.focus() }
+  root.append(asks, block, box, slash)
   const c = { id, root, asks, imgs, block, ta, slash, bar, model, mode, effort, status, go, live, slashAt: 0 }
 
   const fit = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 220) + 'px' }
@@ -300,8 +310,7 @@ function paintComposer () {
   const blocked = where === 'elsewhere'
   c.block.replaceChildren()
   c.block.hidden = !blocked
-  c.ta.hidden = blocked
-  c.bar.hidden = blocked
+  c.ta.parentNode.hidden = blocked
   if (blocked) {
     c.block.appendChild(el('span', '', 'This chat is running in a terminal or another app. Reply there, or carry it on here as a copy.'))
     const b = el('button', 'btn', 'Continue here as a copy')
@@ -359,11 +368,11 @@ function paintPickers (c) {
     }
     sel.value = list.some(x => x[0] === value) ? value : list[0][0]
   }
-  opts(c.model, [['', 'Default model'], ...models.map(m => [m.value, m.label, m.note])], p.model)
+  opts(c.model, [['', 'Model'], ...models.map(m => [m.value, m.label, m.note])], p.model)
   opts(c.mode, MODES, p.mode)
   const chosen = models.find(m => m.value === p.model)
   const levels = chosen?.efforts?.length ? chosen.efforts : EFFORTS
-  opts(c.effort, [['', 'Default effort'], ...levels.map(l => [l, l[0].toUpperCase() + l.slice(1) + ' effort'])], p.effort)
+  opts(c.effort, [['', 'Effort'], ...levels.map(l => [l, l[0].toUpperCase() + l.slice(1) + ' effort'])], p.effort)
 }
 
 // ------------------------------------------------------------ slash commands
@@ -621,6 +630,7 @@ function planCard (c, a) {
 
 /** The + button: a chat run here, or the terminal it always opened. */
 function newChatMenu (anchor) {
+  if (!chatOn()) { send({ type: 'newChat', where: 'terminal' }); return }
   document.querySelectorAll('body > .menu.newmenu').forEach(m => m.remove())
   const menu = el('div', 'menu newmenu')
   const item = (ico, label, hint, where) => {
@@ -670,6 +680,8 @@ if (!BOARD_MODE) {
       if (m.here) requestAnimationFrame(() => COMPOSER?.ta.focus())
       return
     }
+    // the Settings switch may have flipped
+    if (m.type === 'env' && m.cfg) { chatMount(); if (!chatOn()) return }
     if (m.type === 'sessions' || m.type === 'env') { if (COMPOSER && chatTarget()?.id === COMPOSER.id) paintComposer(); return }
     if (!m.type.startsWith('chat') || !m.id) return
     const id = m.id

@@ -1383,6 +1383,11 @@ body[data-mode="sidebar"] #rescan { display: none !important }
 /* new chat from inside a chat, at the end of its title row */
 .newinchat { display: flex; align-items: center; justify-content: center; padding: 4px 4px }
 .newinchat svg { width: 15px; height: 15px }
+/* find and expand-all sit in the title row, so they stay reachable when the header folds away */
+.findbtn { display: flex; align-items: center; justify-content: center; padding: 4px }
+.findbtn svg { width: 15px; height: 15px }
+.dtop .foldall { margin-left: 0; width: 24px; height: 24px }
+.dtop .foldall svg { width: 16px; height: 16px }
 /* a new chat waiting for its first message */
 .pendingchat { display: flex; align-items: center; gap: 8px; padding: 24px 16px; font-size: 13px;
   color: var(--vscode-descriptionForeground) }
@@ -1478,20 +1483,23 @@ body[data-mode="sidebar"] #rescan { display: none !important }
 /* ---- chatting from the logbook (chat.js) */
 .composer { flex: none; position: relative; display: flex; flex-direction: column; gap: 6px;
   padding: 8px 10px 10px; border-top: 1px solid var(--vscode-panel-border) }
-.cinput { width: 100%; box-sizing: border-box; resize: none; overflow-y: auto; max-height: 220px; padding: 7px 9px;
-  font: inherit; font-size: 13px; line-height: 1.45; border-radius: 8px; color: var(--vscode-input-foreground);
+.cbox { display: flex; flex-direction: column; gap: 2px; padding: 6px 6px 5px 8px; border-radius: 10px; cursor: text;
   background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)) }
-.cinput:focus { outline: none; border-color: var(--vscode-focusBorder) }
-.cbar { display: flex; align-items: center; gap: 4px; flex-wrap: wrap }
-.cpick { font: inherit; font-size: 11px; max-width: 130px; padding: 2px 4px; border-radius: 6px; cursor: pointer;
+.cbox:focus-within { border-color: var(--vscode-focusBorder) }
+.cinput { width: 100%; box-sizing: border-box; resize: none; overflow-y: auto; max-height: 220px; padding: 2px 2px 4px;
+  font: inherit; font-size: 13px; line-height: 1.45; color: var(--vscode-input-foreground);
+  background: none; border: 0; outline: none }
+.cbar { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; margin-left: -4px }
+/* sized to the choice showing, not to the longest one in the list */
+.cpick { font: inherit; font-size: 11px; field-sizing: content; max-width: 140px; padding: 1px 4px; border-radius: 5px; cursor: pointer;
   color: var(--vscode-descriptionForeground); background: none; border: 1px solid transparent }
 .cpick:hover, .cpick:focus { border-color: var(--vscode-panel-border); color: var(--vscode-foreground); outline: none }
 .cpick option { color: var(--vscode-foreground); background: var(--vscode-dropdown-background, var(--vscode-input-background)) }
 .cstatus { margin-left: auto; font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap }
-.cgo { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0;
-  border: 0; border-radius: 8px; cursor: pointer; background: var(--clay); color: #fff }
+.cgo { flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: 6px; cursor: pointer; background: var(--clay); color: #fff }
 .cstatus:empty + .cgo { margin-left: auto }
-.cgo svg { width: 13px; height: 13px; fill: currentColor }
+.cgo svg { width: 11px; height: 11px; fill: currentColor }
 .cgo:disabled { opacity: .45; cursor: default }
 .cgo.stop { background: var(--vscode-button-secondaryBackground, rgba(127,127,127,.25)); color: var(--vscode-foreground) }
 .cstopico { width: 10px; height: 10px; border-radius: 2px; background: currentColor }
