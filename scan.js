@@ -1278,9 +1278,16 @@ function ensureFull (key) {
 }
 
 /** `part`: the request came from the partial first copy, whose turns are numbered from its own start. */
-const turnsFor = (id, part) => part && partCopy?.id === id ? partCopy.turns : (ensureFull(id), full?.turns)
+function turnsFor (id, part, ti) {
+  if (part && partCopy?.id === id) return partCopy.turns
+  ensureFull(id)
+  // a running chat is followed by another thread, so this one's copy can be
+  // older than the message asked about: read on to the end and look again
+  if (!full?.turns?.[ti]) { full = null; ensureFull(id) }
+  return full?.turns
+}
 function imageAt (id, ti, ii, part) {
-  return turnsFor(id, part)?.[ti]?.images?.[ii]?.src || null
+  return turnsFor(id, part, ti)?.[ti]?.images?.[ii]?.src || null
 }
 
 const lines = s => (s ? String(s).split('\n').length : 0)
@@ -1799,7 +1806,7 @@ function toolDetail (name, input = {}) {
 
 /** The before/after text of one recorded edit, for the diff view. */
 function editAt (id, ti, ei, part) {
-  return turnsFor(id, part)?.[ti]?.edits?.[ei] || null
+  return turnsFor(id, part, ti)?.[ti]?.edits?.[ei] || null
 }
 
 // ------------------------------------------------------------------ sub-agents
