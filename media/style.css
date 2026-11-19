@@ -1576,3 +1576,16 @@ body[data-mode="sidebar"] #rescan { display: none !important }
 .chatnote span { flex: 1 }
 .chatnote.err { color: var(--vscode-errorForeground); background: rgba(229,83,75,.1) }
 .chatnote .iconbtn { flex: none }
+
+/* Under the message box the footer gives the conversation its room back: the
+   numbers and "files changed" share one short row instead of taking three. */
+.foot:has(> .composer) { display: flex; flex-wrap: wrap; align-items: center }
+.foot:has(> .composer) > .composer { flex: 1 0 100%; box-sizing: border-box; min-width: 0 }
+.foot:has(> .composer) > .fmeta { flex: 1 1 auto; min-width: 0; gap: 8px; padding: 0 8px 6px 12px }
+.foot:has(> .composer) .spark2 { width: 48px; height: 14px }
+.foot:has(> .composer) .fnums { font-size: 11px; gap: 2px 12px }
+.foot:has(> .composer) .fglabel { font-size: 10px }
+.foot:has(> .composer) > .fchanged { flex: none; gap: 6px; padding: 0 12px 6px 4px; border-top: 0;
+  font-size: 11px; background: none }
+.foot:has(> .composer) > .fchanged:hover { color: var(--vscode-foreground); text-decoration: underline }
+.foot:has(> .composer) > .ftree { flex: 1 0 100% }
