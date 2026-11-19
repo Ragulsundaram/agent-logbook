@@ -342,17 +342,23 @@ function setEffort (id, effort) {
   else stop(id)
 }
 
-function stop (id) {
+function stop (id, now) {
   const r = RUNS.get(id)
   if (!r) return
   r.stopping = true
+  // the editor is closing or reloading: a timer would not outlive it, and a
+  // Claude left behind carries on working where nobody can answer it
+  if (now) { try { r.proc.kill() } catch {} return }
   try { r.proc.stdin.end() } catch {}
   // a Claude that does not leave when its input closes is told to
   setTimeout(() => { try { r.proc.kill() } catch {} }, 3000).unref?.()
 }
 
-function stopAll () {
-  for (const id of [...RUNS.keys()]) stop(id)
+function stopAll (now) {
+  for (const id of [...RUNS.keys()]) stop(id, now)
 }
 
-module.exports = { init, has, endedRecently, liveMap, state, send, answer, interrupt, setModel, setMode, setEffort, stop, stopAll }
+/** A Claude for this chat was just ended outside the runner. */
+const markEnded = id => ENDED.set(id, Date.now())
+
+module.exports = { init, has, endedRecently, liveMap, state, send, answer, interrupt, setModel, setMode, setEffort, stop, stopAll, markEnded }

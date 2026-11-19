@@ -1550,7 +1550,8 @@ function updateLive (t) {
     const tree = oldFoot.querySelector('.ftree')
     const treeOpen = !!(tree && !tree.hidden)
     fresh.querySelector('.runstrip')?.remove()
-    for (const n of [...oldFoot.children]) if (n !== runner) n.remove()
+    // the message box (chat.js) lives at the top of the footer and stays put
+    for (const n of [...oldFoot.children]) if (n !== runner && !n.classList.contains('composer')) n.remove()
     for (const n of [...fresh.children]) oldFoot.appendChild(n)
     if (treeOpen) {
       const t2 = oldFoot.querySelector('.ftree')

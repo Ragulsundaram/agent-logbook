@@ -281,6 +281,24 @@ async function pollResources (force) {
   } finally { resPolling = false }
 }
 
+/**
+ * The pid of a Claude the logbook started for this chat and then lost, when
+ * the window reloaded or crashed: it was fed through a pipe (stream-json input)
+ * and its parent is gone, so nothing can type to it or answer its questions.
+ * Anything else running the chat - a terminal, the Claude extension - is left alone.
+ */
+function orphanPid (id) {
+  if (!/^[\w-]+$/.test(String(id || '')) || runner.has(id)) return 0
+  const pid = scan.livePid(id)
+  if (!pid) return 0
+  try {
+    const out = require('node:child_process')
+      .execFileSync('ps', ['-o', 'ppid=,args=', '-p', String(pid)], { encoding: 'utf8', timeout: 3000 }).trim()
+    const m = /^(\d+)\s+(.*)$/s.exec(out)
+    return m && m[1] === '1' && /--input-format[ =]stream-json/.test(m[2]) && m[2].includes(id) ? pid : 0
+  } catch { return 0 }
+}
+
 /** Every process at or under a pid, deepest first, so children go before parents. */
 function processTree (pid) {
   const parent = new Map()
@@ -1775,8 +1793,21 @@ function wire (ctx, w, onDispose, mode) {
             break
           }
           case 'chatState':
-            post({ type: 'chatState', id: msg.id, state: runner.state(msg.id) })
+            post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), orphan: !!orphanPid(msg.id) } })
             break
+          case 'chatTakeover': {
+            const pid = orphanPid(msg.id)
+            if (pid) {
+              const tree = processTree(pid)
+              for (const p of tree) { try { process.kill(p, 'SIGTERM') } catch {} }
+              await new Promise(r => setTimeout(r, 2000))
+              for (const p of tree) { try { process.kill(p, 0); process.kill(p, 'SIGKILL') } catch {} }
+              runner.markEnded(msg.id)
+              liveSig = ''; pollLive()
+            }
+            post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), endedAt: Date.now() } })
+            break
+          }
           case 'chatSend':
             chatSend(msg, post)
             break
@@ -2396,6 +2427,6 @@ function activate (ctx) {
   if (cfg('openOnStartup', false)) vscode.commands.executeCommand('claudeHistory.view.focus')
 }
 
-function deactivate () { clearInterval(liveTimer); runner.stopAll() }
+function deactivate () { clearInterval(liveTimer); runner.stopAll(true) }
 
 module.exports = { activate, deactivate }

@@ -85,9 +85,13 @@ function chatMount () {
     send({ type: 'chatState', id: t.id })
   }
   const focused = document.activeElement === COMPOSER.ta
-  // right under the conversation; the chat's numbers and changed files sit below it
+  // right under the conversation, at the top of the footer: the chat's numbers
+  // and changed files sit below it, and the "Claude is working" strip, which
+  // floats just above the footer, floats above the box rather than over it
   const foot = d.querySelector(':scope > .foot')
-  if (COMPOSER.root.parentNode !== d || COMPOSER.root.nextSibling !== foot) d.insertBefore(COMPOSER.root, foot)
+  const host = foot || d
+  const before = foot ? [...foot.children].find(n => !n.classList.contains('runstrip') && n !== COMPOSER.root) || null : null
+  if (COMPOSER.root.parentNode !== host || COMPOSER.root.nextSibling !== before) host.insertBefore(COMPOSER.root, before)
   if (focused && document.activeElement !== COMPOSER.ta) COMPOSER.ta.focus()
   if (t.pending) pendingIntro(t.id)
   placeLive()
@@ -311,7 +315,14 @@ function paintComposer () {
   c.block.replaceChildren()
   c.block.hidden = !blocked
   c.ta.parentNode.hidden = blocked
-  if (blocked) {
+  if (blocked && CHAT.state.get(id)?.orphan) {
+    // started here before the window reloaded: nothing can talk to it any more
+    c.block.appendChild(el('span', '', 'This chat was still running when the window reloaded, and can no longer hear you. Stop it to carry on here.'))
+    const b = el('button', 'btn', 'Stop it and continue here')
+    b.title = 'Ends that Claude; anything it already wrote stays in the chat'
+    b.onclick = () => { b.disabled = true; b.textContent = 'Stopping…'; send({ type: 'chatTakeover', id }) }
+    c.block.appendChild(b)
+  } else if (blocked) {
     c.block.appendChild(el('span', '', 'This chat is running in a terminal or another app. Reply there, or carry it on here as a copy.'))
     const b = el('button', 'btn', 'Continue here as a copy')
     b.title = 'A new chat with this one\'s full context, run from the logbook'
