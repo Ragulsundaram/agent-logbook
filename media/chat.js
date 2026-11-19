@@ -54,7 +54,15 @@ function chatTarget () {
 }
 
 const picksFor = id => {
-  if (!CHAT.picks.has(id)) CHAT.picks.set(id, { model: '', mode: CFG.chatPermissionMode || 'default', effort: '' })
+  if (!CHAT.picks.has(id)) {
+    // start on the model the chat was last using: left on "default", carrying
+    // on here could quietly switch a chat you had moved to another model
+    let was = CUR?.id === id ? String(CUR.info?.model || '') : ''
+    // the transcript names the model without its [1m]; a chat on the big
+    // window has to keep it, or carrying on here would shrink its context
+    if (was && CUR.info?.window >= 1e6 && !/\[1m\]$/i.test(was)) was += '[1m]'
+    CHAT.picks.set(id, { model: /^[\w.[\]-]{1,60}$/.test(was) ? was : '', mode: CFG.chatPermissionMode || 'default', effort: '' })
+  }
   return CHAT.picks.get(id)
 }
 
@@ -379,7 +387,9 @@ function paintPickers (c) {
     }
     sel.value = list.some(x => x[0] === value) ? value : list[0][0]
   }
-  opts(c.model, [['', 'Model'], ...models.map(m => [m.value, m.label, m.note])], p.model)
+  const list = models.map(m => [m.value, m.label, m.note])
+  if (p.model && !list.some(x => x[0] === p.model)) list.unshift([p.model, modelName(p.model), 'The model this chat was using'])
+  opts(c.model, [['', 'Default model'], ...list], p.model)
   opts(c.mode, MODES, p.mode)
   const chosen = models.find(m => m.value === p.model)
   const levels = chosen?.efforts?.length ? chosen.efforts : EFFORTS

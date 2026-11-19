@@ -1482,27 +1482,31 @@ body[data-mode="sidebar"] #rescan { display: none !important }
 
 /* ---- chatting from the logbook (chat.js) */
 .composer { flex: none; position: relative; display: flex; flex-direction: column; gap: 6px;
-  padding: 8px 10px 10px; border-top: 1px solid var(--vscode-panel-border) }
-.cbox { display: flex; flex-direction: column; gap: 2px; padding: 6px 6px 5px 8px; border-radius: 10px; cursor: text;
+  padding: 6px 10px 6px }
+.cbox { display: flex; flex-direction: column; gap: 0; padding: 3px 4px 3px 8px; border-radius: 8px; cursor: text;
   background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)) }
 .cbox:focus-within { border-color: var(--vscode-focusBorder) }
-.cinput { width: 100%; box-sizing: border-box; resize: none; overflow-y: auto; max-height: 220px; padding: 2px 2px 4px;
-  font: inherit; font-size: 13px; line-height: 1.45; color: var(--vscode-input-foreground);
+.cinput { width: 100%; box-sizing: border-box; resize: none; overflow-y: auto; max-height: 220px; padding: 3px 0 1px;
+  font: inherit; font-size: 13px; line-height: 1.4; color: var(--vscode-input-foreground);
   background: none; border: 0; outline: none }
 .cbar { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; margin-left: -4px }
 /* sized to the choice showing, not to the longest one in the list */
-.cpick { font: inherit; font-size: 11px; field-sizing: content; max-width: 140px; padding: 1px 4px; border-radius: 5px; cursor: pointer;
-  color: var(--vscode-descriptionForeground); background: none; border: 1px solid transparent }
+/* no platform arrow, which was taller than the text: a small caret drawn in */
+.cpick { font: inherit; font-size: 11px; line-height: 16px; field-sizing: content; max-width: 140px; height: 18px;
+  padding: 0 13px 0 4px; border-radius: 4px; cursor: pointer; appearance: none; -webkit-appearance: none;
+  color: var(--vscode-descriptionForeground); border: 1px solid transparent;
+  background: no-repeat right 3px center / 7px 4px
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 7 4'%3E%3Cpath d='M0 0l3.5 4L7 0z' fill='%23888'/%3E%3C/svg%3E") }
 .cpick:hover, .cpick:focus { border-color: var(--vscode-panel-border); color: var(--vscode-foreground); outline: none }
 .cpick option { color: var(--vscode-foreground); background: var(--vscode-dropdown-background, var(--vscode-input-background)) }
 .cstatus { margin-left: auto; font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap }
-.cgo { flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0;
-  border: 0; border-radius: 6px; cursor: pointer; background: var(--clay); color: #fff }
+.cgo { flex: none; display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0;
+  border: 0; border-radius: 5px; cursor: pointer; background: var(--clay); color: #fff }
 .cstatus:empty + .cgo { margin-left: auto }
-.cgo svg { width: 11px; height: 11px; fill: currentColor }
+.cgo svg { width: 9px; height: 9px; fill: currentColor }
 .cgo:disabled { opacity: .45; cursor: default }
 .cgo.stop { background: var(--vscode-button-secondaryBackground, rgba(127,127,127,.25)); color: var(--vscode-foreground) }
-.cstopico { width: 10px; height: 10px; border-radius: 2px; background: currentColor }
+.cstopico { width: 8px; height: 8px; border-radius: 2px; background: currentColor }
 .cblock { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px;
   color: var(--vscode-descriptionForeground) }
 .cblock span { flex: 1 1 200px }

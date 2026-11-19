@@ -74,7 +74,7 @@ function watchTranscripts (ctx) {
     const fresh = new Map()
     for (const [post, id] of open) {
       if (!ids.has(id)) continue
-      if (!fresh.has(id)) fresh.set(id, chatCall('transcript', id))
+      if (!fresh.has(id)) fresh.set(id, liveCall('transcript', id))
       const data = await fresh.get(id)
       if (open.get(post) !== id) continue        // moved to another chat meanwhile
       post({ type: 'session', data, live: true })
@@ -170,21 +170,32 @@ function searcher () {
  * sent, so two chats clicked in turn arrive in turn. If the worker is gone, the
  * read happens here as it used to.
  */
-let CHATW = null, chatSeq = 0
+// Two lanes. The live refresh of a running chat re-reads the whole of it about
+// once a second, and a long chat takes most of that second to read: in one lane,
+// opening any other chat waited behind those reads. It gets a lane of its own.
+const CHATW = { main: null, live: null }
+let chatSeq = 0
 const chatWaiting = new Map()       // id -> { fn, args, resolve }
 const chatHere = (fn, args) => { try { return scan[fn](...args) } catch { return null } }
 
-function chatWorker () {
-  if (CHATW) return CHATW
+function chatWorker (lane) {
+  if (CHATW[lane]) return CHATW[lane]
   const { Worker } = require('node:worker_threads')
   const w = new Worker(path.join(__dirname, 'chat-worker.js'))
+  const mine = new Set()            // calls sent to this worker, answered here if it dies
+  w.mine = mine
   const fail = () => {
-    if (CHATW === w) CHATW = null
-    for (const c of chatWaiting.values()) c.resolve(chatHere(c.fn, c.args))
-    chatWaiting.clear()
+    if (CHATW[lane] === w) CHATW[lane] = null
+    for (const id of mine) {
+      const c = chatWaiting.get(id)
+      chatWaiting.delete(id)
+      if (c) c.resolve(chatHere(c.fn, c.args))
+    }
+    mine.clear()
   }
   w.on('message', m => {
     const c = chatWaiting.get(m.id)
+    mine.delete(m.id)
     if (!c) return
     chatWaiting.delete(m.id)
     c.resolve(m.error ? chatHere(c.fn, c.args) : m.data)
@@ -192,19 +203,22 @@ function chatWorker () {
   w.on('error', fail)
   w.on('exit', fail)
   w.unref()
-  CHATW = w
+  CHATW[lane] = w
   return w
 }
 
-function chatCall (fn, ...args) {
+function callOn (lane, fn, args) {
   return new Promise(resolve => {
     let w
-    try { w = chatWorker() } catch { return resolve(chatHere(fn, args)) }
+    try { w = chatWorker(lane) } catch { return resolve(chatHere(fn, args)) }
     const id = ++chatSeq
     chatWaiting.set(id, { fn, args, resolve })
+    w.mine.add(id)
     w.postMessage({ id, fn, args })
   })
 }
+const chatCall = (fn, ...args) => callOn('main', fn, args)
+const liveCall = (fn, ...args) => callOn('live', fn, args)
 
 function runSearch (q, post, limit) {
   // the webview asks for more chats 60 at a time; it is still a message, so bound it
