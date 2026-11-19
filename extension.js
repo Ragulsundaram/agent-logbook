@@ -3,6 +3,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const scan = require('./scan')
 const mcp = require('./mcp-setup')
+const runner = require('./chat-runner')
 
 const cfg = (k, dflt) => vscode.workspace.getConfiguration('claudeHistory').get(k, dflt)
 
@@ -10,7 +11,7 @@ const cfg = (k, dflt) => vscode.workspace.getConfiguration('claudeHistory').get(
 const SETTINGS = ['topBars', 'sort', 'showLiveFirst', 'pageSize', 'dateFormat',
   'resumeTarget', 'skipPermissions', 'exportSourceCopy', 'chatLayout',
   'limitAlerts', 'resetSoonWeeklyHours', 'resetSoonSessionMinutes', 'unusedPercent', 'boardAllWindows',
-  'finishAlerts']
+  'finishAlerts', 'chatPermissionMode']
 // Shown in the Settings tab but changed only through a folder dialog, never by a
 // value the webview sends: it decides where files get written.
 const SHOWN = ['exportDirectory']
@@ -125,6 +126,9 @@ function watchTranscripts (ctx) {
     },
     // Refresh redraws the chats on screen too, not only the list behind them
     refreshOpen: () => { for (const id of open.values()) dirty.add(id); clearTimeout(timer); flush().catch(() => {}) },
+    // a chat run from the logbook says when it has written, rather than
+    // waiting for the folder watcher to notice
+    poke: id => { dirty.add(id); bump() },
   }
 }
 /**
@@ -246,6 +250,7 @@ const broadcast = m => { for (const post of VIEWS) post(m) }
 
 function refreshLive (post) {
   try { live = scan.liveSessions() } catch { live = {} }
+  Object.assign(live, runner.liveMap())
   if (post) post({ type: 'sessions', data: scan.sessionList(live) })
 }
 
@@ -390,6 +395,8 @@ async function pollLive () {
     if (!next) return
     // Codex chats join the same map, so the list dots and the board cover both
     try { Object.assign(next, await scan.codexLiveAsync()) } catch {}
+    // chats talked to from the logbook: their state is known here, exactly
+    Object.assign(next, runner.liveMap())
     live = next
     syncActiveTabName().catch(() => {})          // a new chat may have been titled since
     // Compare what the panel actually shows, not just what claude reports. A chat
@@ -1064,8 +1071,10 @@ const LAUNCHED = new Map()   // terminal -> the session id we started it with
 function followNewChat (sid, post, term) {
   const projects = path.join(require('node:os').homedir(), '.claude', 'projects')
   const started = Date.now()
+  // a chat started in the logbook has no terminal: it ends when Claude does
+  const ended = term ? () => term.exitStatus !== undefined : () => false
   const tick = setInterval(async () => {
-    if (term.exitStatus !== undefined || Date.now() - started > 3600e3) {
+    if (ended() || Date.now() - started > 3600e3) {
       clearInterval(tick); post({ type: 'pendingGone', id: sid }); return
     }
     let found = false
@@ -1342,6 +1351,56 @@ async function resumeInClaudeExtension (s) {
   await vscode.env.openExternal(uri)
 }
 
+// ------------------------------------------------------------------ chat here
+const CHAT_MODES = ['default', 'acceptEdits', 'plan', 'auto']
+const CHAT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+// new chats waiting for their first message: where to start them, and what from
+const NEW_CHATS = new Map()
+
+/**
+ * A message typed in the logbook. Claude starts on the chat if it is not
+ * running here yet - never on one running somewhere else, as two Claudes
+ * writing the same transcript would tangle it.
+ */
+function chatSend (msg, post) {
+  const id = String(msg.id || '')
+  const fail = error => post({ type: 'chatError', id, error })
+  if (!/^[\w-]+$/.test(id)) return
+  const text = String(msg.text || '').replace(/\r/g, '')
+  // pasted pictures: a known type and a sane size, nothing else goes through
+  const images = (Array.isArray(msg.images) ? msg.images : []).slice(0, 8)
+    .filter(im => im && /^image\/(png|jpeg|gif|webp)$/.test(im.mediaType) &&
+      typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < 7e6)
+  if (!text.trim() && !images.length) return
+  const pick = (v, ok) => ok(v) ? v : ''
+  const opts = {
+    text, images,
+    model: pick(String(msg.model || ''), v => /^[\w.[\]-]{0,60}$/.test(v)),
+    mode: pick(msg.mode, v => CHAT_MODES.includes(v)) || pick(cfg('chatPermissionMode', 'default'), v => CHAT_MODES.includes(v)),
+    effort: pick(msg.effort, v => CHAT_EFFORTS.includes(v)),
+  }
+  if (!runner.has(id)) {
+    const fresh = NEW_CHATS.get(id)
+    if (fresh) {
+      opts.cwd = fresh.cwd
+      if (fresh.forkOf) opts.forkOf = fresh.forkOf
+      else opts.fresh = true
+    } else {
+      const s = scan.index().find(x => x.id === id)
+      if (!s) return fail('This chat was not found on disk.')
+      if (s.provider === 'codex') return fail('Codex chats can only be continued in a terminal.')
+      if (live[id] && !runner.endedRecently(id)) return fail('This chat is running somewhere else. Reply there, or continue it here as a copy.')
+      opts.cwd = s.cwd
+    }
+    if (!opts.cwd || !fs.existsSync(opts.cwd)) return fail(`This chat's folder no longer exists${opts.cwd ? `: ${opts.cwd}` : '.'}`)
+  }
+  try {
+    runner.send(id, opts)
+    NEW_CHATS.delete(id)
+  } catch (e) { return fail(e.message) }
+  seenChat(id)
+}
+
 /** Wire up a webview - used by both the sidebar view and the editor tab. */
 function wire (ctx, w, onDispose, mode) {
   {
@@ -1358,7 +1417,8 @@ function wire (ctx, w, onDispose, mode) {
 <link rel="stylesheet" href="${uri('style.css')}"></head>
 <body${mode ? ` data-mode="${mode}"` : ''}>${fs.readFileSync(path.join(ctx.extensionPath, 'media', 'body.html'), 'utf8')}
 <script nonce="${nonce}" src="${uri('md.js')}"></script>
-<script nonce="${nonce}" src="${uri('main.js')}"></script></body></html>`
+<script nonce="${nonce}" src="${uri('main.js')}"></script>
+<script nonce="${nonce}" src="${uri('chat.js')}"></script></body></html>`
 
     const post = m => w.postMessage(m)
 
@@ -1480,6 +1540,12 @@ function wire (ctx, w, onDispose, mode) {
             seenChat(msg.id)
             // typed into the terminal running the chat, only one known to be it
             const text = String(msg.text || '').replace(/\r/g, '').trim()
+            // a chat running in the logbook takes the reply straight in
+            if (text && runner.has(msg.id)) {
+              runner.send(msg.id, { text })
+              post({ type: 'boardReplied', id: msg.id, ok: true })
+              break
+            }
             const term = text ? await terminalForSession(msg.id, false, true) : null
             if (!term) {
               vscode.window.showWarningMessage('This chat is not running in a terminal in this window, so the reply could not be sent. Use the terminal button to open it.')
@@ -1707,11 +1773,56 @@ function wire (ctx, w, onDispose, mode) {
                     : `$(check) ${msg.create ? 'Group created' : 'Moved to'} ${name || msg.assign}`, 3000)
             break
           }
+          case 'chatState':
+            post({ type: 'chatState', id: msg.id, state: runner.state(msg.id) })
+            break
+          case 'chatSend':
+            chatSend(msg, post)
+            break
+          case 'chatAnswer':
+            runner.answer(msg.id, msg.requestId, {
+              allow: !!msg.allow, always: !!msg.always,
+              answers: msg.answers && typeof msg.answers === 'object' ? Object.fromEntries(Object.entries(msg.answers)
+                .map(([k, v]) => [String(k), String(v)])) : null,
+              message: msg.message ? String(msg.message) : '',
+            })
+            break
+          case 'chatStop':
+            runner.interrupt(msg.id)
+            break
+          case 'chatModel':
+            if (/^[\w.[\]-]{0,60}$/.test(String(msg.value || ''))) runner.setModel(msg.id, String(msg.value || ''))
+            break
+          case 'chatMode':
+            if (CHAT_MODES.includes(msg.value)) runner.setMode(msg.id, msg.value)
+            break
+          case 'chatEffort':
+            if (!msg.value || CHAT_EFFORTS.includes(msg.value)) runner.setEffort(msg.id, msg.value || '')
+            break
+          case 'chatFork': {
+            // a chat busy in a terminal goes on here as a copy, under a new id
+            const s = scan.index().find(x => x.id === msg.id)
+            if (!s || s.provider === 'codex') return
+            const sid = require('node:crypto').randomUUID()
+            NEW_CHATS.set(sid, { cwd: s.cwd, forkOf: s.id })
+            post({ type: 'pendingChat', id: sid, here: true, copyOf: s.title || '', folder: scan.projectName(s.cwd) })
+            followNewChat(sid, post, null)
+            break
+          }
           case 'resume': {
             seenChat(msg.id)
             const s = scan.index().find(x => x.id === msg.id)
             if (!s) return
             const target = resolveTarget(s, msg.target)
+            // two Claudes writing one chat would tangle it, so the logbook's lets go first
+            if (runner.has(s.id)) {
+              const pick = await vscode.window.showWarningMessage(
+                'This chat is running in the logbook. Stop it there and open it elsewhere?', 'Stop and open', 'Cancel')
+              if (pick !== 'Stop and open') return
+              runner.stop(s.id)
+              await new Promise(r => setTimeout(r, 1200))
+              delete live[s.id]
+            }
             // running in one of this window's terminals is not a conflict - that
             // terminal is the session, and resumeInTerminal just reveals it
             const attached = target === 'terminal' ? await terminalForSession(s.id, false) : null
@@ -1798,6 +1909,14 @@ function wire (ctx, w, onDispose, mode) {
           }
           case 'newChat': {
             const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+            if (msg.where === 'logbook') {
+              // no Claude yet: it starts with the first message, under this id
+              const sid = require('node:crypto').randomUUID()
+              NEW_CHATS.set(sid, { cwd: cwd || require('node:os').homedir() })
+              post({ type: 'pendingChat', id: sid, here: true, folder: scan.projectName(cwd || '') })
+              followNewChat(sid, post, null)
+              break
+            }
             const bin = claudeBin()
             // the new chat's id is chosen here, so Resume can find its terminal
             // later from the launch itself rather than by asking claude
@@ -2206,6 +2325,13 @@ function activate (ctx) {
     vscode.window.onDidOpenTerminal(() => soon(1200, 2500)))
   setImmediate(claudeBin)   // tells the scanner where claude is before the first live check
   WATCH = watchTranscripts(ctx)
+  runner.init({
+    bin: claudeBin,
+    emit: m => broadcast(m),
+    onWrite: id => WATCH?.poke(id),
+    // started, finished or waiting on you: the list and the board show it now
+    onChange: () => { liveSig = ''; pollLive().catch(() => {}) },
+  })
   const provider = new HistoryView(ctx)
   ctx.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, diffProvider),
@@ -2267,6 +2393,6 @@ function activate (ctx) {
   if (cfg('openOnStartup', false)) vscode.commands.executeCommand('claudeHistory.view.focus')
 }
 
-function deactivate () { clearInterval(liveTimer) }
+function deactivate () { clearInterval(liveTimer); runner.stopAll() }
 
 module.exports = { activate, deactivate }

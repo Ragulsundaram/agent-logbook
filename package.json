@@ -332,6 +332,18 @@
           "type": "boolean",
           "default": false,
           "description": "Pop up a notification when a running chat finishes and is waiting for you. A count always shows in the status bar."
+        },
+        "claudeHistory.chatPermissionMode": {
+          "type": "string",
+          "default": "default",
+          "enum": ["default", "acceptEdits", "plan", "auto"],
+          "enumDescriptions": [
+            "Claude asks before editing files or running commands",
+            "File edits go through; commands still ask",
+            "Claude plans first and asks you to approve the plan",
+            "Claude decides what is safe to run without asking"
+          ],
+          "description": "What Claude may do without asking when you chat from the logbook. Each chat can change it from the box under the conversation."
         }
       }
     }

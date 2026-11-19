@@ -275,7 +275,7 @@ document.querySelectorAll('.tab').forEach(b => {
 $('#newchat').appendChild(icon('plus'))
 $('#rescan').appendChild(icon('reload'))
 tips()                                   // the header row
-$('#newchat').onclick = () => send({ type: 'newChat' })
+$('#newchat').onclick = e => newChatMenu(e.currentTarget)   // chat.js: here, or in a terminal
 // the title-bar icon only exists in the sidebar, so the button lives here too
 $('#boardbtn').appendChild(icon('pulse'))
 $('#boardbtn').onclick = () => send({ type: 'openBoard' })
@@ -1639,8 +1639,8 @@ function showDetail (t, live) {
   // a new chat without leaving this one for the list
   const fresh = el('button', 'iconbtn newinchat')
   fresh.appendChild(icon('plus'))
-  fresh.title = 'Start a new Claude session in a terminal'
-  fresh.onclick = () => send({ type: 'newChat' })
+  fresh.title = 'New chat'
+  fresh.onclick = e => newChatMenu(e.currentTarget)
   top.appendChild(fresh)
   head.appendChild(top)
 
@@ -4606,6 +4606,11 @@ function renderSettings () {
     ['claude', 'The Claude Code extension'], ['desktop', 'Claude Desktop']])
   toggle(resume, 'skipPermissions', 'Skip permission prompts',
     'Claude runs every tool without asking first', false)
+
+  const here = section('message', 'Chatting here', 'Chats you talk to from the box under a conversation.')
+  pick(here, 'chatPermissionMode', 'Claude may', 'each chat can change this from its box', [
+    ['default', 'Ask before edits and commands'], ['acceptEdits', 'Edit files without asking'],
+    ['plan', 'Plan first, then ask'], ['auto', 'Decide what is safe']])
 
   const exp = section('export', 'Exporting', 'Where Export puts a chat, and what it writes there.')
   const dir = CFG.exportDirectory || ''

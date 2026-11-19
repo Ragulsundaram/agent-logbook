@@ -20,6 +20,17 @@ Claude Desktop may title a resumed chat with its folder name or a generic title,
 because its `claude://resume` link takes no title; rename the chat in Desktop if
 you want it to match the Agent Logbook title.
 
+**Chat from the logbook.** A box under every Claude chat lets you carry on
+talking to it without a terminal: the reply streams in as it is written, and
+file edits, commands, questions and plans wait for you as cards you approve,
+deny or answer. Pick the model, effort and permission mode per chat, stop a
+reply with Escape, paste images and use slash commands. The + button starts a
+new chat here or in a terminal. This runs your own installed Claude Code in the
+background (`claude -p` with streaming input and output), so your login,
+settings, MCP servers and CLAUDE.md apply as usual, and it writes the same
+transcript a terminal would. A chat already running in a terminal or another
+app is never written to twice; it can be continued here as a copy instead.
+
 **See the sub-agents.** Background agents keep their own transcripts. Each one
 appears as a card where it was launched, with the brief it was given and what it
 reported, and opens as its own readable thread. Nested agents are shown as a
@@ -61,6 +72,12 @@ sent anywhere else.
 Claude Code reads the new name back. Renaming a Codex chat writes nothing to the
 transcript. Deleting a chat moves the file to `~/.claude/trashed-sessions`
 rather than unlinking it.
+
+**Runs** your own `claude` CLI when you send a message from the logbook. Claude
+Code does the work exactly as it would in a terminal - its own network
+requests, file edits and transcript writes, each edit or command approved by
+you unless you chose a mode that skips asking. The extension itself sends
+nothing to the network for this; it only talks to that local process.
 
 ## Settings
 

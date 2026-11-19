@@ -20,6 +20,9 @@ Humans: see CONTRIBUTING.md.
 2. **No new network calls.** The only request the extension makes is the
    plan-usage call to `api.anthropic.com` in `scan.js`. Do not add `fetch`,
    `node:http(s)`, WebSockets, telemetry, analytics or remote fonts/scripts.
+   Running the user's own `claude` CLI is not a network call by the
+   extension: `chat-runner.js` (chatting from the logbook) and the handover
+   brief do this, and Claude Code makes its own requests as it always does.
 3. **Transcripts never leave the machine** through the extension, and are never
    committed. Do not add real transcripts, `.jsonl` files or screenshots of real
    chats as test data. Make up small fake samples if you need them.
@@ -51,8 +54,9 @@ Match the file you are in:
 | `extension.js` | Activation, commands, panel host, messages to and from the webview |
 | `scan.js` | Reads and parses Claude and Codex transcripts; the usage request |
 | `search-worker.js`, `chat-worker.js` | Search and chat loading off the main thread |
+| `chat-runner.js` | Chatting from the logbook: runs `claude -p` with stream-json and relays replies and permission prompts |
 | `mcp-server.js`, `mcp-setup.js` | The local MCP server agents use to read chat history |
-| `media/` | Webview UI: `body.html` + `main.js` + `style.css` (main panel), `session.*`, `dashboard.*` |
+| `media/` | Webview UI: `body.html` + `main.js` + `chat.js` + `style.css` (main panel), `session.*`, `dashboard.*` |
 
 ## Before you open the pull request
 
