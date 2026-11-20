@@ -1485,7 +1485,10 @@ body[data-mode="sidebar"] #rescan { display: none !important }
   padding: 6px 10px 6px }
 .cbox { display: flex; flex-direction: column; gap: 0; padding: 3px 4px 3px 8px; border-radius: 8px; cursor: text;
   background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)) }
-.cbox:focus-within { border-color: var(--vscode-focusBorder) }
+/* a quiet lift on focus: the theme's focus colour (often bright yellow) shouted */
+.cbox:focus-within { border-color: color-mix(in srgb, var(--vscode-foreground) 28%, transparent) }
+/* the webview's own textarea:focus outline outranks a single class */
+.cbox .cinput:focus, .cbox .cinput:focus-visible { outline: none }
 .cinput { width: 100%; box-sizing: border-box; resize: none; overflow-y: auto; max-height: 220px; padding: 3px 0 1px;
   font: inherit; font-size: 13px; line-height: 1.4; color: var(--vscode-input-foreground);
   background: none; border: 0; outline: none }

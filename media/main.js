@@ -4655,6 +4655,8 @@ function renderSettings () {
     pick(here, 'chatPermissionMode', 'Claude may', 'each chat can change this from its box', [
       ['default', 'Ask before edits and commands'], ['acceptEdits', 'Edit files without asking'],
       ['plan', 'Plan first, then ask'], ['auto', 'Decide what is safe']])
+    pick(here, 'chatEffort', 'Effort', 'how hard Claude thinks; /effort in a chat changes it', [
+      ['', "Claude's own setting"], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']])
   }
 
   const exp = section('export', 'Exporting', 'Where Export puts a chat, and what it writes there.')

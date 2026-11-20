@@ -338,6 +338,12 @@
           "default": true,
           "description": "Chat with Claude from the logbook: a message box under each Claude chat, and \"New chat here\" on the + button. Off keeps the logbook read-only, the way it was: chats are resumed in a terminal or another app."
         },
+        "claudeHistory.chatEffort": {
+          "type": "string",
+          "default": "",
+          "enum": ["", "low", "medium", "high", "xhigh", "max"],
+          "description": "How hard Claude thinks in chats started from the logbook. Empty uses Claude's own setting. Changed with /effort in a chat's box, which also sets it here for new chats."
+        },
         "claudeHistory.chatPermissionMode": {
           "type": "string",
           "default": "default",

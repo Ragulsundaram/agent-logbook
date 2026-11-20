@@ -11,7 +11,7 @@ const cfg = (k, dflt) => vscode.workspace.getConfiguration('claudeHistory').get(
 const SETTINGS = ['topBars', 'sort', 'showLiveFirst', 'pageSize', 'dateFormat',
   'resumeTarget', 'skipPermissions', 'exportSourceCopy', 'chatLayout',
   'limitAlerts', 'resetSoonWeeklyHours', 'resetSoonSessionMinutes', 'unusedPercent', 'boardAllWindows',
-  'finishAlerts', 'chatHere', 'chatPermissionMode']
+  'finishAlerts', 'chatHere', 'chatPermissionMode', 'chatEffort']
 // Shown in the Settings tab but changed only through a folder dialog, never by a
 // value the webview sends: it decides where files get written.
 const SHOWN = ['exportDirectory']

@@ -61,7 +61,7 @@ const picksFor = id => {
     // the transcript names the model without its [1m]; a chat on the big
     // window has to keep it, or carrying on here would shrink its context
     if (was && CUR.info?.window >= 1e6 && !/\[1m\]$/i.test(was)) was += '[1m]'
-    CHAT.picks.set(id, { model: /^[\w.[\]-]{1,60}$/.test(was) ? was : '', mode: CFG.chatPermissionMode || 'default', effort: '' })
+    CHAT.picks.set(id, { model: /^[\w.[\]-]{1,60}$/.test(was) ? was : '', mode: CFG.chatPermissionMode || 'default', effort: CFG.chatEffort || '' })
   }
   return CHAT.picks.get(id)
 }
@@ -194,22 +194,20 @@ function buildComposer (id) {
   const slash = el('div', 'cslash')
   slash.hidden = true
   const bar = el('div', 'cbar')
-  const model = el('select', 'cpick')
+  // only the mode lives under the box: the model shows above the chat, and
+  // model and effort are changed with /model and /effort
   const mode = el('select', 'cpick')
-  const effort = el('select', 'cpick')
-  model.title = 'Model for this chat'
-  mode.title = 'What Claude may do without asking'
-  effort.title = 'Effort: how hard Claude thinks. Changing it restarts Claude between replies'
+  mode.title = 'What Claude may do without asking. New chats start on the last one you picked'
   const status = el('span', 'cstatus')
   const go = el('button', 'cgo')
-  bar.append(model, mode, effort, status, go)
+  bar.append(mode, status, go)
   const live = el('div', 'chatlive')
   // the text and its pickers share one box, the way a chat app's input reads
   const box = el('div', 'cbox')
   box.append(imgs, ta, bar)
   box.onclick = e => { if (e.target === box || e.target === bar) ta.focus() }
   root.append(asks, block, box, slash)
-  const c = { id, root, asks, imgs, block, ta, slash, bar, model, mode, effort, status, go, live, slashAt: 0 }
+  const c = { id, root, asks, imgs, block, ta, slash, bar, mode, status, go, live, slashAt: 0 }
 
   const fit = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 220) + 'px' }
   c.fit = fit
@@ -242,9 +240,11 @@ function buildComposer (id) {
     if (st?.busy && !ta.value.trim() && !(CHAT.images.get(id) || []).length) send({ type: 'chatStop', id })
     else submit(c)
   }
-  model.onchange = () => { picksFor(id).model = model.value; send({ type: 'chatModel', id, value: model.value }); paintPickers(c) }
-  mode.onchange = () => { picksFor(id).mode = mode.value; send({ type: 'chatMode', id, value: mode.value }) }
-  effort.onchange = () => { picksFor(id).effort = effort.value; send({ type: 'chatEffort', id, value: effort.value }) }
+  mode.onchange = () => {
+    picksFor(id).mode = mode.value
+    send({ type: 'chatMode', id, value: mode.value })
+    setCfg('chatPermissionMode', mode.value)          // and every new chat after it
+  }
   requestAnimationFrame(fit)
   return c
 }
@@ -287,6 +287,7 @@ function submit (c) {
   const text = c.ta.value
   const images = CHAT.images.get(id) || []
   if (!text.trim() && !images.length) return
+  if (!images.length && localCommand(c, text)) return
   if (whereRunning(id) === 'elsewhere') return
   const p = picksFor(id)
   send({ type: 'chatSend', id, text, images: images.map(im => ({ mediaType: im.mediaType, data: im.data })), model: p.model, mode: p.mode, effort: p.effort })
@@ -372,7 +373,6 @@ function paintPickers (c) {
   const st = CHAT.state.get(c.id)
   // once Claude is running, what it reports wins: plan approval switches the mode
   if (st?.running && st.mode && MODES.some(m => m[0] === st.mode)) p.mode = st.mode
-  const models = CHAT.models.length ? CHAT.models.filter(m => m.value !== 'default') : FALLBACK_MODELS
   const opts = (sel, list, value) => {
     // rebuilt only when the choices change: rebuilding shut a list you had open
     const sig = JSON.stringify(list) + '|' + value
@@ -387,22 +387,75 @@ function paintPickers (c) {
     }
     sel.value = list.some(x => x[0] === value) ? value : list[0][0]
   }
-  const list = models.map(m => [m.value, m.label, m.note])
-  if (p.model && !list.some(x => x[0] === p.model)) list.unshift([p.model, modelName(p.model), 'The model this chat was using'])
-  opts(c.model, [['', 'Default model'], ...list], p.model)
   opts(c.mode, MODES, p.mode)
-  const chosen = models.find(m => m.value === p.model)
-  const levels = chosen?.efforts?.length ? chosen.efforts : EFFORTS
-  opts(c.effort, [['', 'Effort'], ...levels.map(l => [l, l[0].toUpperCase() + l.slice(1) + ' effort'])], p.effort)
+}
+
+// ------------------------------------------------------------ /model and /effort
+// Claude's own /model and /effort only work in its terminal, so the box answers
+// these two itself: picking one changes this chat, between replies.
+
+const chatModels = () => CHAT.models.length ? CHAT.models.filter(m => m.value !== 'default') : FALLBACK_MODELS
+function effortLevels (id) {
+  const chosen = chatModels().find(m => m.value === picksFor(id).model)
+  return chosen?.efforts?.length ? chosen.efforts : EFFORTS
+}
+const LOCAL = [
+  { name: 'model', hint: '<model>', description: 'Change the model for this chat' },
+  { name: 'effort', hint: '<level>', description: 'How hard Claude thinks; new chats start on the last one picked' },
+]
+
+/** The choices after "/model " or "/effort ", as slash rows. */
+function localChoices (c) {
+  const m = /^\/(model|effort)\s+(\S*)$/.exec(c.ta.value)
+  if (!m) return null
+  const q = m[2].toLowerCase()
+  const p = picksFor(c.id)
+  const rows = m[1] === 'model'
+    ? chatModels().map(x => ({ name: 'model ' + x.value, arg: x.value, description: (x.label || x.value) + (x.value === p.model ? '  (now)' : '') }))
+    : effortLevels(c.id).map(l => ({ name: 'effort ' + l, arg: l, description: l[0].toUpperCase() + l.slice(1) + (l === p.effort ? '  (now)' : '') }))
+  return rows.filter(x => x.arg.toLowerCase().includes(q)).map(x => ({ ...x, kind: m[1] }))
+}
+
+/** "/model opus" or "/effort high": handled here, never sent to Claude. */
+function localCommand (c, text) {
+  const m = /^\/(model|effort)(?:\s+(\S+))?\s*$/.exec(text.trim())
+  if (!m) return false
+  if (!m[2]) { c.ta.value = '/' + m[1] + ' '; paintSlash(c); return true }
+  return applyLocal(c, m[1], m[2])
+}
+
+function applyLocal (c, kind, arg) {
+  const p = picksFor(c.id)
+  if (kind === 'model') {
+    if (!/^[\w.[\]-]{1,60}$/.test(arg)) return false
+    p.model = arg
+    send({ type: 'chatModel', id: c.id, value: arg })
+  } else {
+    if (!EFFORTS.includes(arg)) return false
+    p.effort = arg
+    send({ type: 'chatEffort', id: c.id, value: arg })
+    setCfg('chatEffort', arg)
+  }
+  c.ta.value = ''
+  CHAT.drafts.delete(c.id)
+  c.slash.hidden = true
+  c.fit?.()
+  paintGo(c)
+  c.status.textContent = kind === 'model' ? 'Model: ' + modelName(arg) : 'Effort: ' + arg
+  setTimeout(() => { if (c.status.textContent.startsWith(kind === 'model' ? 'Model:' : 'Effort:')) paintGo(c) }, 2500)
+  return true
 }
 
 // ------------------------------------------------------------ slash commands
 
 function slashMatches (c) {
+  const choices = localChoices(c)
+  if (choices) return choices.slice(0, 8)
   const m = /^\/([\w:-]*)$/.exec(c.ta.value)
-  if (!m || !CHAT.commands.length) return []
+  if (!m) return []
   const q = m[1].toLowerCase()
-  return CHAT.commands.filter(x => x.name.toLowerCase().includes(q))
+  const all = [...LOCAL, ...CHAT.commands.filter(x => !LOCAL.some(l => l.name === x.name))]
+  return all.filter(x => x.name.toLowerCase().includes(q))
     .sort((a, b) => a.name.toLowerCase().startsWith(q) === b.name.toLowerCase().startsWith(q) ? 0 : a.name.toLowerCase().startsWith(q) ? -1 : 1)
     .slice(0, 8)
 }
@@ -422,11 +475,13 @@ function paintSlash (c) {
 }
 
 function pickSlash (c, x) {
+  if (x.kind) { applyLocal(c, x.kind, x.arg); c.ta.focus(); return }
   c.ta.value = '/' + x.name + ' '
   CHAT.drafts.set(c.id, c.ta.value)
   c.slash.hidden = true
   c.ta.focus()
   paintGo(c)
+  if (LOCAL.some(l => l.name === x.name)) paintSlash(c)      // straight on to its choices
 }
 
 function slashKey (c, e) {
