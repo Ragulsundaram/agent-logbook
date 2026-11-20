@@ -35,7 +35,8 @@ const endedRecently = id => Date.now() - (ENDED.get(id) || 0) < 10000
 /** Running chats as the live list reads them: working, or waiting for you. */
 function liveMap () {
   const out = {}
-  for (const [id, r] of RUNS) out[id] = r.busy && !r.asks.size ? 'busy' : 'idle'
+  // waiting: Claude has stopped to ask you something - neither working nor done
+  for (const [id, r] of RUNS) out[id] = r.asks.size ? 'waiting' : r.busy ? 'busy' : 'idle'
   return out
 }
 

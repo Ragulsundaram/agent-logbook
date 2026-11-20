@@ -899,7 +899,7 @@ function messageMatches (q) {
     const chev = el('span', 'chev2', '›')
     const live = SESSIONS.find(x => x.id === c.id)?.live
     head.append(chev, sourceIcon(c.provider), el('span', 't', c.title))
-    if (live) head.appendChild(el('span', live === 'busy' ? 'spinner' : 'dot idle'))
+    if (live) head.appendChild(el('span', live === 'busy' ? 'spinner' : live === 'waiting' ? 'dot needs' : 'dot idle'))
     const badge = el('span', 'count', String(c.total))
     badge.title = `${c.total} match${c.total === 1 ? '' : 'es'} in this chat`
     head.appendChild(badge)
@@ -1005,9 +1005,10 @@ function chatRow (s) {
   const rb = resBadge(s.id)
   if (rb) r.appendChild(rb)
   r.appendChild(el('span', 'age', ago(s.lastTs)))
-  // busy gets a turning ring, idle a steady dot, anything else nothing at all
-  r.appendChild(el('span',
-    s.live === 'busy' ? 'spinner' : 'dot' + (s.live === 'idle' ? ' idle' : ' off')))
+  // busy gets a turning ring, waiting on you an amber dot, idle a steady dot, anything else nothing
+  const dot = el('span', s.live === 'busy' ? 'spinner' : 'dot' + (s.live === 'waiting' ? ' needs' : s.live === 'idle' ? ' idle' : ' off'))
+  if (s.live === 'waiting') dot.title = 'Claude is waiting for you'
+  r.appendChild(dot)
 
   // hover actions, floated over the right edge like the row's own toolbar
   const acts = el('div', 'rowacts')

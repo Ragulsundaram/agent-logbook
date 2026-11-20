@@ -2411,7 +2411,9 @@ function board (live, folders) {
   const roots = (folders || []).map(f => f.replace(/\/+$/, ''))
   const mine = cwd => !roots.length || roots.some(r => cwd === r || (cwd || '').startsWith(r + '/'))
   for (const rec of index()) {
-    const status = live[rec.id]
+    // a chat run from the logbook says exactly when it is waiting on you
+    const exact = live[rec.id] === 'waiting'
+    const status = exact ? 'busy' : live[rec.id]
     if (!status || !mine(rec.cwd)) continue
     const codex = rec.provider === 'codex'
     let raw = '', size = 0, len = 0, tailStart = 0
@@ -2438,7 +2440,7 @@ function board (live, folders) {
       context: info.context, window: info.window,
       reply: said ? said.text : '', replyTs: said ? Date.parse(said.ts) || 0 : 0,
       ask: asked ? asked.text : '', askTs: asked ? Date.parse(asked.ts) || 0 : 0,
-      doing: now.doing || '', waiting: now.waiting || null,
+      doing: now.doing || '', waiting: now.waiting || (exact ? 'permission' : null),
     })
   }
   // the chat that last had a message on top, whichever side wrote it
@@ -2728,7 +2730,8 @@ function sessionList (live) {
     // A chat written to seconds ago counts as busy before Claude's own status
     // catches up - but only while its turn is still open. Once Claude has marked
     // the turn done it is idle straight away, rather than for another 15 seconds.
-    live: (Date.now() - s.lastTs < 15000 && live[s.id] && s.turnOpen !== false)
+    // waiting on you is known exactly (a chat run from the logbook) and never overridden
+    live: (Date.now() - s.lastTs < 15000 && live[s.id] && live[s.id] !== 'waiting' && s.turnOpen !== false)
       ? 'busy' : (live[s.id] || null),
     lastTs: s.lastTs, messages: s.messages, edits: s.edits,
     tokens: s.tokens, cost: s.cost, activeMs: s.activeMs,

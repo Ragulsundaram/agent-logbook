@@ -23,6 +23,7 @@ const CHAT = {
   here: new Map(),       // new chats started in the logbook: id -> { copyOf, folder }
   commands: [],          // slash commands, as the last Claude to start listed them
   models: [],
+  busySince: new Map(),  // chat id -> when it last started working
 }
 let COMPOSER = null
 
@@ -158,6 +159,16 @@ function placeLive () {
   if (FOLLOW) stickToEnd(body)
 }
 
+/** "12s · Esc to stop" while a reply runs; the clock starts when the chat turned busy. */
+function elapsed (id) {
+  const at = CHAT.busySince.get(id)
+  return at ? `${secs(Date.now() - at)} · Esc to stop` : 'Esc to stop'
+}
+setInterval(() => {
+  const e = COMPOSER && document.querySelector('.chatworking .chatel')
+  if (e) e.textContent = elapsed(COMPOSER.id)
+}, 1000)
+
 function paintLive () {
   if (!COMPOSER) return
   const id = COMPOSER.id
@@ -186,10 +197,16 @@ function paintLive () {
     w.appendChild(b)
     live.appendChild(w)
   }
-  if (st?.busy && !(st.asks || []).length) {
+  // the one status line, as Claude Code's terminal has: what it is doing, for how long
+  if ((st?.asks || []).length) {
+    const line = el('div', 'chatworking wait')
+    line.append(el('span', 'chatwaitdot'), el('span', '', 'Waiting for you: answer below'))
+    live.appendChild(line)
+  } else if (st?.busy) {
     const line = el('div', 'chatworking')
     line.append(el('span', 'chatdots'), el('span', '',
-      p?.tool && !p.text ? `Running ${toolWord(p.tool)}…` : p?.thinking ? 'Thinking…' : p?.text ? 'Writing…' : 'Working…'))
+      p?.tool && !p.text ? `Running ${toolWord(p.tool)}…` : p?.thinking ? 'Thinking…' : p?.text ? 'Writing…' : 'Working…'),
+    el('span', 'chatel', elapsed(id)))
     live.appendChild(line)
   }
   echoes.filter(isQueued).forEach(drawEcho)
@@ -323,6 +340,7 @@ function submit (c) {
   CHAT.drafts.delete(id)
   CHAT.images.delete(id)
   const st = CHAT.state.get(id) || { id, asks: [] }
+  if (!st.busy) CHAT.busySince.set(id, Date.now())
   CHAT.state.set(id, { ...st, busy: true })
   c.ta.value = ''
   c.fit()
@@ -364,8 +382,9 @@ function paintComposer () {
     b.onclick = () => send({ type: 'chatFork', id })
     c.block.appendChild(b)
   }
-  c.ta.placeholder = CHAT.state.get(id)?.busy
-    ? 'Claude is working. Type to queue a message, Escape to stop'
+  const now = CHAT.state.get(id)
+  c.ta.placeholder = now?.asks?.length ? 'Answer Claude above first'
+    : now?.busy ? 'Queue a message…'
     : where === 'here' || CHAT.here.has(id) ? 'Message Claude… (/ for commands)'
       : 'Continue this chat here… (/ for commands)'
   paintPickers(c)
@@ -795,6 +814,7 @@ if (!BOARD_MODE) {
     const st = CHAT.state.get(id) || { id, asks: [] }
     switch (m.type) {
       case 'chatState':
+        if (m.state.busy && !st.busy) CHAT.busySince.set(id, Date.now())
         CHAT.state.set(id, { ...m.state })
         if (m.state.commands?.length) CHAT.commands = m.state.commands
         if (m.state.models?.length) CHAT.models = m.state.models
