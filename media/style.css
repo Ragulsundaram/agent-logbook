@@ -1483,16 +1483,19 @@ body[data-mode="sidebar"] #rescan { display: none !important }
 /* ---- chatting from the logbook (chat.js) */
 .composer { flex: none; position: relative; display: flex; flex-direction: column; gap: 6px;
   padding: 6px 10px 6px }
-.cbox { display: flex; flex-direction: column; gap: 0; padding: 3px 4px 3px 8px; border-radius: 8px; cursor: text;
+.cbox { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 6px; padding: 4px 4px 4px 8px; border-radius: 8px; cursor: text;
   background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)) }
 /* a quiet lift on focus: the theme's focus colour (often bright yellow) shouted */
 .cbox:focus-within { border-color: color-mix(in srgb, var(--vscode-foreground) 28%, transparent) }
 /* the webview's own textarea:focus outline outranks a single class */
 .cbox .cinput:focus, .cbox .cinput:focus-visible { outline: none }
-.cinput { width: 100%; box-sizing: border-box; resize: none; overflow-y: auto; max-height: 220px; padding: 3px 0 1px;
+.cinput { flex: 1 1 0; min-width: 0; box-sizing: border-box; resize: none; overflow-y: auto; max-height: 220px; padding: 3px 0 1px;
   font: inherit; font-size: 13px; line-height: 1.4; color: var(--vscode-input-foreground);
   background: none; border: 0; outline: none }
-.cbar { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; margin-left: -4px }
+/* the box is the text and the send button, side by side; pasted pictures sit on their own row above */
+.cbox > .cimgs { flex: 1 0 100% }
+.cbox > .cimgs:empty { display: none }
+.cbar { display: flex; align-items: center; flex: none }
 /* sized to the choice showing, not to the longest one in the list */
 /* no platform arrow, which was taller than the text: a small caret drawn in */
 .cpick { font: inherit; font-size: 11px; line-height: 16px; field-sizing: content; max-width: 140px; height: 18px;
@@ -1502,10 +1505,13 @@ body[data-mode="sidebar"] #rescan { display: none !important }
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 7 4'%3E%3Cpath d='M0 0l3.5 4L7 0z' fill='%23888'/%3E%3C/svg%3E") }
 .cpick:hover, .cpick:focus { border-color: var(--vscode-panel-border); color: var(--vscode-foreground); outline: none }
 .cpick option { color: var(--vscode-foreground); background: var(--vscode-dropdown-background, var(--vscode-input-background)) }
-.cstatus { margin-left: auto; font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap }
+.cstatus { font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap }
+.cstatus:empty { display: none }
+/* mode and status in the "Claude" numbers under the box */
+.fgroup > .cmode, .composer > .cmode { margin-left: -4px }
+.composer > .cmode, .composer > .cstatus { align-self: flex-start }
 .cgo { flex: none; display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0;
   border: 0; border-radius: 5px; cursor: pointer; background: var(--clay); color: #fff }
-.cstatus:empty + .cgo { margin-left: auto }
 .cgo svg { width: 9px; height: 9px; fill: currentColor }
 .cgo:disabled { opacity: .45; cursor: default }
 .cgo.stop { background: var(--vscode-button-secondaryBackground, rgba(127,127,127,.25)); color: var(--vscode-foreground) }

@@ -30,7 +30,7 @@ const MODES = [
   ['default', 'Ask first', 'Claude asks before editing files or running commands'],
   ['acceptEdits', 'Accept edits', 'File edits go through; commands still ask'],
   ['plan', 'Plan first', 'Claude plans and asks you to approve before changing anything'],
-  ['auto', 'Auto', 'Claude decides what is safe to run without asking'],
+  ['auto', 'Auto mode', 'Claude decides what is safe to run without asking'],
 ]
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 const FALLBACK_MODELS = [
@@ -101,9 +101,16 @@ function chatMount () {
   const before = foot ? [...foot.children].find(n => !n.classList.contains('runstrip') && n !== COMPOSER.root) || null : null
   if (COMPOSER.root.parentNode !== host || COMPOSER.root.nextSibling !== before) host.insertBefore(COMPOSER.root, before)
   if (focused && document.activeElement !== COMPOSER.ta) COMPOSER.ta.focus()
+  placeStatusLine(foot)
   if (t.pending) pendingIntro(t.id)
   placeLive()
   paintComposer()
+}
+
+/** The mode and status join the "Claude" numbers under the box; a new chat has none yet, so they get their own line. */
+function placeStatusLine (foot) {
+  const host = foot?.querySelector('.fgroup') || COMPOSER.root
+  for (const n of [COMPOSER.mode, COMPOSER.status]) if (n.parentNode !== host) host.appendChild(n)
 }
 
 /** A new chat started here says so, in place of the "started in a terminal" note. */
@@ -194,13 +201,14 @@ function buildComposer (id) {
   const slash = el('div', 'cslash')
   slash.hidden = true
   const bar = el('div', 'cbar')
-  // only the mode lives under the box: the model shows above the chat, and
-  // model and effort are changed with /model and /effort
-  const mode = el('select', 'cpick')
+  // the box holds only the text and the send button. The mode and the reply's
+  // status sit with the chat's numbers below it, the way Claude Code's own
+  // status line does; model and effort are changed with /model and /effort
+  const mode = el('select', 'cpick cmode')
   mode.title = 'What Claude may do without asking. New chats start on the last one you picked'
   const status = el('span', 'cstatus')
   const go = el('button', 'cgo')
-  bar.append(mode, status, go)
+  bar.append(go)
   const live = el('div', 'chatlive')
   // the text and its pickers share one box, the way a chat app's input reads
   const box = el('div', 'cbox')
