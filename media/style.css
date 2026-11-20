@@ -433,7 +433,6 @@ mark.on { background: var(--amber); color: #000 }
 .shot img { display: block; width: 100%; height: auto; max-height: 320px;
   object-fit: contain; object-position: top }
 .shot:hover { border-color: var(--clay) }
-.shot:hover 
 /* same footprint whether it is loading, loaded, or gone from the cache */
 .shot.loading { background: var(--vscode-input-background); min-height: 120px }
 .shot.gone { background: var(--vscode-input-background); cursor: default; min-height: 120px }

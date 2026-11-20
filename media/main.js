@@ -1929,6 +1929,8 @@ function phraseFor (name, n) {
   return n > 1 ? `Used ${label} ${n}×` : `Used ${label}`
 }
 
+// "Edited 2 files" means two files: two edits to one file counted as two
+const FILE_TOOLS = new Set(['Edit', 'Read', 'NotebookEdit'])
 /** Merge Edit/Write into one "Edited N files" line, since that is how it reads. */
 function toolSummary (tools) {
   const order = [], counts = new Map()
@@ -1940,7 +1942,7 @@ function toolSummary (tools) {
   const wrap = el('div', 'twork')
   const head = el('div', 'thead2')
   head.append(el('span', 'tsum',
-    order.map(k => phraseFor(k, counts.get(k).length)).join(' · ')),
+    order.map(k => phraseFor(k, FILE_TOOLS.has(k) ? new Set(counts.get(k).map(t => t.detail || t)).size : counts.get(k).length)).join(' · ')),
     el('span', 'chev2', ALLTOOLS ? '⌄' : '›'))
 
   const body = el('div', 'tdetail')

@@ -164,9 +164,12 @@ function paintLive () {
   const live = COMPOSER.live
   live.replaceChildren()
   const st = CHAT.state.get(id)
-  // sent while Claude was still replying: it waits its turn, and says so
-  for (const echo of CHAT.echo.get(id) || []) {
-    const queued = echo.queued && st?.busy
+  // what you sent sits above the reply to it; a message queued behind that
+  // reply waits below it, as typed-ahead input does in Claude Code's terminal
+  const echoes = CHAT.echo.get(id) || []
+  const isQueued = e => e.queued && st?.busy
+  const drawEcho = echo => {
+    const queued = isQueued(echo)
     const w = el('div', 'msg user chatecho' + (queued ? ' queued' : ''))
     if (echo.text) w.appendChild(el('div', 'bubble', echo.text))
     const meta = [queued ? 'Queued: Claude reads this when it finishes' : '',
@@ -174,6 +177,7 @@ function paintLive () {
     if (meta) w.appendChild(el('div', 'chatmeta', meta))
     live.appendChild(w)
   }
+  echoes.filter(e => !isQueued(e)).forEach(drawEcho)
   const p = CHAT.partial.get(id)
   if (p?.text) {
     const w = el('div', 'msg assistant chatstream')
@@ -188,6 +192,7 @@ function paintLive () {
       p?.tool && !p.text ? `Running ${toolWord(p.tool)}…` : p?.thinking ? 'Thinking…' : p?.text ? 'Writing…' : 'Working…'))
     live.appendChild(line)
   }
+  echoes.filter(isQueued).forEach(drawEcho)
   const note = CHAT.notes.get(id)
   if (note) {
     const n = el('div', 'chatnote' + (note.err ? ' err' : ''))

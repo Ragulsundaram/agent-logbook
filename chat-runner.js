@@ -90,6 +90,7 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort } = {}) {
     id, cwd, proc, buf: '', err: '', busy: false, model: model || '', mode: mode || '', effort: effort || '',
     asks: new Map(), partial: { text: '', thinking: false, tool: '' }, partialTimer: null,
     idle: null, seq: 0, restart: false,
+    pending: 0,                     // messages sent that Claude has not finished answering
   }
   RUNS.set(id, r)
   proc.stdout.setEncoding('utf8')
@@ -102,6 +103,8 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort } = {}) {
       if (!line.trim()) continue
       let m
       try { m = JSON.parse(line) } catch { continue }
+      // a Claude being let go after a newer one took the chat over is not listened to
+      if (r.stopping && RUNS.has(id) && RUNS.get(id) !== r) continue
       try { onLine(r, m) } catch {}
     }
   })
@@ -119,6 +122,9 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort } = {}) {
     clearTimeout(r.idle); clearTimeout(r.partialTimer)
     if (RUNS.get(id) === r) RUNS.delete(id)
     ENDED.set(id, Date.now())
+    // a newer Claude already took this chat over (a message sent while this one
+    // was being let go): its leaving is not news, and must not mark the chat stopped
+    if (RUNS.has(id)) return
     // a quiet stop (let go when idle, or restarted for a new setting) says nothing
     const quiet = r.stopping
     if (!quiet) {
@@ -166,6 +172,7 @@ function onLine (r, m) {
       const e = m.event || {}
       if (e.type === 'message_start') {
         r.partial = { text: '', thinking: false, tool: '' }
+        r.busy = true                 // a queued message's turn starting counts as working
       } else if (e.type === 'content_block_start') {
         const b = e.content_block || {}
         if (b.type === 'thinking' || b.type === 'redacted_thinking') r.partial.thinking = true
@@ -239,22 +246,29 @@ function onLine (r, m) {
       return
     }
     case 'result': {
-      r.busy = false
+      // each message is answered as its own turn, with its own result: a chat
+      // with a message still queued is still working. Stopping drops the queue.
+      const stopped = m.subtype === 'error_during_execution' || m.terminal_reason === 'interrupted'
+      r.pending = stopped ? 0 : Math.max(0, r.pending - 1)
+      r.busy = r.pending > 0
       r.partial = { text: '', thinking: false, tool: '' }
       clearTimeout(r.partialTimer); r.partialTimer = null
       // an answer that was never given is moot once the turn has ended
       for (const k of r.asks.keys()) emit(r.id, { type: 'chatAskGone', requestId: k })
       r.asks.clear()
-      emit(r.id, {
-        type: 'chatDone',
-        ms: m.duration_ms || 0,
-        error: m.is_error ? String(m.result || m.subtype || 'Claude stopped with an error.').slice(0, 2000) : '',
-        stopped: m.subtype === 'error_during_execution' || m.terminal_reason === 'interrupted',
-      })
+      if (r.busy) emit(r.id, { type: 'chatState', state: state(r.id) })   // on to the queued message
+      else {
+        emit(r.id, {
+          type: 'chatDone',
+          ms: m.duration_ms || 0,
+          error: m.is_error ? String(m.result || m.subtype || 'Claude stopped with an error.').slice(0, 2000) : '',
+          stopped,
+        })
+      }
       OPTS.onWrite?.(r.id)
       OPTS.onChange(r.id)
       armIdle(r)
-      if (r.restart) { r.restart = false; stop(r.id) }
+      if (r.restart && !r.busy) { r.restart = false; stop(r.id) }
       return
     }
   }
@@ -273,11 +287,17 @@ function send (id, { text, images, cwd, fresh, forkOf, model, mode, effort }) {
     content.push({ type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.data } })
   }
   if (text) content.push({ type: 'text', text })
+  // Claude's input already closed (it quit on its own): say so, so the text goes back in the box
+  if (!r.proc.stdin.writable) {
+    emit(id, { type: 'chatError', error: 'Claude had stopped, so the message was not sent. It is back in the box: send it again.' })
+    return
+  }
   write(r, {
     type: 'user',
     message: { role: 'user', content: content.length === 1 && !images?.length ? text : content },
     parent_tool_use_id: null,
   })
+  r.pending++
   r.busy = true
   armIdle(r)
   emit(id, { type: 'chatState', state: state(id) })
@@ -346,6 +366,9 @@ function stop (id, now) {
   const r = RUNS.get(id)
   if (!r) return
   r.stopping = true
+  // out of the list at once: a message sent while it leaves starts a new Claude
+  // rather than being written to one whose input is already closed
+  if (RUNS.get(id) === r) RUNS.delete(id)
   // the editor is closing or reloading: a timer would not outlive it, and a
   // Claude left behind carries on working where nobody can answer it
   if (now) { try { r.proc.kill() } catch {} return }
