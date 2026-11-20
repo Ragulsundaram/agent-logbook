@@ -14,7 +14,7 @@ const CHAT = {
   state: new Map(),      // chat id -> what the host says about its Claude here
   drafts: new Map(),     // chat id -> unsent text
   images: new Map(),     // chat id -> pasted pictures waiting to go
-  echo: new Map(),       // chat id -> a message sent but not yet in the transcript
+  echo: new Map(),       // chat id -> messages sent but not yet in the transcript, oldest first
   partial: new Map(),    // chat id -> the reply being written
   landed: new Set(),     // chats whose half-written reply is now in the transcript
   notes: new Map(),      // chat id -> { err, text } shown under the conversation
@@ -107,6 +107,18 @@ function chatMount () {
   paintComposer()
 }
 
+function setMode (c, value) {
+  picksFor(c.id).mode = value
+  c.mode.value = value
+  send({ type: 'chatMode', id: c.id, value })
+  setCfg('chatPermissionMode', value)          // and every new chat after it
+}
+/** Shift+Tab in the box steps through the modes, as it does in Claude Code's terminal. */
+function cycleMode (c) {
+  const i = MODES.findIndex(m => m[0] === picksFor(c.id).mode)
+  setMode(c, MODES[(i + 1) % MODES.length][0])
+}
+
 /** The mode and status join the "Claude" numbers under the box; a new chat has none yet, so they get their own line. */
 function placeStatusLine (foot) {
   const host = foot?.querySelector('.fgroup') || COMPOSER.root
@@ -121,7 +133,7 @@ function pendingIntro (id) {
   if (h2) h2.textContent = info.copyOf ? `Copy of ${info.copyOf}` : 'New chat'
   const wait = d.querySelector('.pendingchat')
   if (wait) {
-    const sent = CHAT.echo.has(id) || CHAT.partial.has(id)
+    const sent = !!CHAT.echo.get(id)?.length || CHAT.partial.has(id)
     wait.replaceChildren(el('span', '', sent ? ''
       : info.copyOf ? 'A copy of that chat, with all of its context. Type below to carry on here.'
         : `A new chat${info.folder && info.folder !== '~' ? ` in ${info.folder}` : ''}. Type your first message below.`))
@@ -151,14 +163,17 @@ function paintLive () {
   const id = COMPOSER.id
   const live = COMPOSER.live
   live.replaceChildren()
-  const echo = CHAT.echo.get(id)
-  if (echo) {
-    const w = el('div', 'msg user chatecho')
+  const st = CHAT.state.get(id)
+  // sent while Claude was still replying: it waits its turn, and says so
+  for (const echo of CHAT.echo.get(id) || []) {
+    const queued = echo.queued && st?.busy
+    const w = el('div', 'msg user chatecho' + (queued ? ' queued' : ''))
     if (echo.text) w.appendChild(el('div', 'bubble', echo.text))
-    if (echo.images) w.appendChild(el('div', 'chatmeta', `${echo.images} image${echo.images === 1 ? '' : 's'} attached`))
+    const meta = [queued ? 'Queued: Claude reads this when it finishes' : '',
+      echo.images ? `${echo.images} image${echo.images === 1 ? '' : 's'} attached` : ''].filter(Boolean).join(' · ')
+    if (meta) w.appendChild(el('div', 'chatmeta', meta))
     live.appendChild(w)
   }
-  const st = CHAT.state.get(id)
   const p = CHAT.partial.get(id)
   if (p?.text) {
     const w = el('div', 'msg assistant chatstream')
@@ -205,7 +220,7 @@ function buildComposer (id) {
   // status sit with the chat's numbers below it, the way Claude Code's own
   // status line does; model and effort are changed with /model and /effort
   const mode = el('select', 'cpick cmode')
-  mode.title = 'What Claude may do without asking. New chats start on the last one you picked'
+  mode.title = 'What Claude may do without asking (Shift+Tab in the box to switch). New chats start on the last one you picked'
   const status = el('span', 'cstatus')
   const go = el('button', 'cgo')
   bar.append(go)
@@ -222,6 +237,7 @@ function buildComposer (id) {
   ta.oninput = () => { CHAT.drafts.set(id, ta.value); fit(); paintSlash(c); paintGo(c) }
   ta.onkeydown = e => {
     if (!c.slash.hidden && slashKey(c, e)) return
+    if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); cycleMode(c); return }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(c) }
     else if (e.key === 'Escape' && !e.isComposing) {
       // like the terminal: Escape stops a reply in progress
@@ -248,11 +264,7 @@ function buildComposer (id) {
     if (st?.busy && !ta.value.trim() && !(CHAT.images.get(id) || []).length) send({ type: 'chatStop', id })
     else submit(c)
   }
-  mode.onchange = () => {
-    picksFor(id).mode = mode.value
-    send({ type: 'chatMode', id, value: mode.value })
-    setCfg('chatPermissionMode', mode.value)          // and every new chat after it
-  }
+  mode.onchange = () => setMode(c, mode.value)
   requestAnimationFrame(fit)
   return c
 }
@@ -299,7 +311,8 @@ function submit (c) {
   if (whereRunning(id) === 'elsewhere') return
   const p = picksFor(id)
   send({ type: 'chatSend', id, text, images: images.map(im => ({ mediaType: im.mediaType, data: im.data })), model: p.model, mode: p.mode, effort: p.effort })
-  CHAT.echo.set(id, { text, images: images.length, at: Date.now() })
+  const queued = !!CHAT.state.get(id)?.busy
+  CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, images: images.length, at: Date.now(), queued }])
   CHAT.notes.delete(id)
   CHAT.done.delete(id)
   CHAT.drafts.delete(id)
@@ -738,12 +751,17 @@ function newChatMenu (anchor) {
 /** Drop the sent copy and the half-written reply once the transcript has them. */
 function caughtUp (t) {
   const id = t.id
-  const echo = CHAT.echo.get(id)
-  if (echo) {
-    const users = (t.turns || []).filter(x => x.role === 'user' && x.text)
-    const last = users[users.length - 1]
-    const want = echo.text.trim().slice(0, 120)
-    if ((last && want && String(last.text).includes(want)) || Date.now() - echo.at > 15000) CHAT.echo.delete(id)
+  const echoes = CHAT.echo.get(id)
+  if (echoes?.length) {
+    const users = (t.turns || []).filter(x => x.role === 'user' && x.text).slice(-(echoes.length + 2))
+    const busy = !!CHAT.state.get(id)?.busy
+    const left = echoes.filter(echo => {
+      const want = echo.text.trim().slice(0, 120)
+      if (want && users.some(u => String(u.text).includes(want))) return false
+      // a queued one waits as long as Claude is busy; an unqueued one shows for 15s at most
+      return echo.queued && busy ? Date.now() - echo.at < 600000 : Date.now() - echo.at < 15000
+    })
+    if (left.length) CHAT.echo.set(id, left); else CHAT.echo.delete(id)
   }
   if (CHAT.landed.has(id)) { CHAT.landed.delete(id); CHAT.partial.delete(id) }
 }
@@ -806,12 +824,12 @@ if (!BOARD_MODE) {
         break
       case 'chatError': {
         // nothing was sent: the words go back in the box rather than being lost
-        const echo = CHAT.echo.get(id)
+        const lost = (CHAT.echo.get(id) || []).map(x => x.text).filter(Boolean).join('\n\n')
         CHAT.echo.delete(id)
         CHAT.state.set(id, { ...st, busy: false })
-        if (echo?.text && !CHAT.drafts.get(id)) {
-          CHAT.drafts.set(id, echo.text)
-          if (COMPOSER?.id === id) { COMPOSER.ta.value = echo.text; COMPOSER.fit() }
+        if (lost && !CHAT.drafts.get(id)) {
+          CHAT.drafts.set(id, lost)
+          if (COMPOSER?.id === id) { COMPOSER.ta.value = lost; COMPOSER.fit() }
         }
         note(id, m.error, true)
         break

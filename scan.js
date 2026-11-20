@@ -264,7 +264,7 @@ function summarise (file, prev, agent) {
  * changed on disk; deep throws the cache away and re-parses every transcript.
  */
 function rescan (deep) {
-  if (deep) { try { fs.unlinkSync(CACHE_FILE) } catch {} }
+  if (deep) { cacheMem = null; try { fs.unlinkSync(CACHE_FILE) } catch {} }
   return index(true).length
 }
 
@@ -465,13 +465,21 @@ function mergeUsage (to, from) {
   for (const [op, n] of Object.entries(from.ops || {})) to.ops[op] = (to.ops[op] || 0) + n
 }
 
+// The summaries from the last pass, kept in memory. While a chat is being
+// written the list is refreshed every second, and reading and rewriting the
+// whole cache file (megabytes) each time was most of that pass's cost.
+let cacheMem = null
 function index (force) {
   if (!force && memo && Date.now() - memoAt < 3000) return memo
-  let cache = {}
-  try {
-    const raw = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'))
-    if (raw && raw.v === CACHE_V) cache = raw.files || {}
-  } catch {}
+  let cache = cacheMem
+  if (!cache) {
+    cache = {}
+    try {
+      const raw = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'))
+      if (raw && raw.v === CACHE_V) cache = raw.files || {}
+    } catch {}
+  }
+  let changed = !cacheMem
   const next = {}, out = []
   let dirs = []
   try { dirs = fs.readdirSync(PROJECTS) } catch { memo = []; memoAt = Date.now(); return memo }
@@ -484,6 +492,7 @@ function index (force) {
       let mt; try { mt = fs.statSync(file).mtimeMs } catch { continue }
       const hit = cache[file]
       const rec = hit && hit.mtime === mt ? hit : { mtime: mt, s: summarise(file, hit?.s) }
+      if (rec !== hit) changed = true
       if (!rec.s) continue
       next[file] = rec
       out.push(withAgents(rec.s, cache, next))
@@ -494,12 +503,16 @@ function index (force) {
     let mt; try { mt = fs.statSync(file).mtimeMs } catch { continue }
     const hit = cache[file]
     const rec = hit && hit.mtime === mt ? hit : { mtime: mt, s: summariseCodex(file) }
+    if (rec !== hit) changed = true
     if (!rec.s) continue
     next[file] = rec                                // cached either way, so the parse is not repeated
     if (!rec.s.messages || imported.has(rec.s.id)) continue
     out.push(rec.s)
   }
-  try { writePrivate(CACHE_FILE, JSON.stringify({ v: CACHE_V, files: next })) } catch {}
+  // a file that went away changes the set too
+  if (!changed && Object.keys(next).length !== Object.keys(cache).length) changed = true
+  if (changed) { try { writePrivate(CACHE_FILE, JSON.stringify({ v: CACHE_V, files: next })) } catch {} }
+  cacheMem = next
   // a name we keep ourselves overrides the one read out of the file
   const titles = state().titles
   if (titles) {
