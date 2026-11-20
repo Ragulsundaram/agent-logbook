@@ -386,7 +386,7 @@ function paintComposer () {
   c.ta.placeholder = now?.asks?.length ? 'Answer Claude above first'
     : now?.busy ? 'Queue a message…'
     : where === 'here' || CHAT.here.has(id) ? 'Message Claude… (/ for commands)'
-      : 'Continue this chat here… (/ for commands)'
+      : 'Continue here… (/ for commands)'
   paintPickers(c)
   paintAsks(c)
   paintImages(c)

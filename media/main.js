@@ -1604,6 +1604,42 @@ function updateLive (t) {
   return true
 }
 
+/** The chat's actions when the message box is the main one: resume elsewhere, branch, export. */
+function chatMenu (anchor, t) {
+  document.querySelectorAll('body > .menu.chatmenu').forEach(m => m.remove())
+  const menu = el('div', 'menu chatmenu')
+  const item = (ico, label, hint, fn) => {
+    const b = el('button', 'menuitem')
+    b.append(icon(ico, 'mico'), el('span', '', label), el('em', '', hint || ''))
+    b.onclick = () => { kill(); fn() }
+    menu.appendChild(b)
+  }
+  const sep = () => menu.appendChild(el('div', 'menusep'))
+  for (const [key, spec] of Object.entries(TARGETS)) {
+    item(spec.icon, key === 'auto' ? 'Resume where it started' : `Resume in ${spec.label}`, spec.hint, () => {
+      TARGET = key
+      send({ type: 'setTarget', target: key })
+      send({ type: 'resume', id: t.id, target: key })
+    })
+  }
+  sep()
+  item('fork', 'Branch', 'full context, like /branch', () => send({ type: 'fork', id: t.id }))
+  item('brief', 'Fork with a brief', 'reads a summary', () => send({ type: 'forkBrief', id: t.id }))
+  sep()
+  item('chart', 'Stats', '', () => send({ type: 'analytics', id: t.id }))
+  item('reload', 'Reload', '', () => send({ type: 'session', id: t.id }))
+  item('export', 'Export as Markdown', '', () => send({ type: 'export', id: t.id }))
+  if (/^[\w-]+$/.test(t.id)) {
+    item('copy', 'Copy resume command', 'for a terminal', () => send({ type: 'copy', text: `claude --resume ${t.id}`, label: 'Resume command copied' }))
+  }
+  document.body.appendChild(menu)
+  const r = anchor.getBoundingClientRect()
+  const m = menu.getBoundingClientRect()
+  menu.style.left = `${Math.max(8, Math.min(r.right - m.width, window.innerWidth - m.width - 8))}px`
+  menu.style.top = `${Math.min(r.bottom + 4, window.innerHeight - m.height - 8)}px`
+  const kill = dismissOn(menu)
+}
+
 function showDetail (t, live) {
   // the whole chat arriving after its quick first copy: drawn afresh, since the
   // copy's messages were numbered from its own start, and held where the reader is
@@ -1707,7 +1743,16 @@ function showDetail (t, live) {
 
   // an agent thread has none of this: it cannot be resumed, forked or renamed
   if (isAgent) head.appendChild(agentActs(t))
-  else {
+  else if (CFG.chatHere !== false && !codex) {
+    // chatting here, the box under the chat is the main action: the rest goes in
+    // one menu on the title row instead of a toolbar that took 50-90px of a narrow panel
+    const more = el('button', 'iconbtn moremenu')
+    more.appendChild(icon('dots'))
+    more.title = 'Resume elsewhere, branch, export and more'
+    more.setAttribute('aria-label', 'More actions')
+    more.onclick = e => chatMenu(e.currentTarget, t)
+    top.appendChild(more)
+  } else {
     // ---- one resume button + a dropdown for where
     // one Resume button that honours the chosen target, plus a picker that sets it
     const acts = el('div', 'acts')
@@ -4678,6 +4723,7 @@ function renderSettings () {
     pick(here, 'chatEffort', 'Effort', 'how hard Claude thinks; /effort in a chat changes it', [
       ['', "Claude's own setting"], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']])
   }
+  box.prepend(here)          // the setting people come here for first, not 2,700px down
 
   const exp = section('export', 'Exporting', 'Where Export puts a chat, and what it writes there.')
   const dir = CFG.exportDirectory || ''
