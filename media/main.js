@@ -17,6 +17,13 @@ const ago = ts => {
   return s < 3600 ? Math.max(1, s / 60 | 0) + 'm' : s < 86400 ? (s / 3600 | 0) + 'h'
     : s < 6048e2 ? (s / 86400 | 0) + 'd' : (s / 6048e2 | 0) + 'w'
 }
+/** A message's stamp: the time alone for today, the full stamp otherwise. */
+const msgClock = ts => {
+  const d = new Date(ts)
+  if (d.toDateString() !== new Date().toDateString()) return clock(ts)
+  if (DATEFMT === 'iso') return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
 const clock = ts => {
   if (!ts) return ''
   const d = new Date(ts)
@@ -1435,10 +1442,18 @@ function renderBlocks (t, blocks, from, body, to = blocks.length, before = null)
     // copy button a code block puts in the same corner
     if (!next || next.role !== turn.role) {
       const when = el('div', 'when')
-      const text = run.join('\n\n')
-      if (text) when.appendChild(msgCopyButton(text))
-      when.appendChild(el('span', 'whot',
-        (turn.role === 'user' ? 'You' : 'Claude') + (turn.ts ? ' · ' + clock(turn.ts) : '')))
+      // the run's text is gathered when the button is pressed, not now: a live
+      // write then only has to redraw the blocks that changed, not the whole run
+      if (run.length || blocks.slice(runStart(blocks, bi), bi).some(x => x.text)) {
+        when.appendChild(msgCopyButton(() => {
+          const at = Number(w.dataset.bi)
+          return ALL_BLOCKS.slice(runStart(ALL_BLOCKS, at), at + 1).map(x => x.text).filter(Boolean).join('\n\n')
+        }))
+      }
+      // today's messages show just the time; the full date is on hover
+      const who = el('span', 'whot', (turn.role === 'user' ? 'You' : 'Claude') + (turn.ts ? ' · ' + msgClock(turn.ts) : ''))
+      if (turn.ts) who.title = clock(turn.ts)
+      when.appendChild(who)
       w.appendChild(when)
       run = []
     }
@@ -1520,10 +1535,11 @@ function updateLive (t) {
   let k = 0
   while (k < sigs.length && k < LAST_SIGS.length && sigs[k] === LAST_SIGS[k]) k++
   if (k < sigs.length || sigs.length !== LAST_SIGS.length) {
-    // back to the start of the run: the block that ended it carried the run's
-    // copy line, and if the run grew that line has to move to the new end
-    while (k > 0 && blocks[k - 1] && blocks[k] && blocks[k - 1].role === blocks[k].role &&
-      blocks[k].role !== 'note') k--
+    // one block back, not to the start of the run: only the block before the
+    // change can gain or lose the run's attribution line. Redrawing the whole
+    // run reset a selection, find marks and opened tool cards every second
+    // during a long turn.
+    if (k > 0) k--
     for (const n of [...body.children]) {
       if (Number(n.dataset.bi) >= k) { releaseImages(n); n.remove() }
     }
@@ -2037,12 +2053,13 @@ function turnChanges (edits, id) {
  * rendered text - blank lines and ** survive, so Slack and Linear format it
  * instead of showing a wall of text.
  */
-function msgCopyButton (text) {
+function msgCopyButton (textOrFn) {
   const cp = el('button', 'msgcopy')
   cp.appendChild(icon('copy'))
   cp.title = 'Copy this message'
   cp.onclick = e => {
     e.stopPropagation()
+    const text = typeof textOrFn === 'function' ? textOrFn() : textOrFn
     // both flavours, so Slack keeps the bold and the paragraph gaps
     if (!copyRich(text, flatHtml(window.md(text)))) {
       send({ type: 'copy', text, label: 'Message copied' })

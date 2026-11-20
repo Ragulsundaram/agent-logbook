@@ -7,6 +7,7 @@
 // work is the same; it just no longer holds the thread that handles clicks.
 const { parentPort } = require('node:worker_threads')
 const scan = require('./scan')
+scan.readOnlyCache()          // the extension keeps the chat-list cache; this thread only reads it
 
 // build the index while nothing is waiting on it, so the first search someone
 // actually types is not the one that pays for it

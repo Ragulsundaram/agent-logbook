@@ -60,8 +60,19 @@ function watchTranscripts (ctx) {
   const dirty = new Set()       // chat ids known to have changed, whatever noticed it
   const files = new Map()       // open chat id -> its transcript and how it last looked
   const stamp = f => { try { const s = fs.statSync(f); return s.size + ':' + s.mtimeMs } catch { return '' } }
+  // one refresh at a time: on a big chat a read can outlast the 1s gap, and
+  // overlapping ones queued up and delivered stale copies late
+  let flushing = false, again = false
   const flush = async () => {
     timer = null
+    if (flushing) { again = true; return }
+    flushing = true
+    try { await flushOnce() } finally {
+      flushing = false
+      if (again) { again = false; bump() }
+    }
+  }
+  const flushOnce = async () => {
     lastRun = Date.now()
     scan.index(true)
     broadcast({ type: 'sessions', data: scan.sessionList(live) })
@@ -416,6 +427,18 @@ function noteFinishes (list) {
   for (const id of [...FINISHED.keys()]) if (!list.some(x => x.id === id && x.live)) FINISHED.delete(id)
   LIVE_PREV = Object.fromEntries(list.filter(x => x.live).map(x => [x.id, x.live]))
   paintFinished()
+}
+
+/**
+ * One check of which chats are running, for every view at once. Asking the
+ * CLI starts a process each time, so it runs every 3s while a view is on
+ * screen and every 15s when none is - the status bar's "finished" note still
+ * needs it then. Each view used to run its own 3s check, never pausing.
+ */
+const ON_SCREEN = new Map()             // view -> is it on screen
+function livePoller () {
+  const onScreen = [...ON_SCREEN.values()].some(v => { try { return v() } catch { return false } })
+  pollLive().catch(() => {}).finally(() => { liveTimer = setTimeout(livePoller, onScreen ? 3000 : 15000) })
 }
 
 let livePolling = false, liveSig = ''
@@ -1435,7 +1458,7 @@ function chatSend (msg, post) {
 }
 
 /** Wire up a webview - used by both the sidebar view and the editor tab. */
-function wire (ctx, w, onDispose, mode) {
+function wire (ctx, w, onDispose, mode, isVisible = () => true) {
   {
     w.options = {
       enableScripts: true,
@@ -2118,15 +2141,16 @@ function wire (ctx, w, onDispose, mode) {
     pushLimits(post, 0)
     // busy/idle changes constantly while a session runs, so poll it far more
     // often than the plan limits, which only move every few minutes
+    ON_SCREEN.set(post, isVisible)
     let ticks = 0
     const timer = setInterval(() => {
-      pollLive()                                              // shared, async, change-only
+      // which chats are running is checked once for every view, by livePoller
       if (ticks % 3 === 0) pollResources()                   // memory and CPU every ~9s
       if (++ticks % 20 === 0) pushLimits(post, 120000)      // limits every ~60s
     }, 3000)
     pollResources(true)
     if (mode === 'sidebar') SIDEBAR = post
-    onDispose(() => { clearInterval(timer); VIEWS.delete(post); WATCH?.setOpen(post, null) })
+    onDispose(() => { clearInterval(timer); VIEWS.delete(post); ON_SCREEN.delete(post); WATCH?.setOpen(post, null) })
   }
 }
 
@@ -2135,7 +2159,8 @@ class HistoryView {
   resolveWebviewView (view) {
     this.view = view
     view.onDidDispose(() => { SIDEBAR = null })
-    wire(this.ctx, view.webview, fn => view.onDidDispose(fn), 'sidebar')
+    wire(this.ctx, view.webview, fn => view.onDidDispose(fn), 'sidebar', () => view.visible)
+    view.onDidChangeVisibility(() => { if (view.visible) pollLive().catch(() => {}) })
   }
 }
 
@@ -2264,7 +2289,8 @@ function openBoard (ctx) {
   BOARD = vscode.window.createWebviewPanel('claudeHistory.board', 'Live chats',
     vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true })
   BOARD.iconPath = tabIcon(ctx)
-  wire(ctx, BOARD.webview, fn => BOARD.onDidDispose(fn), 'board')
+  const board = BOARD
+  wire(ctx, BOARD.webview, fn => BOARD.onDidDispose(fn), 'board', () => board.visible)
   BOARD.onDidDispose(() => { BOARD = null })
   return BOARD
 }
@@ -2277,7 +2303,7 @@ function openInEditor (ctx, beside) {
     { enableScripts: true, retainContextWhenHidden: true },
   )
   panel.iconPath = tabIcon(ctx)
-  wire(ctx, panel.webview, fn => panel.onDidDispose(fn))
+  wire(ctx, panel.webview, fn => panel.onDidDispose(fn), undefined, () => panel.visible)
   return panel
 }
 
@@ -2370,6 +2396,7 @@ function activate (ctx) {
     vscode.window.onDidCloseTerminal(() => soon(250, 1200)),
     vscode.window.onDidOpenTerminal(() => soon(1200, 2500)))
   setImmediate(claudeBin)   // tells the scanner where claude is before the first live check
+  liveTimer = setTimeout(livePoller, 3000)
   WATCH = watchTranscripts(ctx)
   runner.init({
     bin: claudeBin,
@@ -2441,6 +2468,6 @@ function activate (ctx) {
   if (cfg('openOnStartup', false)) vscode.commands.executeCommand('claudeHistory.view.focus')
 }
 
-function deactivate () { clearInterval(liveTimer); runner.stopAll(true) }
+function deactivate () { clearTimeout(liveTimer); runner.stopAll(true); scan.saveCacheNow() }
 
 module.exports = { activate, deactivate }

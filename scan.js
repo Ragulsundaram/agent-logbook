@@ -428,11 +428,21 @@ function withAgents (base, cache, next) {
   let names
   try { names = fs.readdirSync(dir).filter(n => n.endsWith('.jsonl')) } catch { return base }
   if (!names.length) return base
+  // the merged copy is reused while neither the chat nor its agents changed:
+  // cloning every chat's summary on every refresh was most of the refresh
+  const stamps = names.map(n => { try { return fs.statSync(path.join(dir, n)).mtimeMs } catch { return 0 } })
+  const sig = names.join('|') + '#' + stamps.join('|')
+  const memo = AGENT_MERGED.get(base)
+  if (memo && memo.sig === sig) {
+    for (const n of names) { const f = path.join(dir, n); if (cache[f]) next[f] = cache[f] }
+    return memo.out
+  }
   const out = structuredClone(base)
   out.agentTokens = 0; out.agentCost = 0
-  for (const n of names) {
+  for (const [i, n] of names.entries()) {
     const f = path.join(dir, n)
-    let mt; try { mt = fs.statSync(f).mtimeMs } catch { continue }
+    const mt = stamps[i]
+    if (!mt) continue
     const hit = cache[f]
     const rec = hit && hit.mtime === mt ? hit : { mtime: mt, s: summarise(f, hit?.s, true) }
     if (!rec.s) continue
@@ -442,8 +452,10 @@ function withAgents (base, cache, next) {
   }
   out.tokens = Object.values(out.models).reduce((n, m) => n + m.input + m.output + m.cacheWrite + m.cacheRead, 0)
   out.cost = Object.entries(out.models).reduce((n, [m, u]) => n + costOf(m, u), 0)
+  AGENT_MERGED.set(base, { sig, out })
   return out
 }
+const AGENT_MERGED = new WeakMap()   // a chat's summary -> it merged with its agents' (freed with the summary)
 
 function mergeUsage (to, from) {
   for (const [m, u] of Object.entries(from.models || {})) {
@@ -463,6 +475,27 @@ function mergeUsage (to, from) {
   to.edits += from.edits || 0
   for (const [f, n] of Object.entries(from.files || {})) to.files[f] = (to.files[f] || 0) + n
   for (const [op, n] of Object.entries(from.ops || {})) to.ops[op] = (to.ops[op] || 0) + n
+}
+
+// Written by one thread only (the extension's own; worker threads read it), at
+// most every 30s, and through a temporary file so a write cut short or two
+// writers at once can never leave a broken cache - which meant re-reading every
+// chat on the next start.
+let cacheWriter = true, cacheSave = null
+const readOnlyCache = () => { cacheWriter = false }
+function saveCacheNow () {
+  clearTimeout(cacheSave); cacheSave = null
+  if (!cacheWriter || !cacheMem) return
+  try {
+    const tmp = `${CACHE_FILE}.${process.pid}.tmp`
+    writePrivate(tmp, JSON.stringify({ v: CACHE_V, files: cacheMem }))
+    fs.renameSync(tmp, CACHE_FILE)
+  } catch {}
+}
+function saveCacheSoon () {
+  if (!cacheWriter || cacheSave) return
+  cacheSave = setTimeout(saveCacheNow, 30000)
+  cacheSave.unref?.()
 }
 
 // The summaries from the last pass, kept in memory. While a chat is being
@@ -511,8 +544,8 @@ function index (force) {
   }
   // a file that went away changes the set too
   if (!changed && Object.keys(next).length !== Object.keys(cache).length) changed = true
-  if (changed) { try { writePrivate(CACHE_FILE, JSON.stringify({ v: CACHE_V, files: next })) } catch {} }
   cacheMem = next
+  if (changed) saveCacheSoon()
   // a name we keep ourselves overrides the one read out of the file
   const titles = state().titles
   if (titles) {
@@ -2853,4 +2886,4 @@ try {
 
 module.exports = {
   writePrivate, mkdirPrivate, board, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
-  groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME }
+  readOnlyCache, saveCacheNow, groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME }
