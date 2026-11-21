@@ -22,6 +22,7 @@ const STDERR_KEEP = 4000
 
 const RUNS = new Map()              // chat id -> its process and state
 const ENDED = new Map()             // chat id -> when its Claude here last quit
+const STOPPING = new Map()          // chat id -> a Claude told to leave that has not exited yet
 let OPTS = { bin: () => null, emit: () => {}, onChange: () => {} }
 // what the last Claude to start reported: offered before any chat has started
 let KNOWN = { commands: [], models: [] }
@@ -311,8 +312,17 @@ function onLine (r, m) {
  * A message sent while Claude is still working waits its turn, as typing
  * ahead in the terminal does.
  */
-function send (id, { text, images, cwd, fresh, forkOf, model, mode, effort }) {
+function send (id, args) {
+  const { text, images, cwd, fresh, forkOf, model, mode, effort } = args
   let r = RUNS.get(id)
+  // the last Claude on this chat is still on its way out: two writing one
+  // transcript would tangle it, so end that one and start once it has gone
+  const old = !r && STOPPING.get(id)
+  if (old && old.exitCode === null && old.signalCode === null) {
+    try { old.kill() } catch {}
+    old.once('exit', () => { STOPPING.delete(id); send(id, args) })
+    return true
+  }
   if (!r) r = start(id, { cwd, fresh, forkOf, model, mode, effort })
   const content = []
   for (const im of images || []) {
@@ -399,6 +409,9 @@ function stop (id, now) {
   const r = RUNS.get(id)
   if (!r) return
   r.stopping = true
+  // until it has really gone, a new Claude on this chat waits (see send)
+  STOPPING.set(id, r.proc)
+  r.proc.once('exit', () => { if (STOPPING.get(id) === r.proc) STOPPING.delete(id) })
   // out of the list at once: a message sent while it leaves starts a new Claude
   // rather than being written to one whose input is already closed
   if (RUNS.get(id) === r) RUNS.delete(id)

@@ -445,20 +445,21 @@ function withAgents (base, cache, next) {
   }
   const out = structuredClone(base)
   out.agentTokens = 0; out.agentCost = 0
+  let complete = true                 // an agent that could not be read is retried, not remembered
   for (const [i, n] of names.entries()) {
     const f = path.join(dir, n)
     const mt = stamps[i]
     if (!mt) continue
     const hit = cache[f]
     const rec = hit && hit.mtime === mt ? hit : { mtime: mt, s: summarise(f, hit?.s, true) }
-    if (!rec.s) continue
+    if (!rec.s) { complete = false; continue }
     next[f] = rec
     mergeUsage(out, rec.s)
     out.agentTokens += rec.s.tokens; out.agentCost += rec.s.cost
   }
   out.tokens = Object.values(out.models).reduce((n, m) => n + m.input + m.output + m.cacheWrite + m.cacheRead, 0)
   out.cost = Object.entries(out.models).reduce((n, [m, u]) => n + costOf(m, u), 0)
-  AGENT_MERGED.set(base, { sig, out })
+  if (complete) AGENT_MERGED.set(base, { sig, out })
   return out
 }
 const AGENT_MERGED = new WeakMap()   // a chat's summary -> it merged with its agents' (freed with the summary)
@@ -1340,7 +1341,10 @@ function turnsFor (id, part, ti) {
   return full?.turns
 }
 function imageAt (id, ti, ii, part) {
-  return turnsFor(id, part, ti)?.[ti]?.images?.[ii]?.src || null
+  const turns = turnsFor(id, part, ti)
+  // a picture added to a turn this copy already has: read on once and look again
+  if (!part && Number.isInteger(ii) && turns?.[ti] && !turns[ti].images?.[ii]) { full = null; ensureFull(id) }
+  return (part ? turns : full?.turns)?.[ti]?.images?.[ii]?.src || null
 }
 
 const lines = s => (s ? String(s).split('\n').length : 0)

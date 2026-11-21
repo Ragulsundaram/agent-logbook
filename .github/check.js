@@ -46,15 +46,17 @@ if (base) {
   for (const f of git('diff', '--name-only', `${base}...HEAD`).split('\n').filter(Boolean)) {
     if (SENSITIVE.test(f)) flags.push(`${f}: sensitive file changed, read every line`)
   }
-  let file = ''
+  let file = '', hunkFn = ''
   for (const line of git('diff', '--unified=0', `${base}...HEAD`).split('\n')) {
     if (line.startsWith('+++ ')) file = line.slice(6)
+    // git names the function each change sits in after the hunk's second @@
+    else if (line.startsWith('@@')) hunkFn = line.replace(/^@@[^@]*@@ ?/, '')
     // The clipboard and PATH code already starts shells; a PR may not add another.
     // The one allowed exception is shell mode in the message box (chatShell in
     // extension.js), which runs only what the user typed after "!" - matched on
     // its exact line, so any other shell still fails.
     else if (line.startsWith('+') && /\.js$/.test(file) && /['"](\/bin\/)?(sh|bash|zsh|dash|fish|powershell|pwsh|cmd|cmd\.exe)['"]|process\.env\.SHELL/.test(line) &&
-      !(file === 'extension.js' && /^\+  const sh = process\.env\.SHELL \|\| '\/bin\/zsh'$/.test(line))) errors.push(`${file}: new line starts a shell (AGENTS.md rule 4)`)
+      !(file === 'extension.js' && /^function chatShell \(/.test(hunkFn) && /^\+  const sh = process\.env\.SHELL \|\| '\/bin\/zsh'$/.test(line))) errors.push(`${file}: new line starts a shell (AGENTS.md rule 4)`)
     else if (line.startsWith('+') && line.length > 300 && !/<svg|'M[\d.\s,-]/.test(line)) flags.push(`${file}: new line of ${line.length - 1} characters, check it is not hidden code`)
     // Allowed in the code today, but a new use needs a human to read where its input comes from.
     else if (line.startsWith('+') && /openExternal|Uri\.parse|execFile|spawn\s*\(|new\s+Worker|writeFile|sendText|innerHTML|outerHTML|insertAdjacentHTML/.test(line)) flags.push(`${file}: new ${line.match(/openExternal|Uri\.parse|execFile|spawn|Worker|writeFile|sendText|innerHTML|outerHTML|insertAdjacentHTML/)[0]} call, check what feeds it`)

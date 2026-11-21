@@ -189,7 +189,7 @@ let chatSeq = 0
 const chatWaiting = new Map()       // id -> { fn, args, resolve }
 const chatHere = (fn, args) => { try { return scan[fn](...args) } catch { return null } }
 
-function chatWorker (lane) {
+function chatWorker (lane = 'main') {
   if (CHATW[lane]) return CHATW[lane]
   const { Worker } = require('node:worker_threads')
   const w = new Worker(path.join(__dirname, 'chat-worker.js'))
@@ -1453,8 +1453,11 @@ function chatShell (msg, post) {
   const sh = process.env.SHELL || '/bin/zsh'
   const env = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' }
   delete env.CLAUDECODE
-  const p = require('node:child_process').spawn(sh, ['-lc', cmd], { cwd, env })
+  // its own process group, so Stop ends everything the command started, not just the shell
+  const p = require('node:child_process').spawn(sh, ['-lc', cmd], { cwd, env, detached: true })
   SHELLS.set(key, p)
+  p.stdout.setEncoding('utf8')                // a character split across chunks stays whole
+  p.stderr.setEncoding('utf8')
   let out = '', pending = '', timer = null
   const flush = () => { timer = null; if (pending) { post({ type: 'chatShellOut', id, key, chunk: pending }); pending = '' } }
   const take = d => {
@@ -1486,6 +1489,7 @@ let PRUNED_AT = 0
 function prunePastes () {
   if (Date.now() - PRUNED_AT < 3600e3) return       // once an hour is plenty for a week's limit
   PRUNED_AT = Date.now()
+  if (!fs.existsSync(PASTE_DIR)) return
   for (const f of fs.readdirSync(PASTE_DIR)) {
     const p = path.join(PASTE_DIR, f)
     try { if (Date.now() - fs.statSync(p).mtimeMs > 7 * 864e5) fs.rmSync(p) } catch {}
@@ -1503,7 +1507,7 @@ function pastedNote (id, list) {
     prunePastes()
     pics.forEach((im, i) => {
       const ext = im.mediaType.split('/')[1].replace('jpeg', 'jpg')
-      const p = path.join(PASTE_DIR, `${id}-${Date.now()}-${i + 1}.${ext}`)
+      const p = path.join(PASTE_DIR, `${id}-${Date.now()}-${require('node:crypto').randomBytes(4).toString('hex')}-${i + 1}.${ext}`)
       scan.writePrivate(p, Buffer.from(im.data, 'base64'))
       paths.push(p)
     })
@@ -1542,13 +1546,25 @@ async function announceChat (ctx) {
   }
 }
 
-/** Commands run since the last message, in the shape Claude Code's terminal writes them. */
+/** End a "!" command and everything it started. */
+function stopShell (p) {
+  try { process.kill(-p.pid, 'SIGTERM') } catch { try { p.kill() } catch {} }
+}
+
+/**
+ * Commands run since the last message, in the shape Claude Code's terminal
+ * writes them. Read without taking them: they are dropped only once the message
+ * carrying them was accepted, so a send that fails keeps them for the retry.
+ */
 function shellContext (id) {
   const list = SHELL_OUT.get(id)
-  if (!list?.length) return ''
-  SHELL_OUT.delete(id)
-  return list.map(x => `<bash-input>${x.cmd}</bash-input>\n<bash-stdout>${x.out.trimEnd()}</bash-stdout>` +
-    (x.code ? `\n<bash-stderr>Exited with code ${x.code}</bash-stderr>` : '')).join('\n') + '\n\n'
+  if (!list?.length) return { text: '', n: 0 }
+  return { n: list.length, text: list.map(x => `<bash-input>${x.cmd}</bash-input>\n<bash-stdout>${x.out.trimEnd()}</bash-stdout>` +
+    (x.code ? `\n<bash-stderr>Exited with code ${x.code}</bash-stderr>` : '')).join('\n') + '\n\n' }
+}
+function dropShell (id, n) {
+  const left = (SHELL_OUT.get(id) || []).slice(n)       // ones finished since stay for the next message
+  if (left.length) SHELL_OUT.set(id, left); else SHELL_OUT.delete(id)
 }
 
 function clearCutoff (id) {
@@ -1575,8 +1591,9 @@ function chatSend (msg, post) {
       typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < 7e6)
   if (!text.trim() && !images.length) return
   const pick = (v, ok) => ok(v) ? v : ''
+  const shell = shellContext(id)
   const opts = {
-    text: shellContext(id) + text, images,
+    text: shell.text + text, images,
     model: pick(String(msg.model || ''), v => /^[\w.[\]-]{0,60}$/.test(v)),
     mode: pick(msg.mode, v => CHAT_MODES.includes(v)) || pick(cfg('chatPermissionMode', 'default'), v => CHAT_MODES.includes(v)),
     effort: pick(msg.effort, v => CHAT_EFFORTS.includes(v)),
@@ -1597,17 +1614,22 @@ function chatSend (msg, post) {
     if (!opts.cwd || !fs.existsSync(opts.cwd)) return fail(`This chat's folder no longer exists${opts.cwd ? `: ${opts.cwd}` : '.'}`)
   }
   try {
-    runner.send(id, opts)
+    // not taken (Claude had stopped): keep everything for the retry
+    if (!runner.send(id, opts)) return
+    dropShell(id, shell.n)
     NEW_CHATS.delete(id)
     clearCutoff(id)
   } catch (e) { return fail(e.message) }
   seenChat(id)
 }
 
+/** A value made safe for an HTML attribute. */
+const attr = v => String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+
 /** Wire up a webview - used by both the sidebar view and the editor tab. */
 function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
   // the one value put into the page's HTML: a chat id, and only a plain one
-  const chatId = /^[\w-]+$/.test(String(opts.chat || '')) ? opts.chat : ''
+  const chatId = /^[\w-]+$/.test(String(opts.chat || '')) ? attr(opts.chat) : ''
   {
     w.options = {
       enableScripts: true,
@@ -1670,6 +1692,11 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             broadcast({ type: 'limits', data: limitsNow() })
             break
           case 'session': {
+            // a one-chat tab keeps its chat: another one (a branch link) gets its own tab
+            if (opts.chat && msg.id !== opts.chat) {
+              if (/^[\w-]+$/.test(String(msg.id || ''))) openChatTab(ctx, msg.id, true)
+              break
+            }
             seenChat(msg.id)
             WATCH?.setOpen(post, msg.id)
             // clicked again while the whole chat is still being read: wait for that
@@ -2022,7 +2049,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             chatShell(msg, post)
             break
           case 'chatShellStop':
-            SHELLS.get(String(msg.key || ''))?.kill('SIGTERM')
+            if (SHELLS.has(String(msg.key || ''))) stopShell(SHELLS.get(String(msg.key)))
             break
           case 'chatCutoffClear':
             clearCutoff(String(msg.id || ''))
@@ -2660,6 +2687,10 @@ function activate (ctx) {
     // what the logbook's own Claude is doing is known here: no need to ask the CLI
     onChange: () => { if (DEACTIVATED) return; Object.assign(live, runner.liveMap()); publishLive() },
   })
+  // pasted pictures go after a week whether or not another is ever pasted
+  setTimeout(() => { try { prunePastes() } catch {} }, 20000)
+  const pruner = setInterval(() => { PRUNED_AT = 0; try { prunePastes() } catch {} }, 864e5)
+  ctx.subscriptions.push({ dispose: () => clearInterval(pruner) })
   // said once, a few seconds in, so it does not land on top of the editor starting up
   setTimeout(() => announceChat(ctx).catch(() => {}), 4000)
   const provider = new HistoryView(ctx)
@@ -2737,7 +2768,7 @@ function deactivate () {
   DEACTIVATED = true
   clearTimeout(liveTimer)
   // a "!" command still running would carry on with nobody to see it
-  for (const p of SHELLS.values()) { try { p.kill() } catch {} }
+  for (const p of SHELLS.values()) stopShell(p)
   // a reply in progress, or a question waiting on you, dies with the window:
   // note which, so each chat can offer to carry on after the reload
   const busy = Object.entries(runner.liveMap()).filter(([, s]) => s !== 'idle').map(([id]) => id)

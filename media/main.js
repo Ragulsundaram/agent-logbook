@@ -1104,7 +1104,7 @@ function putImage (m) {
  */
 let PENDING_CHAT = null
 function showPending (id) {
-  closeDetail()
+  closeDetail(true)
   PENDING_CHAT = id
   $('#tabs').hidden = TAB === 'chats'   // a chat opened in the background must not take the tab row from another page
   $('#view-chats .bar').hidden = true
@@ -1124,8 +1124,9 @@ function showPending (id) {
   d.append(head, wait)
 }
 
-function closeDetail () {
-  if (CHAT_ONLY) return
+function closeDetail (forPending) {
+  // a one-chat tab keeps its chat, except to make room for a copy started from it
+  if (CHAT_ONLY && !forPending) return
   if (CUR) PENDING_CHAT = null
   CUR = null
   SEEN.disconnect()

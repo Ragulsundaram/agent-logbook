@@ -89,7 +89,11 @@ function whereRunning (id) {
  */
 function chatMount () {
   if (BOARD_MODE) return
-  if (!chatOn()) { COMPOSER?.root.remove(); return }
+  if (!chatOn()) {
+    // the mode, status and live area were moved out of the box: they go too
+    if (COMPOSER) { for (const n of [COMPOSER.root, COMPOSER.live, COMPOSER.mode, COMPOSER.status]) n.remove(); COMPOSER = null }
+    return
+  }
   const t = chatTarget()
   if (!t) return
   const d = $('#detail')
@@ -335,14 +339,21 @@ function addImage (c, file) {
   if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) { note(c.id, 'Only PNG, JPEG, GIF and WebP pictures can be sent.', true); return }
   if (file.size > MAX_IMAGE) { note(c.id, 'That picture is over 5 MB.', true); return }
   const r = new FileReader()
+  c.reading = (c.reading || 0) + 1
+  const done = () => {
+    c.reading--
+    if (!c.reading && c.sendWhenRead) { c.sendWhenRead = false; submit(c) }
+  }
+  r.onerror = () => { note(c.id, 'That picture could not be read.', true); done() }
   r.onload = () => {
     const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(String(r.result))
-    if (!m) return
+    if (!m) { done(); return }
     const list = CHAT.images.get(c.id) || []
     list.push({ mediaType: m[1], data: m[2], url: String(r.result) })
     CHAT.images.set(c.id, list.slice(0, 8))
     paintImages(c)
     paintGo(c)
+    done()
   }
   r.readAsDataURL(file)
 }
@@ -365,6 +376,8 @@ function paintImages (c) {
 }
 
 function submit (c) {
+  // a picture pasted a moment ago may still be loading: send once it is in
+  if (c.reading) { c.sendWhenRead = true; return }
   const id = c.id
   const text = c.ta.value
   const images = CHAT.images.get(id) || []
@@ -378,6 +391,7 @@ function submit (c) {
     if (!cmd) return
     const key = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
     CHAT.shell.set(id, [...(CHAT.shell.get(id) || []), { key, cmd, out: '', running: true, code: null }])
+    CHAT.sentLog.set(id, [...(CHAT.sentLog.get(id) || []), text].slice(-50))
     send({ type: 'chatShell', id, key, cmd })
     c.ta.value = ''
     c.fit()
@@ -396,7 +410,7 @@ function submit (c) {
   for (const sh of CHAT.shell.get(id) || []) if (!sh.running && !sh.sentWith) { sh.sentWith = text; sh.sentAt = Date.now() }
   send({ type: 'chatSend', id, text, images: images.map(im => ({ mediaType: im.mediaType, data: im.data })), model: p.model, mode: p.mode, effort: p.effort })
   const queued = !!CHAT.state.get(id)?.busy
-  CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, images: images.length, at: Date.now(), queued }])
+  CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, images: images.length, pics: images, at: Date.now(), queued }])
   CHAT.notes.delete(id)
   CHAT.done.delete(id)
   CHAT.drafts.delete(id)
@@ -430,7 +444,9 @@ function recall (c, dir) {
   if (!walking) {
     if (dir > 0) return false
     // what this chat has from you: its transcript, plus anything sent since
+    // a "!" command from the transcript is not offered: only one typed here may run
     const mine = (CUR?.id === c.id ? CUR.turns || [] : []).filter(t => t.role === 'user' && t.text).map(t => String(t.text))
+      .filter(t => !/^\s*!/.test(t))
     for (const s of CHAT.sentLog.get(c.id) || []) if (!mine.slice(-5).includes(s)) mine.push(s)
     const list = mine.filter((s, i) => s.trim() && s !== mine[i - 1])
     if (!list.length) return false
@@ -501,10 +517,13 @@ function paintComposer () {
     go.title = 'Asks Claude to pick up where it stopped'
     go.onclick = () => {
       // sent as its own message: whatever you had typed stays in the box
-      const draft = c.ta.value
+      const draft = c.ta.value, pics = CHAT.images.get(id)
+      CHAT.images.delete(id)
       c.ta.value = 'Your last reply was cut off when the editor window reloaded. Please continue from where you stopped.'
       submit(c)
-      if (draft) { c.ta.value = draft; CHAT.drafts.set(id, draft); c.fit(); paintGo(c) }
+      if (pics?.length) { CHAT.images.set(id, pics); paintImages(c) }
+      if (draft) { c.ta.value = draft; CHAT.drafts.set(id, draft); c.fit() }
+      paintGo(c)
     }
     const x = el('button', 'btn', 'Dismiss')
     x.onclick = () => { CHAT.cutoff.delete(id); send({ type: 'chatCutoffClear', id }); paintComposer() }
@@ -834,7 +853,8 @@ function questionCard (c, a) {
   // saves them as files and the answer tells Claude where to open them
   const pics = qs.map(() => [])
   const sendBtn = el('button', 'btn pri', qs.length > 1 ? 'Send answers' : 'Send answer')
-  const ready = () => { sendBtn.disabled = !qs.every((q, i) => chosen[i].size || other[i]?.value.trim() || pics[i].length) }
+  let loading = 0                 // pictures still being read: Send waits for them
+  const ready = () => { sendBtn.disabled = loading > 0 || !qs.every((q, i) => chosen[i].size || other[i]?.value.trim() || pics[i].length) }
   card.appendChild(el('div', 'caskhead', qs.length > 1 ? 'Claude has some questions' : 'Claude has a question'))
   qs.forEach((q, i) => {
     const box = el('div', 'caskq')
@@ -880,9 +900,12 @@ function questionCard (c, a) {
       for (const f of files) {
         if (!/^image\/(png|jpeg|gif|webp)$/.test(f.type) || f.size > MAX_IMAGE) { note(c.id, 'Only PNG, JPEG, GIF and WebP pictures under 5 MB can be sent.', true); continue }
         const r = new FileReader()
+        loading++; ready()
+        r.onerror = () => { loading--; note(c.id, 'That picture could not be read.', true); ready() }
         r.onload = () => {
+          loading--
           const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(String(r.result))
-          if (!m) return
+          if (!m) { ready(); return }
           pics[i] = [...pics[i], { mediaType: m[1], data: m[2], url: String(r.result) }].slice(0, 4)
           for (const x of opts.children) x.classList.remove('on')
           chosen[i].clear()
@@ -1069,8 +1092,13 @@ if (!BOARD_MODE) {
         // nothing was sent: the words go back in the box rather than being lost
         // only the newest: earlier ones may have gone through and just not landed yet
         const echoes = CHAT.echo.get(id) || []
-        const lost = echoes.length ? echoes[echoes.length - 1].text || '' : ''
+        const last = echoes[echoes.length - 1]
+        const lost = last?.text || ''
         if (echoes.length > 1) CHAT.echo.set(id, echoes.slice(0, -1)); else CHAT.echo.delete(id)
+        // its pictures come back too, unless a newer draft already has some
+        if (last?.pics?.length && !(CHAT.images.get(id) || []).length) CHAT.images.set(id, last.pics)
+        // and the commands it carried wait for the retry rather than counting as sent
+        for (const sh of CHAT.shell.get(id) || []) if (last && sh.sentWith === last.text) { sh.sentWith = null; sh.sentAt = 0 }
         CHAT.state.set(id, { ...st, busy: false })
         if (lost && !CHAT.drafts.get(id)) {
           CHAT.drafts.set(id, lost)
