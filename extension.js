@@ -461,6 +461,7 @@ async function pollLive () {
     // finished chat kept saying Claude was working.
     const list = scan.sessionList(live)
     noteFinishes(list)
+    paintChatTabs(list)
     const sig = list.filter(x => x.live).map(x => x.id + ':' + x.live).sort().join(',')
     if (sig === liveSig) return
     liveSig = sig
@@ -2435,12 +2436,38 @@ function openChatTab (ctx, id, beside) {
   fillChatTab(ctx, panel, id)
   return panel
 }
+// the tab says whether its chat is working or waiting on you, so a row of chat
+// tabs reads like the list: a coloured dot icon, and a mark before the name
+const TAB_STATE = new WeakMap()          // panel -> { base, state }
+function paintChatTab (ctx, panel, state) {
+  const was = TAB_STATE.get(panel) || { base: panel.title, state: '' }
+  const now = { base: was.base, state: state === 'busy' || state === 'waiting' ? state : '' }
+  TAB_STATE.set(panel, now)
+  panel.title = (now.state === 'busy' ? '● ' : now.state === 'waiting' ? '◆ ' : '') + now.base
+  if (now.state === was.state && panel.iconPath) return
+  const f = now.state === 'busy' ? 'tab-busy.svg' : now.state === 'waiting' ? 'tab-wait.svg' : ''
+  panel.iconPath = f ? vscode.Uri.joinPath(ctx.extensionUri, 'media', f) : tabIcon(ctx)
+}
+function paintChatTabs (list) {
+  if (!CHAT_TABS.size || !EXT_CTX) return
+  const by = new Map(list.map(x => [x.id, x.live]))
+  for (const [id, panel] of CHAT_TABS) paintChatTab(EXT_CTX, panel, by.get(id))
+}
+let EXT_CTX = null
+
 function fillChatTab (ctx, panel, id) {
   CHAT_TABS.set(id, panel)
-  panel.iconPath = tabIcon(ctx)
+  EXT_CTX = ctx
+  TAB_STATE.set(panel, { base: panel.title, state: '' })
+  paintChatTab(ctx, panel, live[id])
   wire(ctx, panel.webview, fn => panel.onDidDispose(fn), 'chat', () => panel.visible, {
     chat: id,
-    onTitle: t => { if (t) panel.title = t.length > 32 ? t.slice(0, 31) + '…' : t },
+    onTitle: t => {
+      if (!t) return
+      const st = TAB_STATE.get(panel) || { state: '' }
+      TAB_STATE.set(panel, { ...st, base: t.length > 32 ? t.slice(0, 31) + '…' : t })
+      paintChatTab(ctx, panel, st.state)
+    },
     retarget: (from, to) => { if (CHAT_TABS.get(from) === panel) CHAT_TABS.delete(from); CHAT_TABS.set(to, panel); id = to },
   })
   panel.onDidDispose(() => { if (CHAT_TABS.get(id) === panel) CHAT_TABS.delete(id) })
