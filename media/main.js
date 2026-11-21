@@ -852,20 +852,6 @@ function fillViewport () {
   })
 }
 
-/** More rows as you reach the end, rather than a button for every batch. */
-function onListScroll () {
-  const box = $('#rows')
-  if (!box || box.scrollTop + box.clientHeight < box.scrollHeight - 160) return
-  let grew = false
-  for (const [k, total] of GROUPSIZE) {
-    const at = SHOWN.get(k) || PAGE
-    if (at >= total) continue
-    SHOWN.set(k, at + MORE)
-    grew = true
-    break                                  // one folder at a time, in order
-  }
-  if (grew) draw()
-}
 const GROUPSIZE = new Map()
 
 /** Search results: a summary line, then one card per chat, expandable to its hits. */
@@ -3385,7 +3371,7 @@ window.addEventListener('message', e => {
   }
   if (m.type === 'analytics') showAnalytics(m.data)
 })
-$('#rows').onscroll = onListScroll
+// more chats come from each folder's "Show more": scrolling near it used to press it for you
 // a wider or taller panel should fill itself too
 new ResizeObserver(() => { if ($('#detail').hidden) fillViewport() }).observe($('#rows'))
 
