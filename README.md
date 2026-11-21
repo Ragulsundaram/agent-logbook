@@ -84,7 +84,9 @@ after a week.
 **Runs** your own `claude` CLI when you send a message from the logbook. Claude
 Code does the work exactly as it would in a terminal - its own network
 requests, file edits and transcript writes, each edit or command approved by
-you unless you chose a mode that skips asking. The extension itself sends
+you unless you chose a mode that skips asking ("Always allow" on an approval
+saves the rule Claude suggests to its own settings, as the terminal's "don't ask
+again" does). The extension itself sends
 nothing to the network for this; it only talks to that local process. A message
 you type starting with `!` runs in your own shell in the chat's folder, as it
 would in a terminal, and Claude gets the command and its output with your next

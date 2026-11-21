@@ -312,16 +312,15 @@ async function pollResources (force) {
  * and its parent is gone, so nothing can type to it or answer its questions.
  * Anything else running the chat - a terminal, the Claude extension - is left alone.
  */
-function orphanPid (id) {
+async function orphanPid (id) {
   if (!/^[\w-]+$/.test(String(id || '')) || runner.has(id)) return 0
   const pid = scan.livePid(id)
   if (!pid) return 0
-  try {
-    const out = require('node:child_process')
-      .execFileSync('ps', ['-o', 'ppid=,args=', '-p', String(pid)], { encoding: 'utf8', timeout: 3000 }).trim()
-    const m = /^(\d+)\s+(.*)$/s.exec(out)
-    return m && m[1] === '1' && /--input-format[ =]stream-json/.test(m[2]) && m[2].includes(id) ? pid : 0
-  } catch { return 0 }
+  // asked without blocking: this runs each time a chat is opened
+  const out = await new Promise(resolve => require('node:child_process').execFile('ps', ['-o', 'ppid=,args=', '-p', String(pid)],
+    { encoding: 'utf8', timeout: 3000 }, (err, stdout) => resolve(err ? '' : String(stdout).trim())))
+  const m = /^(\d+)\s+(.*)$/s.exec(out)
+  return m && m[1] === '1' && /--input-format[ =]stream-json/.test(m[2]) && m[2].includes(id) ? pid : 0
 }
 
 /** Every process at or under a pid, deepest first, so children go before parents. */
@@ -436,7 +435,9 @@ function noteFinishes (list) {
  * needs it then. Each view used to run its own 3s check, never pausing.
  */
 const ON_SCREEN = new Map()             // view -> is it on screen
+let DEACTIVATED = false
 function livePoller () {
+  if (DEACTIVATED) return
   const onScreen = [...ON_SCREEN.values()].some(v => { try { return v() } catch { return false } })
   pollLive().catch(() => {}).finally(() => { liveTimer = setTimeout(livePoller, onScreen ? 3000 : 15000) })
 }
@@ -454,19 +455,23 @@ async function pollLive () {
     Object.assign(next, runner.liveMap())
     live = next
     syncActiveTabName().catch(() => {})          // a new chat may have been titled since
-    // Compare what the panel actually shows, not just what claude reports. A chat
-    // written to in the last few seconds counts as busy even before its status
-    // catches up, and that lapses on a clock rather than on any event - compared
-    // on the reported status alone, the lapse never reached the panel and a
-    // finished chat kept saying Claude was working.
-    const list = scan.sessionList(live)
-    noteFinishes(list)
-    paintChatTabs(list)
-    const sig = list.filter(x => x.live).map(x => x.id + ':' + x.live).sort().join(',')
-    if (sig === liveSig) return
-    liveSig = sig
-    broadcast({ type: 'sessions', data: list })
+    publishLive()
   } finally { livePolling = false }
+}
+
+function publishLive () {
+  // Compare what the panel actually shows, not just what claude reports. A chat
+  // written to in the last few seconds counts as busy even before its status
+  // catches up, and that lapses on a clock rather than on any event - compared
+  // on the reported status alone, the lapse never reached the panel and a
+  // finished chat kept saying Claude was working.
+  const list = scan.sessionList(live)
+  noteFinishes(list)
+  paintChatTabs(list)
+  const sig = list.filter(x => x.live).map(x => x.id + ':' + x.live).sort().join(',')
+  if (sig === liveSig) return
+  liveSig = sig
+  broadcast({ type: 'sessions', data: list })
 }
 
 /**
@@ -1129,10 +1134,14 @@ function followNewChat (sid, post, term) {
   const started = Date.now()
   // a chat started in the logbook has no terminal: it ends when Claude does
   const ended = term ? () => term.exitStatus !== undefined : () => false
+  // the view may have closed in the meantime
+  const tell = m => { try { post(m) } catch {} }
   const tick = setInterval(async () => {
     if (ended() || Date.now() - started > 3600e3) {
-      clearInterval(tick); post({ type: 'pendingGone', id: sid }); return
+      clearInterval(tick); NEW_CHATS.delete(sid); tell({ type: 'pendingGone', id: sid }); return
     }
+    // a logbook chat has no file until its first message: nothing to look for yet
+    if (!term && NEW_CHATS.has(sid)) return
     let found = false
     try {
       for (const d of fs.readdirSync(projects)) {
@@ -1145,7 +1154,7 @@ function followNewChat (sid, post, term) {
     const data = await chatCall('transcript', sid)
     if (!data) return
     WATCH?.setOpen(post, sid)
-    post({ type: 'session', data, fromPending: true })
+    tell({ type: 'session', data, fromPending: true })
   }, 1000)
 }
 
@@ -1424,8 +1433,8 @@ function cutoffs () {
 }
 function saveCutoffs (m) {
   try {
-    fs.mkdirSync(path.dirname(CUTOFF_FILE), { recursive: true })
-    fs.writeFileSync(CUTOFF_FILE, JSON.stringify(m))
+    scan.mkdirPrivate(path.dirname(CUTOFF_FILE))
+    scan.writePrivate(CUTOFF_FILE, JSON.stringify(m))
   } catch {}
 }
 // "!" commands typed in the logbook: running ones, and finished output waiting to
@@ -1438,7 +1447,7 @@ function chatShell (msg, post) {
   if (!/^[\w-]+$/.test(id) || !/^\w+$/.test(key) || !cmd.trim()) return
   const end = (code, extra) => post({ type: 'chatShellEnd', id, key, code, chunk: extra || '' })
   const s = scan.index().find(x => x.id === id)
-  const cwd = runner.cwdOf?.(id) || NEW_CHATS.get(id)?.cwd || s?.cwd
+  const cwd = runner.cwdOf(id) || NEW_CHATS.get(id)?.cwd || s?.cwd
   if (!cwd || !fs.existsSync(cwd)) return end(1, 'The chat\'s folder was not found.\n')
   // your login shell, so PATH and tools match a terminal
   const sh = process.env.SHELL || '/bin/zsh'
@@ -1460,9 +1469,9 @@ function chatShell (msg, post) {
   p.on('close', code => {
     SHELLS.delete(key)
     clearTimeout(timer); flush()
-    const list = SHELL_OUT.get(id) || []
-    // the tail is what matters in a long install log, and keeps Claude's context sane
-    list.push({ cmd, out: out.length > 20000 ? '…' + out.slice(-20000) : out, code: code ?? 1 })
+    // the tail is what matters in a long install log, and keeps Claude's context sane;
+    // the last few commands at most, for a chat that may never send again
+    const list = [...(SHELL_OUT.get(id) || []), { cmd, out: out.length > 20000 ? '…' + out.slice(-20000) : out, code: code ?? 1 }].slice(-5)
     SHELL_OUT.set(id, list)
     end(code ?? 1)
   })
@@ -1473,6 +1482,15 @@ function chatShell (msg, post) {
  * them with its Read tool. Kept a week.
  */
 const PASTE_DIR = path.join(require('node:os').homedir(), '.agent-logbook', 'pastes')
+let PRUNED_AT = 0
+function prunePastes () {
+  if (Date.now() - PRUNED_AT < 3600e3) return       // once an hour is plenty for a week's limit
+  PRUNED_AT = Date.now()
+  for (const f of fs.readdirSync(PASTE_DIR)) {
+    const p = path.join(PASTE_DIR, f)
+    try { if (Date.now() - fs.statSync(p).mtimeMs > 7 * 864e5) fs.rmSync(p) } catch {}
+  }
+}
 function pastedNote (id, list) {
   const pics = (Array.isArray(list) ? list : []).slice(0, 4)
     .filter(im => im && /^image\/(png|jpeg|gif|webp)$/.test(im.mediaType) &&
@@ -1480,15 +1498,13 @@ function pastedNote (id, list) {
   if (!pics.length || !/^[\w-]+$/.test(String(id))) return ''
   const paths = []
   try {
-    fs.mkdirSync(PASTE_DIR, { recursive: true })
-    for (const f of fs.readdirSync(PASTE_DIR)) {
-      const p = path.join(PASTE_DIR, f)
-      try { if (Date.now() - fs.statSync(p).mtimeMs > 7 * 864e5) fs.rmSync(p) } catch {}
-    }
+    // screenshots can hold anything: readable by you only, like the cache
+    scan.mkdirPrivate(PASTE_DIR)
+    prunePastes()
     pics.forEach((im, i) => {
       const ext = im.mediaType.split('/')[1].replace('jpeg', 'jpg')
       const p = path.join(PASTE_DIR, `${id}-${Date.now()}-${i + 1}.${ext}`)
-      fs.writeFileSync(p, Buffer.from(im.data, 'base64'))
+      scan.writePrivate(p, Buffer.from(im.data, 'base64'))
       paths.push(p)
     })
   } catch { return '' }
@@ -1590,6 +1606,8 @@ function chatSend (msg, post) {
 
 /** Wire up a webview - used by both the sidebar view and the editor tab. */
 function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
+  // the one value put into the page's HTML: a chat id, and only a plain one
+  const chatId = /^[\w-]+$/.test(String(opts.chat || '')) ? opts.chat : ''
   {
     w.options = {
       enableScripts: true,
@@ -1602,7 +1620,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
  style-src ${w.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';
  img-src ${w.cspSource} data:;">
 <link rel="stylesheet" href="${uri('style.css')}"></head>
-<body${mode ? ` data-mode="${mode}"` : ''}${opts.chat ? ` data-chat="${opts.chat}"` : ''}>${fs.readFileSync(path.join(ctx.extensionPath, 'media', 'body.html'), 'utf8')}
+<body${mode ? ` data-mode="${mode}"` : ''}${chatId ? ` data-chat="${chatId}"` : ''}>${fs.readFileSync(path.join(ctx.extensionPath, 'media', 'body.html'), 'utf8')}
 <script nonce="${nonce}" src="${uri('md.js')}"></script>
 <script nonce="${nonce}" src="${uri('main.js')}"></script>
 <script nonce="${nonce}" src="${uri('chat.js')}"></script></body></html>`
@@ -1975,17 +1993,17 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             break
           }
           case 'chatState':
-            post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), orphan: !!orphanPid(msg.id) } })
+            post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), orphan: !!(await orphanPid(msg.id)) } })
             break
           case 'chatTakeover': {
-            const pid = orphanPid(msg.id)
+            const pid = await orphanPid(msg.id)
             if (pid) {
               const tree = processTree(pid)
               for (const p of tree) { try { process.kill(p, 'SIGTERM') } catch {} }
               await new Promise(r => setTimeout(r, 2000))
               for (const p of tree) { try { process.kill(p, 0); process.kill(p, 'SIGKILL') } catch {} }
               runner.markEnded(msg.id)
-              liveSig = ''; pollLive()
+              liveSig = ''; pollLive().catch(() => {})
             }
             post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), endedAt: Date.now() } })
             break
@@ -2028,14 +2046,21 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             else vscode.window.setStatusBarMessage('$(info) That terminal is no longer open in this window', 3000)
             break
           }
-          case 'chatAnswer':
+          case 'chatAnswer': {
+            // only a question Claude is waiting on, and only its own questions:
+            // nothing is written for an answer that has nowhere to go
+            const ask = runner.askOf(msg.id, msg.requestId)
+            if (!ask) break
+            const asked = new Set((ask.input?.questions || []).map(q => String(q.question || '')))
             runner.answer(msg.id, msg.requestId, {
               allow: !!msg.allow, always: !!msg.always,
               answers: msg.answers && typeof msg.answers === 'object' ? Object.fromEntries(Object.entries(msg.answers)
+                .filter(([k]) => asked.has(String(k)))
                 .map(([k, v]) => [String(k), String(v) + pastedNote(msg.id, msg.images?.[k])])) : null,
               message: msg.message ? String(msg.message) : '',
             })
             break
+          }
           case 'chatStop':
             runner.interrupt(msg.id)
             break
@@ -2068,7 +2093,8 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               const pick = await vscode.window.showWarningMessage(
                 'This chat is running in the logbook. Stop it there and open it elsewhere?', 'Stop and open', 'Cancel')
               if (pick !== 'Stop and open') return
-              runner.stop(s.id)
+              // at once: a Claude finishing its turn while the other starts would tangle the chat
+              runner.stop(s.id, true)
               await new Promise(r => setTimeout(r, 1200))
               delete live[s.id]
             }
@@ -2503,7 +2529,8 @@ function paintChatTab (ctx, panel, state) {
   const was = TAB_STATE.get(panel) || { base: panel.title, state: '' }
   const now = { base: was.base, state: state === 'busy' || state === 'waiting' ? state : '' }
   TAB_STATE.set(panel, now)
-  panel.title = (now.state === 'busy' ? '● ' : now.state === 'waiting' ? '◆ ' : '') + now.base
+  const title = (now.state === 'busy' ? '● ' : now.state === 'waiting' ? '◆ ' : '') + now.base
+  if (panel.title !== title) panel.title = title
   if (now.state === was.state && panel.iconPath) return
   const f = now.state === 'busy' ? 'tab-busy.svg' : now.state === 'waiting' ? 'tab-wait.svg' : ''
   panel.iconPath = f ? vscode.Uri.joinPath(ctx.extensionUri, 'media', f) : tabIcon(ctx)
@@ -2629,7 +2656,8 @@ function activate (ctx) {
     emit: m => broadcast(m),
     onWrite: id => WATCH?.poke(id),
     // started, finished or waiting on you: the list and the board show it now
-    onChange: () => { liveSig = ''; pollLive().catch(() => {}) },
+    // what the logbook's own Claude is doing is known here: no need to ask the CLI
+    onChange: () => { if (DEACTIVATED) return; Object.assign(live, runner.liveMap()); publishLive() },
   })
   // said once, a few seconds in, so it does not land on top of the editor starting up
   setTimeout(() => announceChat(ctx).catch(() => {}), 4000)
@@ -2705,7 +2733,10 @@ function activate (ctx) {
 }
 
 function deactivate () {
+  DEACTIVATED = true
   clearTimeout(liveTimer)
+  // a "!" command still running would carry on with nobody to see it
+  for (const p of SHELLS.values()) { try { p.kill() } catch {} }
   // a reply in progress, or a question waiting on you, dies with the window:
   // note which, so each chat can offer to carry on after the reload
   const busy = Object.entries(runner.liveMap()).filter(([, s]) => s !== 'idle').map(([id]) => id)

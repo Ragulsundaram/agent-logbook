@@ -207,7 +207,9 @@ function paintLive () {
     if (sh.out) {
       const pre = el('pre', 'shout', sh.out.length > 20000 ? '…' + sh.out.slice(-20000) : sh.out)
       w.appendChild(pre)
-      requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight })
+      // follows new output unless you scrolled up in it
+      pre.onscroll = () => { sh.top = pre.scrollHeight - pre.scrollTop - pre.clientHeight > 8 ? pre.scrollTop : null }
+      requestAnimationFrame(() => { pre.scrollTop = sh.top ?? pre.scrollHeight })
     }
     w.appendChild(el('div', 'chatmeta', sh.running ? 'Running in the chat\'s folder…'
       : `${sh.code ? `Exited with code ${sh.code}` : 'Done'} · ${sh.sentWith ? 'sent to Claude with your message' : 'Claude sees this with your next message'}`))
@@ -497,7 +499,13 @@ function paintComposer () {
     c.block.appendChild(el('span', '', 'Claude\'s last reply was cut off when the window reloaded or closed.'))
     const go = el('button', 'btn pri', 'Continue')
     go.title = 'Asks Claude to pick up where it stopped'
-    go.onclick = () => { c.ta.value = 'Your last reply was cut off when the editor window reloaded. Please continue from where you stopped.'; submit(c) }
+    go.onclick = () => {
+      // sent as its own message: whatever you had typed stays in the box
+      const draft = c.ta.value
+      c.ta.value = 'Your last reply was cut off when the editor window reloaded. Please continue from where you stopped.'
+      submit(c)
+      if (draft) { c.ta.value = draft; CHAT.drafts.set(id, draft); c.fit(); paintGo(c) }
+    }
     const x = el('button', 'btn', 'Dismiss')
     x.onclick = () => { CHAT.cutoff.delete(id); send({ type: 'chatCutoffClear', id }); paintComposer() }
     c.block.append(go, x)
@@ -1019,9 +1027,20 @@ if (!BOARD_MODE) {
         if (m.state.models?.length) CHAT.models = m.state.models
         if (m.state.partial) CHAT.partial.set(id, m.state.partial)
         break
-      case 'chatPartial':
+      case 'chatPartial': {
         if (m.partial) CHAT.partial.set(id, m.partial); else CHAT.partial.delete(id)
+        // the hottest path: while the reply grows, only its bubble and the status
+        // word change - not the box, its pictures, the asks or any command output
+        const bubble = COMPOSER?.id === id && m.partial?.text && COMPOSER.live.querySelector('.chatstream .bubble')
+        const word = bubble && COMPOSER.live.querySelector('.chatworking:not(.wait) > span:nth-child(2)')
+        if (bubble && word) {
+          bubble.innerHTML = window.md(m.partial.text)
+          word.textContent = 'Writing…'
+          if (FOLLOW) stickToEnd(COMPOSER.live.parentNode)
+          return
+        }
         break
+      }
       case 'chatLanded':
         CHAT.landed.add(id)
         break
@@ -1048,8 +1067,10 @@ if (!BOARD_MODE) {
         break
       case 'chatError': {
         // nothing was sent: the words go back in the box rather than being lost
-        const lost = (CHAT.echo.get(id) || []).map(x => x.text).filter(Boolean).join('\n\n')
-        CHAT.echo.delete(id)
+        // only the newest: earlier ones may have gone through and just not landed yet
+        const echoes = CHAT.echo.get(id) || []
+        const lost = echoes.length ? echoes[echoes.length - 1].text || '' : ''
+        if (echoes.length > 1) CHAT.echo.set(id, echoes.slice(0, -1)); else CHAT.echo.delete(id)
         CHAT.state.set(id, { ...st, busy: false })
         if (lost && !CHAT.drafts.get(id)) {
           CHAT.drafts.set(id, lost)

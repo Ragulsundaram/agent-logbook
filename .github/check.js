@@ -54,7 +54,7 @@ if (base) {
     // extension.js), which runs only what the user typed after "!" - matched on
     // its exact line, so any other shell still fails.
     else if (line.startsWith('+') && /\.js$/.test(file) && /['"](\/bin\/)?(sh|bash|zsh|dash|fish|powershell|pwsh|cmd|cmd\.exe)['"]|process\.env\.SHELL/.test(line) &&
-      !(file === 'extension.js' && line === "+  const sh = process.env.SHELL || '/bin/zsh'")) errors.push(`${file}: new line starts a shell (AGENTS.md rule 4)`)
+      !(file === 'extension.js' && /^\+  const sh = process\.env\.SHELL \|\| '\/bin\/zsh'$/.test(line))) errors.push(`${file}: new line starts a shell (AGENTS.md rule 4)`)
     else if (line.startsWith('+') && line.length > 300 && !/<svg|'M[\d.\s,-]/.test(line)) flags.push(`${file}: new line of ${line.length - 1} characters, check it is not hidden code`)
     // Allowed in the code today, but a new use needs a human to read where its input comes from.
     else if (line.startsWith('+') && /openExternal|Uri\.parse|execFile|spawn\s*\(|new\s+Worker|writeFile|sendText|innerHTML|outerHTML|insertAdjacentHTML/.test(line)) flags.push(`${file}: new ${line.match(/openExternal|Uri\.parse|execFile|spawn|Worker|writeFile|sendText|innerHTML|outerHTML|insertAdjacentHTML/)[0]} call, check what feeds it`)

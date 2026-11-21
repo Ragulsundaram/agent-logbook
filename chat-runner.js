@@ -30,7 +30,11 @@ function init (opts) { OPTS = { ...OPTS, ...opts } }
 
 const has = id => RUNS.has(id)
 // the live list lags a few seconds behind: a Claude that just quit here can still be listed as running
-const endedRecently = id => Date.now() - (ENDED.get(id) || 0) < 10000
+const endedRecently = id => {
+  // only the last few seconds matter, so older entries go as they are asked about
+  for (const [k, at] of ENDED) if (Date.now() - at > 60000) ENDED.delete(k)
+  return Date.now() - (ENDED.get(id) || 0) < 10000
+}
 
 /** Running chats as the live list reads them: working, or waiting for you. */
 function liveMap () {
@@ -397,6 +401,9 @@ function stop (id, now) {
   // out of the list at once: a message sent while it leaves starts a new Claude
   // rather than being written to one whose input is already closed
   if (RUNS.get(id) === r) RUNS.delete(id)
+  // and known to have ended here, so it is not mistaken for running elsewhere
+  ENDED.set(id, Date.now())
+  OPTS.onChange(id)
   // the editor is closing or reloading: a timer would not outlive it, and a
   // Claude left behind carries on working where nobody can answer it
   if (now) { try { r.proc.kill() } catch {} return }
@@ -412,7 +419,10 @@ function stopAll (now) {
 /** A Claude for this chat was just ended outside the runner. */
 const markEnded = id => ENDED.set(id, Date.now())
 
+/** A question or approval Claude is waiting on in this chat, if it is. */
+const askOf = (id, requestId) => RUNS.get(id)?.asks.get(requestId) || null
+
 /** The folder Claude runs in for this chat, when it runs here. */
 const cwdOf = id => RUNS.get(id)?.cwd || ''
 
-module.exports = { init, cwdOf, has, endedRecently, liveMap, state, send, answer, interrupt, setModel, setMode, setEffort, stop, stopAll, markEnded }
+module.exports = { init, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, setModel, setMode, setEffort, stop, stopAll, markEnded }

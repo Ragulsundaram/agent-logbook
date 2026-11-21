@@ -1335,7 +1335,8 @@ function turnsFor (id, part, ti) {
   ensureFull(id)
   // a running chat is followed by another thread, so this one's copy can be
   // older than the message asked about: read on to the end and look again
-  if (!full?.turns?.[ti]) { full = null; ensureFull(id) }
+  // - only for a real index past what it has, so a bad one cannot force a re-read
+  if (Number.isInteger(ti) && ti >= (full?.turns?.length || 0)) { full = null; ensureFull(id) }
   return full?.turns
 }
 function imageAt (id, ti, ii, part) {
