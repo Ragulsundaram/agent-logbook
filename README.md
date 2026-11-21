@@ -75,12 +75,20 @@ sent anywhere else.
 Claude Code reads the new name back. Renaming a Codex chat writes nothing to the
 transcript. Deleting a chat moves the file to `~/.claude/trashed-sessions`
 rather than unlinking it.
+Chatting from the logbook keeps two small things under `~/.agent-logbook`:
+`cutoff.json`, the chats whose reply a window reload cut off (so they can offer
+Continue, cleared after two days), and `pastes/`, pictures pasted into an answer
+to one of Claude's questions, saved as files so Claude can open them and deleted
+after a week.
 
 **Runs** your own `claude` CLI when you send a message from the logbook. Claude
 Code does the work exactly as it would in a terminal - its own network
 requests, file edits and transcript writes, each edit or command approved by
 you unless you chose a mode that skips asking. The extension itself sends
-nothing to the network for this; it only talks to that local process.
+nothing to the network for this; it only talks to that local process. A message
+you type starting with `!` runs in your own shell in the chat's folder, as it
+would in a terminal, and Claude gets the command and its output with your next
+message.
 
 ## Settings
 

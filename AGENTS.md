@@ -30,6 +30,11 @@ Humans: see CONTRIBUTING.md.
    argument array, never `exec` or `shell: true`. Anything sent to a terminal
    with `sendText` must be built from validated values (ids, known commands),
    never from raw text out of a transcript.
+   The one exception is shell mode in the message box: a message the user types
+   starting with `!` runs in their login shell in the chat's folder
+   (`chatShell` in `extension.js`), as it would in a terminal. Only that typed
+   text may be run this way, never text from a transcript, from Claude or from
+   any other source.
 5. **Escape everything shown in a webview.** Use the `esc()` helper in
    `media/*.js` or `textContent`. Never put transcript text into `innerHTML`
    unescaped. Keep the Content-Security-Policy and nonce in `extension.js` as
