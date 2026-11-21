@@ -11,6 +11,8 @@
    Claude or a transcript is drawn with textContent or md(), which escapes. */
 
 const CHAT = {
+  reading: new Map(),    // chat id -> pictures still being read, kept with the chat, not the box
+  sendWhenRead: new Set(), // chats whose Enter waits for those pictures
   tipSeen: true,         // the one-time "you can reply here" tip, until the host says otherwise
   sentLog: new Map(),    // chat id -> messages sent from here, oldest first: Up brings them back
   shell: new Map(),      // chat id -> "!" commands run here: { key, cmd, out, running, code, sentWith }
@@ -339,10 +341,13 @@ function addImage (c, file) {
   if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) { note(c.id, 'Only PNG, JPEG, GIF and WebP pictures can be sent.', true); return }
   if (file.size > MAX_IMAGE) { note(c.id, 'That picture is over 5 MB.', true); return }
   const r = new FileReader()
-  c.reading = (c.reading || 0) + 1
+  const id = c.id
+  CHAT.reading.set(id, (CHAT.reading.get(id) || 0) + 1)
   const done = () => {
-    c.reading--
-    if (!c.reading && c.sendWhenRead) { c.sendWhenRead = false; submit(c) }
+    const left = (CHAT.reading.get(id) || 1) - 1
+    if (left) CHAT.reading.set(id, left); else CHAT.reading.delete(id)
+    // the box may have been rebuilt since (you switched chats and back): send from the current one
+    if (!left && CHAT.sendWhenRead.delete(id) && COMPOSER?.id === id) submit(COMPOSER)
   }
   r.onerror = () => { note(c.id, 'That picture could not be read.', true); done() }
   r.onload = () => {
@@ -375,12 +380,13 @@ function paintImages (c) {
   c.imgs.hidden = !list.length
 }
 
-function submit (c) {
-  // a picture pasted a moment ago may still be loading: send once it is in
-  if (c.reading) { c.sendWhenRead = true; return }
+function submit (c, only) {
   const id = c.id
-  const text = c.ta.value
-  const images = CHAT.images.get(id) || []
+  // a picture pasted a moment ago may still be loading: send once it is in.
+  // A message of the logbook's own (only) is sent as it is, draft untouched
+  if (!only && CHAT.reading.get(id)) { CHAT.sendWhenRead.add(id); return }
+  const text = only ? only.text : c.ta.value
+  const images = only ? [] : CHAT.images.get(id) || []
   if (!text.trim() && !images.length) return
   if (!images.length && localCommand(c, text)) return
   if (whereRunning(id) === 'elsewhere') return
@@ -413,15 +419,17 @@ function submit (c) {
   CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, images: images.length, pics: images, at: Date.now(), queued }])
   CHAT.notes.delete(id)
   CHAT.done.delete(id)
-  CHAT.drafts.delete(id)
-  CHAT.images.delete(id)
   const st = CHAT.state.get(id) || { id, asks: [] }
   if (!st.busy) CHAT.busySince.set(id, Date.now())
   CHAT.state.set(id, { ...st, busy: true })
-  c.ta.value = ''
-  c.fit()
-  c.slash.hidden = true
-  paintImages(c)
+  if (!only) {
+    CHAT.drafts.delete(id)
+    CHAT.images.delete(id)
+    c.ta.value = ''
+    c.fit()
+    c.slash.hidden = true
+    paintImages(c)
+  }
   FOLLOW = true
   if (CHAT.here.has(id)) pendingIntro(id)
   placeLive()
@@ -517,13 +525,8 @@ function paintComposer () {
     go.title = 'Asks Claude to pick up where it stopped'
     go.onclick = () => {
       // sent as its own message: whatever you had typed stays in the box
-      const draft = c.ta.value, pics = CHAT.images.get(id)
-      CHAT.images.delete(id)
-      c.ta.value = 'Your last reply was cut off when the editor window reloaded. Please continue from where you stopped.'
-      submit(c)
-      if (pics?.length) { CHAT.images.set(id, pics); paintImages(c) }
-      if (draft) { c.ta.value = draft; CHAT.drafts.set(id, draft); c.fit() }
-      paintGo(c)
+      // sent as its own message, with no pictures: the draft and its pictures stay
+      submit(c, { text: 'Your last reply was cut off when the editor window reloaded. Please continue from where you stopped.' })
     }
     const x = el('button', 'btn', 'Dismiss')
     x.onclick = () => { CHAT.cutoff.delete(id); send({ type: 'chatCutoffClear', id }); paintComposer() }

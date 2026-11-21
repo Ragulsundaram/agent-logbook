@@ -23,6 +23,7 @@ const STDERR_KEEP = 4000
 const RUNS = new Map()              // chat id -> its process and state
 const ENDED = new Map()             // chat id -> when its Claude here last quit
 const STOPPING = new Map()          // chat id -> a Claude told to leave that has not exited yet
+const DEFERRED = new Map()          // chat id -> a send waiting for that Claude to go; a stop cancels it
 let OPTS = { bin: () => null, emit: () => {}, onChange: () => {} }
 // what the last Claude to start reported: offered before any chat has started
 let KNOWN = { commands: [], models: [] }
@@ -320,7 +321,15 @@ function send (id, args) {
   const old = !r && STOPPING.get(id)
   if (old && old.exitCode === null && old.signalCode === null) {
     try { old.kill() } catch {}
-    old.once('exit', () => { STOPPING.delete(id); send(id, args) })
+    const ticket = {}
+    DEFERRED.set(id, ticket)
+    old.once('exit', () => {
+      STOPPING.delete(id)
+      // stopped while it waited: it does not start after all
+      if (DEFERRED.get(id) !== ticket) return
+      DEFERRED.delete(id)
+      send(id, args)
+    })
     return true
   }
   if (!r) r = start(id, { cwd, fresh, forkOf, model, mode, effort })
@@ -406,6 +415,7 @@ function setEffort (id, effort) {
 }
 
 function stop (id, now) {
+  DEFERRED.delete(id)                 // a send still waiting to start is cancelled too
   const r = RUNS.get(id)
   if (!r) return
   r.stopping = true
@@ -427,6 +437,7 @@ function stop (id, now) {
 }
 
 function stopAll (now) {
+  DEFERRED.clear()
   for (const id of [...RUNS.keys()]) stop(id, now)
 }
 
