@@ -48,9 +48,12 @@ if (base) {
   }
   let file = '', hunkFn = ''
   for (const line of git('diff', '--unified=0', `${base}...HEAD`).split('\n')) {
+    // the function a change sits in: the one git names after the hunk's second @@,
+    // or one the change itself starts (a whole new function is one hunk). Tracked
+    // apart from the checks below, so a line that starts a function is still checked.
+    if (line.startsWith('@@')) hunkFn = line.replace(/^@@[^@]*@@ ?/, '')
+    else if (/^\+(async )?function \w/.test(line)) hunkFn = line.slice(1).replace(/^async /, '')
     if (line.startsWith('+++ ')) file = line.slice(6)
-    // git names the function each change sits in after the hunk's second @@
-    else if (line.startsWith('@@')) hunkFn = line.replace(/^@@[^@]*@@ ?/, '')
     // The clipboard and PATH code already starts shells; a PR may not add another.
     // The one allowed exception is shell mode in the message box (chatShell in
     // extension.js), which runs only what the user typed after "!" - matched on
