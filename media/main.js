@@ -4,6 +4,9 @@ const el = (t, c, txt) => { const n = document.createElement(t); if (c) n.classN
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 const rx = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const send = m => vs.postMessage(m)
+// an editor tab holding one chat only: no list, no tabs, nothing else opens in it
+let CHAT_ONLY = document.body.dataset.chat || ''
+const openTab = (id, beside) => send({ type: 'openTab', id, beside: !!beside })
 
 const nfmt = n => n >= 1e9 ? (n / 1e9).toFixed(1) + 'B'
   : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M'
@@ -1035,7 +1038,10 @@ function chatRow (s) {
   r.appendChild(acts)
 
   r.title = `${s.project} · ${s.messages} messages · ${nfmt(s.tokens)} tokens · ${money(s.cost)}`
-  r.onclick = () => { (PERF = { id: s.id, t0: performance.now() }, send({ type: 'session', id: s.id })) }
+  r.onclick = e => {
+    if (e.altKey && s.provider !== 'codex') return openTab(s.id, true)   // Alt: straight to its own tab, split
+    PERF = { id: s.id, t0: performance.now() }; send({ type: 'session', id: s.id })
+  }
   warmOnHover(r, s.id)
   r.oncontextmenu = e => { e.preventDefault(); rowMenu(s, e.clientX, e.clientY) }
   return r
@@ -1123,7 +1129,7 @@ function showPending (id) {
   const top = el('div', 'dtop')
   const back = el('button', 'iconbtn', '‹')
   back.title = 'All chats'
-  back.onclick = () => { PENDING_CHAT = null; closeDetail() }
+  back.onclick = () => { PENDING_CHAT = null; CHAT_ONLY ? send({ type: 'session', id: CHAT_ONLY }) : closeDetail() }
   top.append(back, el('h2', '', 'New chat'))
   const head = el('div', 'dhead')
   head.appendChild(top)
@@ -1133,6 +1139,7 @@ function showPending (id) {
 }
 
 function closeDetail () {
+  if (CHAT_ONLY) return
   if (CUR) PENDING_CHAT = null
   CUR = null
   SEEN.disconnect()
@@ -1615,6 +1622,10 @@ function chatMenu (anchor, t) {
     menu.appendChild(b)
   }
   const sep = () => menu.appendChild(el('div', 'menusep'))
+  if (!CHAT_ONLY && !t.isAgent) {
+    item('open', 'Open in editor tab', 'Alt-click in the list: split', () => openTab(t.id))
+    sep()
+  }
   for (const [key, spec] of Object.entries(TARGETS)) {
     item(spec.icon, key === 'auto' ? 'Resume where it started' : `Resume in ${spec.label}`, spec.hint, () => {
       TARGET = key
@@ -1672,7 +1683,7 @@ function showDetail (t, live) {
   // ---- sticky header
   const head = el('div', 'dhead')
   const top = el('div', 'dtop')
-  const back = el('button', 'iconbtn', '‹')
+  const back = el('button', isAgent ? 'iconbtn' : 'iconbtn dback', '‹')
   // an agent thread belongs to a chat, so back goes there rather than to the list
   back.title = isAgent ? 'Back to the chat' : 'All chats'
   back.onclick = isAgent ? () => send({ type: 'session', id: t.sessionId }) : closeDetail
@@ -1828,6 +1839,7 @@ function showDetail (t, live) {
           () => send({ type: 'forkBrief', id: t.id })))
     }
     acts.append(
+      ...(CHAT_ONLY || codex || isAgent ? [] : [mk('open', 'Open in its own editor tab', () => openTab(t.id))]),
       mk('chart', 'Stats for this chat', () => send({ type: 'analytics', id: t.id })),
       mk('reload', 'Reload this chat', () => send({ type: 'session', id: t.id })),
       mk('export', 'Export as Markdown', () => send({ type: 'export', id: t.id })),
@@ -2193,6 +2205,7 @@ function rowMenu (s, x, y) {
 
   item('Open chat', () => { (PERF = { id: s.id, t0: performance.now() }, send({ type: 'session', id: s.id })) },
     { icon: 'message' })
+  if (s.provider !== 'codex') item('Open in editor tab', () => openTab(s.id), { icon: 'open' })
   item('Resume', () => send({ type: 'resume', id: s.id }), { icon: 'play' })
 
   // a chat can be put anywhere in the editor, like a window manager places
@@ -3273,6 +3286,14 @@ window.addEventListener('message', e => {
   if (!m || typeof m.type !== 'string') return
   // the board shows chats but never opens one: that goes to the sidebar
   if (BOARD_MODE && (m.type === 'session' || m.type === 'results')) return
+  // a one-chat tab shows its chat and that chat's agents, whatever else is sent
+  // - except a copy started from it, which the tab then becomes
+  if (CHAT_ONLY && m.type === 'session' && m.fromPending && m.data?.id && m.data.id === PENDING_CHAT) {
+    CHAT_ONLY = m.data.id
+    try { vs.setState({ chat: CHAT_ONLY }) } catch {}
+    send({ type: 'chatTabIs', id: CHAT_ONLY })
+  }
+  if (CHAT_ONLY && m.type === 'session' && m.data && m.data.id !== CHAT_ONLY && m.data.sessionId !== CHAT_ONLY) return
   if (m.type === 'env' && BOARD_MODE && m.cfg) send({ type: 'board' })
   if (m.type === 'env') {
     // partial env messages (a group edit, a settings snapshot) leave it alone
@@ -4166,6 +4187,10 @@ if (BOARD_MODE) {
 
 send({ type: 'ready' })
 send({ type: 'trashed' })
+if (CHAT_ONLY) {
+  try { vs.setState({ chat: CHAT_ONLY }) } catch {}
+  send({ type: 'session', id: CHAT_ONLY })
+}
 
 // ---------------------------------------------------------------- settings
 // The extension's own settings, in the panel rather than buried in the editor's

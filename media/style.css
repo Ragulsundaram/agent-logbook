@@ -1617,3 +1617,8 @@ body[data-mode="sidebar"] #rescan { display: none !important }
   font-size: 11px; background: none }
 .foot:has(> .composer) > .fchanged:hover { color: var(--vscode-foreground); text-decoration: underline }
 .foot:has(> .composer) > .ftree { flex: 1 0 100% }
+
+/* an editor tab holding one chat: just the chat */
+body[data-chat] #limits, body[data-chat] #lnudges, body[data-chat] #tabs,
+body[data-chat] #view-chats > .bar, body[data-chat] #rows,
+body[data-chat] .dback, body[data-chat] .newinchat { display: none !important }

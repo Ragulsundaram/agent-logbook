@@ -1458,7 +1458,7 @@ function chatSend (msg, post) {
 }
 
 /** Wire up a webview - used by both the sidebar view and the editor tab. */
-function wire (ctx, w, onDispose, mode, isVisible = () => true) {
+function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
   {
     w.options = {
       enableScripts: true,
@@ -1471,7 +1471,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true) {
  style-src ${w.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';
  img-src ${w.cspSource} data:;">
 <link rel="stylesheet" href="${uri('style.css')}"></head>
-<body${mode ? ` data-mode="${mode}"` : ''}>${fs.readFileSync(path.join(ctx.extensionPath, 'media', 'body.html'), 'utf8')}
+<body${mode ? ` data-mode="${mode}"` : ''}${opts.chat ? ` data-chat="${opts.chat}"` : ''}>${fs.readFileSync(path.join(ctx.extensionPath, 'media', 'body.html'), 'utf8')}
 <script nonce="${nonce}" src="${uri('md.js')}"></script>
 <script nonce="${nonce}" src="${uri('main.js')}"></script>
 <script nonce="${nonce}" src="${uri('chat.js')}"></script></body></html>`
@@ -1526,6 +1526,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true) {
             const whole = WHOLE.get(msg.id)
             const data = whole ? await whole : await transcriptSoon(msg.id)
             post({ type: 'session', data })
+            if (opts.onTitle && data?.id === opts.chat) opts.onTitle(data.title)
             // the end of a long chat came first; the whole of it follows and is
             // drawn in place, holding the reader where they are
             if (data?.part) {
@@ -1540,6 +1541,17 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true) {
             }
             break
           }
+          case 'chatTabIs':
+            // a copy started in a one-chat tab: the tab now holds the copy
+            if (opts.chat && /^[\w-]+$/.test(String(msg.id || '')) && opts.retarget) {
+              opts.retarget(opts.chat, msg.id); opts.chat = msg.id
+            }
+            break
+          case 'openTab':
+            // from the sidebar the editor area is free, so the chat takes it whole;
+            // from a logbook tab it goes beside, not over the list it came from
+            if (/^[\w-]+$/.test(String(msg.id || ''))) openChatTab(ctx, msg.id, mode !== 'sidebar' || !!msg.beside)
+            break
           case 'prefetch':
             prefetch(msg.id).catch(() => {})
             break
@@ -2307,6 +2319,33 @@ function openInEditor (ctx, beside) {
   return panel
 }
 
+/** One chat on its own in an editor tab, so several can sit side by side. */
+const CHAT_TABS = new Map()
+function chatTabTitle (id) {
+  const s = scan.index().find(x => x.id === id)
+  const t = s?.title || 'Chat'
+  return t.length > 32 ? t.slice(0, 31) + '…' : t
+}
+function openChatTab (ctx, id, beside) {
+  const open = CHAT_TABS.get(id)
+  if (open) { open.reveal(); return open }
+  const panel = vscode.window.createWebviewPanel('claudeHistory.chat', chatTabTitle(id),
+    beside ? vscode.ViewColumn.Beside : vscode.ViewColumn.Active,
+    { enableScripts: true, retainContextWhenHidden: true })
+  fillChatTab(ctx, panel, id)
+  return panel
+}
+function fillChatTab (ctx, panel, id) {
+  CHAT_TABS.set(id, panel)
+  panel.iconPath = tabIcon(ctx)
+  wire(ctx, panel.webview, fn => panel.onDidDispose(fn), 'chat', () => panel.visible, {
+    chat: id,
+    onTitle: t => { if (t) panel.title = t.length > 32 ? t.slice(0, 31) + '…' : t },
+    retarget: (from, to) => { if (CHAT_TABS.get(from) === panel) CHAT_TABS.delete(from); CHAT_TABS.set(to, panel); id = to },
+  })
+  panel.onDidDispose(() => { if (CHAT_TABS.get(id) === panel) CHAT_TABS.delete(id) })
+}
+
 /**
  * Lookups logged before the server recorded who asked: the asking chat wrote
  * the call into its own transcript, so find the transcript holding that call
@@ -2456,6 +2495,14 @@ function activate (ctx) {
     ...Object.keys(POSITIONS).map(key => vscode.commands.registerCommand(
       `claudeHistory.moveChat.${key}`, async () => moveChat(await chatToMove(), key))),
     vscode.commands.registerCommand('claudeHistory.openBeside', () => openInEditor(ctx, true)),
+    // chat tabs come back after a restart, each on the chat it had
+    vscode.window.registerWebviewPanelSerializer('claudeHistory.chat', {
+      async deserializeWebviewPanel (panel, state) {
+        const id = String(state?.chat || '')
+        if (!/^[\w-]+$/.test(id)) { panel.dispose(); return }
+        fillChatTab(ctx, panel, id)
+      },
+    }),
     vscode.commands.registerCommand('claudeHistory.refresh', () => {
       scan.index(true)                       // re-read every transcript from disk
       refreshLive(broadcast)                 // which chats are running right now
