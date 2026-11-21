@@ -36,7 +36,8 @@ const endedRecently = id => Date.now() - (ENDED.get(id) || 0) < 10000
 function liveMap () {
   const out = {}
   // waiting: Claude has stopped to ask you something - neither working nor done
-  for (const [id, r] of RUNS) out[id] = r.asks.size ? 'waiting' : r.busy ? 'busy' : 'idle'
+  // background agents or commands still going count as working: the chat is not done
+  for (const [id, r] of RUNS) out[id] = r.asks.size ? 'waiting' : r.busy || r.bg.length ? 'busy' : 'idle'
   return out
 }
 
@@ -51,6 +52,7 @@ function state (id) {
     mode: r?.mode || '',
     effort: r?.effort || '',
     asks: r ? [...r.asks.values()] : [],
+    bg: r ? r.bg.map(t => ({ what: t.what, kind: t.kind })) : [],
     partial: r ? partialOf(r) : null,
     commands: KNOWN.commands,
     models: KNOWN.models,
@@ -92,6 +94,8 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort } = {}) {
     asks: new Map(), partial: { text: '', thinking: false, tool: '' }, partialTimer: null,
     idle: null, seq: 0, restart: false,
     pending: 0,                     // messages sent that Claude has not finished answering
+    bg: [],                         // background agents and commands still running
+    expectTurn: null,               // a background task finished: Claude's own turn is coming
   }
   RUNS.set(id, r)
   proc.stdout.setEncoding('utf8')
@@ -120,7 +124,7 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort } = {}) {
   function finish (code) {
     if (r.ended) return
     r.ended = true
-    clearTimeout(r.idle); clearTimeout(r.partialTimer)
+    clearTimeout(r.idle); clearTimeout(r.partialTimer); clearTimeout(r.expectTurn)
     if (RUNS.get(id) === r) RUNS.delete(id)
     ENDED.set(id, Date.now())
     // a newer Claude already took this chat over (a message sent while this one
@@ -154,7 +158,7 @@ function control (r, request) {
 function armIdle (r) {
   clearTimeout(r.idle)
   r.idle = setTimeout(() => {
-    if (r.busy || r.asks.size) return armIdle(r)
+    if (r.busy || r.asks.size || r.bg.length) return armIdle(r)
     stop(r.id)
   }, IDLE_MS)
 }
@@ -172,6 +176,7 @@ function onLine (r, m) {
       if (m.parent_tool_use_id) return
       const e = m.event || {}
       if (e.type === 'message_start') {
+        clearTimeout(r.expectTurn); r.expectTurn = null
         r.partial = { text: '', thinking: false, tool: '' }
         r.busy = true                 // a queued message's turn starting counts as working
       } else if (e.type === 'content_block_start') {
@@ -205,6 +210,28 @@ function onLine (r, m) {
       } else if (m.subtype === 'status' && m.permissionMode) {
         r.mode = m.permissionMode
         emit(r.id, { type: 'chatState', state: state(r.id) })
+      } else if (m.subtype === 'background_tasks_changed') {
+        // the reply can end while agents or commands it started keep going
+        r.bg = (Array.isArray(m.tasks) ? m.tasks : []).map(t => ({
+          id: String(t.task_id || ''), what: String(t.description || '').slice(0, 120), kind: String(t.task_type || ''),
+        }))
+        emit(r.id, { type: 'chatState', state: state(r.id) })
+        OPTS.onChange(r.id)
+        if (!r.bg.length && !r.busy && r.restart) { r.restart = false; stop(r.id) }
+      } else if (m.subtype === 'task_notification') {
+        // Claude takes the result up in a turn of its own: working until it starts.
+        // If it never does, do not stay "working" for ever
+        r.busy = true
+        clearTimeout(r.expectTurn)
+        r.expectTurn = setTimeout(() => {
+          r.expectTurn = null
+          if (r.pending > 0 || !RUNS.has(r.id)) return
+          r.busy = false
+          emit(r.id, { type: 'chatState', state: state(r.id) })
+          OPTS.onChange(r.id)
+        }, 30000)
+        emit(r.id, { type: 'chatState', state: state(r.id) })
+        OPTS.onChange(r.id)
       }
       return
     case 'control_request': {
@@ -269,7 +296,7 @@ function onLine (r, m) {
       OPTS.onWrite?.(r.id)
       OPTS.onChange(r.id)
       armIdle(r)
-      if (r.restart && !r.busy) { r.restart = false; stop(r.id) }
+      if (r.restart && !r.busy && !r.bg.length) { r.restart = false; stop(r.id) }
       return
     }
   }
@@ -359,7 +386,7 @@ function setEffort (id, effort) {
   const r = RUNS.get(id)
   if (!r) return
   r.effort = effort
-  if (r.busy || r.asks.size) r.restart = true
+  if (r.busy || r.asks.size || r.bg.length) r.restart = true
   else stop(id)
 }
 

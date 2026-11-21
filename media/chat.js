@@ -210,6 +210,15 @@ function paintLive () {
       p?.tool && !p.text ? `Running ${toolWord(p.tool)}…` : p?.thinking ? 'Thinking…' : p?.text ? 'Writing…' : 'Working…'),
     el('span', 'chatel', elapsed(id)))
     live.appendChild(line)
+  } else if (st?.bg?.length) {
+    // the reply is done, but agents or commands it started are still going:
+    // Claude picks their results up by itself when they finish
+    const n = st.bg.length
+    const line = el('div', 'chatworking')
+    line.title = st.bg.map(t => t.what).filter(Boolean).join('\n')
+    line.append(el('span', 'chatdots'), el('span', '',
+      `Waiting for ${n} background ${n === 1 ? 'task' : 'tasks'}${st.bg[0].what && n === 1 ? `: ${st.bg[0].what}` : ''}`))
+    live.appendChild(line)
   }
   echoes.filter(isQueued).forEach(drawEcho)
   const note = CHAT.notes.get(id)
@@ -436,7 +445,7 @@ function paintStatus (c) {
   const st = CHAT.state.get(c.id)
   const done = CHAT.done.get(c.id)
   c.status.textContent = st?.asks?.length ? 'Waiting for you'
-    : st?.busy ? '' : done && Date.now() - done.at < 60000 && done.ms ? `Done in ${secs(done.ms)}` : ''
+    : st?.busy || st?.bg?.length ? '' : done && Date.now() - done.at < 60000 && done.ms ? `Done in ${secs(done.ms)}` : ''
 }
 
 const secs = ms => ms < 60000 ? Math.max(1, Math.round(ms / 1000)) + 's' : Math.floor(ms / 60000) + 'm ' + Math.round(ms % 60000 / 1000) + 's'
