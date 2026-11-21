@@ -11,6 +11,7 @@
    Claude or a transcript is drawn with textContent or md(), which escapes. */
 
 const CHAT = {
+  tipSeen: true,         // the one-time "you can reply here" tip, until the host says otherwise
   sentLog: new Map(),    // chat id -> messages sent from here, oldest first: Up brings them back
   shell: new Map(),      // chat id -> "!" commands run here: { key, cmd, out, running, code, sentWith }
   where: new Map(),      // chat id -> { where, at }: where a chat running elsewhere runs
@@ -284,8 +285,10 @@ function buildComposer (id) {
   const box = el('div', 'cbox')
   box.append(imgs, ta, bar)
   box.onclick = e => { if (e.target === box || e.target === bar) ta.focus() }
-  root.append(asks, block, box, slash)
-  const c = { id, root, asks, imgs, block, ta, slash, bar, mode, status, go, live, slashAt: 0 }
+  // once, the first time anyone sees the box: what it is and where to turn it off
+  const tip = el('div', 'ctip')
+  root.append(asks, block, tip, box, slash)
+  const c = { id, root, asks, imgs, block, tip, ta, slash, bar, mode, status, go, live, slashAt: 0 }
 
   const fit = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 220) + 'px' }
   c.fit = fit
@@ -385,6 +388,7 @@ function submit (c) {
   const p = picksFor(id)
   CHAT.cutoff.delete(id)
   CHAT.sentLog.set(id, [...(CHAT.sentLog.get(id) || []), text].slice(-50))
+  tipDone()                              // the first message says you found it
   c.hist = null
   // finished commands go to Claude with this message; they leave the view once it lands
   for (const sh of CHAT.shell.get(id) || []) if (!sh.running && !sh.sentWith) { sh.sentWith = text; sh.sentAt = Date.now() }
@@ -503,11 +507,32 @@ function paintComposer () {
     : now?.busy ? 'Queue a message…'
     : where === 'here' || CHAT.here.has(id) ? 'Message Claude… (/ for commands, ! for a shell command)'
       : 'Continue here… (/ for commands, ! for a shell command)'
+  paintTip(c)
   paintPickers(c)
   paintAsks(c)
   paintImages(c)
   paintGo(c)
   paintStatus(c)
+}
+
+function paintTip (c) {
+  c.tip.replaceChildren()
+  c.tip.hidden = CHAT.tipSeen
+  if (CHAT.tipSeen) return
+  c.tip.appendChild(el('span', '', 'New: reply to Claude here, or start a chat from +. Turn it off in '))
+  const set = el('button', 'linkbtn', 'Settings')
+  // a one-chat tab has no Settings tab: Cursor's own settings, on this switch
+  set.onclick = () => CHAT_ONLY ? send({ type: 'openChatSetting' }) : document.querySelector('.tab[data-tab="settings"]')?.click()
+  const x = el('button', 'iconbtn', '×')
+  x.title = 'Got it'
+  x.onclick = () => tipDone()
+  c.tip.append(set, x)
+}
+function tipDone () {
+  if (CHAT.tipSeen) return
+  CHAT.tipSeen = true
+  send({ type: 'chatTipSeen' })
+  if (COMPOSER) paintTip(COMPOSER)
 }
 
 function paintGo (c) {
@@ -970,6 +995,7 @@ if (!BOARD_MODE) {
       return
     }
     // the Settings switch may have flipped
+    if (m.type === 'env' && 'chatTipSeen' in m) { CHAT.tipSeen = !!m.chatTipSeen; if (COMPOSER) paintTip(COMPOSER) }
     if (m.type === 'env' && m.cfg) { chatMount(); if (!chatOn()) return }
     if (m.type === 'sessions' || m.type === 'env') { if (COMPOSER && chatTarget()?.id === COMPOSER.id) paintComposer(); return }
     if (m.type === 'chatShellOut' || m.type === 'chatShellEnd') {

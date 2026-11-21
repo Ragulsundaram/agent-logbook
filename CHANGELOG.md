@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.9.0
+
+- Chat with Claude right in the logbook. Every Claude chat has a message box under it, and + starts a new chat here. Claude's replies stream in as they are written, with the same status line as the terminal: what it is doing, for how long, and Esc to stop. On by default; turn it off in Settings to keep the logbook read-only.
+- Approvals, questions and plans appear as cards above the box. Pictures can be pasted into a message, and into an answer to a question.
+- The box works like Claude Code's: / lists commands, /model and /effort change the model and effort, Shift+Tab switches the mode, Up brings back earlier messages, and a message starting with ! runs as a shell command whose output Claude gets with your next message. Messages sent while Claude is working queue up behind the reply.
+- New chats start on the mode and effort you picked last.
+- Open a chat in its own editor tab, from its menu, the list's right-click menu, or Alt-click for a split, and keep several side by side. Tabs show whether their chat is working or waiting on you, and come back after a restart.
+- A chat running in a terminal or another app says where, with Show it for a terminal in this window, or continues here as a new chat with its full history.
+- A chat waiting on background agents or commands stays marked as working until Claude has taken their results up, and an agent's report shows as one line with the report folded under it.
+- If a window reload or close cuts off a reply, the chat says so and offers Continue.
+- A tidier chat view: the chat's actions sit in one menu on the title row, cost shows once as an estimate at API prices, context shows as a percentage, and the laptop's memory and CPU appear only when a chat is using a lot.
+- Faster and steadier: live updates redraw only what changed, the running-chats check slows down while the panel is hidden, and the chat list refreshes in a fraction of the time.
+- Fix: scrolling up while Claude is writing no longer pulls you back to the end.
+- Fix: more chats load from a folder's Show more button, not by scrolling near it.
+
 ## 1.8.0
 
 - The live board is redesigned into Needs you, Working and Earlier sections, with counts on the filters and shorter, calmer cards. Codex chats show there too.

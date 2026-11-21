@@ -1495,6 +1495,37 @@ function pastedNote (id, list) {
   return `\n\n(The user attached ${paths.length === 1 ? 'a picture' : `${paths.length} pictures`} to this answer: ${paths.join(', ')}. Open ${paths.length === 1 ? 'it' : 'them'} with the Read tool.)`
 }
 
+/** A new chat in the logbook: no Claude yet, it starts with the first message, under this id. */
+function newChatHere (post) {
+  const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+  const sid = require('node:crypto').randomUUID()
+  NEW_CHATS.set(sid, { cwd: cwd || require('node:os').homedir() })
+  post({ type: 'pendingChat', id: sid, here: true, folder: scan.projectName(cwd || '') })
+  followNewChat(sid, post, null)
+}
+
+/**
+ * Chatting from the logbook arrived in 1.9 and is on for everyone, so say so
+ * once: a notification after the update that opens a new chat or the change
+ * list. Not for someone who has already turned chatting off.
+ */
+async function announceChat (ctx) {
+  const KEY = 'announced.chat-1.9'
+  if (ctx.globalState.get(KEY) || !cfg('chatHere', true)) return
+  await ctx.globalState.update(KEY, Date.now())
+  const pick = await vscode.window.showInformationMessage(
+    'Agent Logbook 1.9: chat with Claude right in the logbook. Reply under any chat, or start a new one from +.',
+    'Try it', "What's new")
+  if (pick === 'Try it') {
+    await vscode.commands.executeCommand('claudeHistory.view.focus')
+    // the sidebar may still be loading: wait for it to say it is ready
+    for (let i = 0; i < 40 && !SIDEBAR; i++) await new Promise(r => setTimeout(r, 100))
+    if (SIDEBAR) newChatHere(SIDEBAR)
+  } else if (pick === "What's new") {
+    await vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.joinPath(ctx.extensionUri, 'CHANGELOG.md'))
+  }
+}
+
 /** Commands run since the last message, in the shape Claude Code's terminal writes them. */
 function shellContext (id) {
   const list = SHELL_OUT.get(id)
@@ -1593,6 +1624,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               dateFormat: cfg('dateFormat', 'locale'),
               liveFirst: cfg('showLiveFirst', true),
               cfg: settingsSnapshot(),
+              chatTipSeen: !!ctx.globalState.get('chatTipSeen'),
                   })
             pushLimits(post, 60000)
             post({ type: 'sessions', data: scan.sessionList(live) })
@@ -1961,6 +1993,13 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           case 'chatSend':
             chatSend(msg, post)
             break
+          case 'openChatSetting':
+            vscode.commands.executeCommand('workbench.action.openSettings', 'claudeHistory.chatHere')
+            break
+          case 'chatTipSeen':
+            await ctx.globalState.update('chatTipSeen', Date.now())
+            broadcast({ type: 'env', chatTipSeen: true })
+            break
           case 'chatShell':
             chatShell(msg, post)
             break
@@ -2119,14 +2158,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           }
           case 'newChat': {
             const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-            if (msg.where === 'logbook') {
-              // no Claude yet: it starts with the first message, under this id
-              const sid = require('node:crypto').randomUUID()
-              NEW_CHATS.set(sid, { cwd: cwd || require('node:os').homedir() })
-              post({ type: 'pendingChat', id: sid, here: true, folder: scan.projectName(cwd || '') })
-              followNewChat(sid, post, null)
-              break
-            }
+            if (msg.where === 'logbook') { newChatHere(post); break }
             const bin = claudeBin()
             // the new chat's id is chosen here, so Resume can find its terminal
             // later from the launch itself rather than by asking claude
@@ -2599,6 +2631,8 @@ function activate (ctx) {
     // started, finished or waiting on you: the list and the board show it now
     onChange: () => { liveSig = ''; pollLive().catch(() => {}) },
   })
+  // said once, a few seconds in, so it does not land on top of the editor starting up
+  setTimeout(() => announceChat(ctx).catch(() => {}), 4000)
   const provider = new HistoryView(ctx)
   ctx.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, diffProvider),

@@ -2,7 +2,7 @@
   "name": "agent-logbook",
   "displayName": "Agent Logbook",
   "description": "Browse, search, resume and measure your Claude Code and Codex sessions - with sub-agents, cost, and a usage dashboard. Everything stays on your machine.",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "publisher": "ragulsundaram",
   "engines": {
     "vscode": "^1.94.0"

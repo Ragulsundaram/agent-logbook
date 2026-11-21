@@ -1640,3 +1640,9 @@ body[data-chat] .dback, body[data-chat] .newinchat { display: none !important }
 
 /* pictures pasted into an answer to Claude's question */
 .caskpics { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px }
+
+/* the one-time tip above the message box */
+.ctip { display: flex; align-items: center; flex-wrap: wrap; gap: 0 4px; font-size: 12px; margin-bottom: 6px;
+  color: var(--vscode-descriptionForeground) }
+.ctip .iconbtn { margin-left: auto }
+.ctip .linkbtn { background: none; border: 0; padding: 0; color: var(--vscode-textLink-foreground); cursor: pointer; font: inherit }
