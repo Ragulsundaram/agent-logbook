@@ -322,7 +322,7 @@ function send (id, { text, images, cwd, fresh, forkOf, model, mode, effort }) {
   // Claude's input already closed (it quit on its own): say so, so the text goes back in the box
   if (!r.proc.stdin.writable) {
     emit(id, { type: 'chatError', error: 'Claude had stopped, so the message was not sent. It is back in the box: send it again.' })
-    return
+    return false
   }
   write(r, {
     type: 'user',
@@ -334,6 +334,7 @@ function send (id, { text, images, cwd, fresh, forkOf, model, mode, effort }) {
   armIdle(r)
   emit(id, { type: 'chatState', state: state(id) })
   OPTS.onChange(id)
+  return true
 }
 
 /** Answer a permission prompt, a question or a plan. */

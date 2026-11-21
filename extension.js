@@ -1761,8 +1761,8 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             const text = String(msg.text || '').replace(/\r/g, '').trim()
             // a chat running in the logbook takes the reply straight in
             if (text && runner.has(msg.id)) {
-              runner.send(msg.id, { text })
-              post({ type: 'boardReplied', id: msg.id, ok: true })
+              // a Claude that had already quit does not take it: say so on the card
+              post({ type: 'boardReplied', id: msg.id, ok: runner.send(msg.id, { text }) })
               break
             }
             const term = text ? await terminalForSession(msg.id, false, true) : null
@@ -2047,6 +2047,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             break
           }
           case 'chatAnswer': {
+            if (!cfg('chatHere', true)) break
             // only a question Claude is waiting on, and only its own questions:
             // nothing is written for an answer that has nowhere to go
             const ask = runner.askOf(msg.id, msg.requestId)
