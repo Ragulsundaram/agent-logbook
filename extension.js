@@ -1412,6 +1412,28 @@ const CHAT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 // new chats waiting for their first message: where to start them, and what from
 const NEW_CHATS = new Map()
 
+// chats whose reply a window reload cut off, so the chat can offer to carry on
+const CUTOFF_FILE = path.join(require('node:os').homedir(), '.agent-logbook', 'cutoff.json')
+function cutoffs () {
+  let m = {}
+  try { m = JSON.parse(fs.readFileSync(CUTOFF_FILE, 'utf8')) || {} } catch {}
+  // two days on, nobody is coming back to that reply
+  for (const [id, at] of Object.entries(m)) if (Date.now() - at > 2 * 86400e3) delete m[id]
+  return m
+}
+function saveCutoffs (m) {
+  try {
+    fs.mkdirSync(path.dirname(CUTOFF_FILE), { recursive: true })
+    fs.writeFileSync(CUTOFF_FILE, JSON.stringify(m))
+  } catch {}
+}
+function clearCutoff (id) {
+  const m = cutoffs()
+  if (!(id in m)) return
+  delete m[id]; saveCutoffs(m)
+  broadcast({ type: 'chatCutoff', ids: Object.keys(m) })
+}
+
 /**
  * A message typed in the logbook. Claude starts on the chat if it is not
  * running here yet - never on one running somewhere else, as two Claudes
@@ -1453,6 +1475,7 @@ function chatSend (msg, post) {
   try {
     runner.send(id, opts)
     NEW_CHATS.delete(id)
+    clearCutoff(id)
   } catch (e) { return fail(e.message) }
   seenChat(id)
 }
@@ -1496,6 +1519,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
                   })
             pushLimits(post, 60000)
             post({ type: 'sessions', data: scan.sessionList(live) })
+            post({ type: 'chatCutoff', ids: Object.keys(cutoffs()) })
             break
           case 'sessions':
             post({ type: 'sessions', data: scan.sessionList(live) })
@@ -1859,6 +1883,9 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           }
           case 'chatSend':
             chatSend(msg, post)
+            break
+          case 'chatCutoffClear':
+            clearCutoff(String(msg.id || ''))
             break
           case 'chatAnswer':
             runner.answer(msg.id, msg.requestId, {
@@ -2515,6 +2542,18 @@ function activate (ctx) {
   if (cfg('openOnStartup', false)) vscode.commands.executeCommand('claudeHistory.view.focus')
 }
 
-function deactivate () { clearTimeout(liveTimer); runner.stopAll(true); scan.saveCacheNow() }
+function deactivate () {
+  clearTimeout(liveTimer)
+  // a reply in progress, or a question waiting on you, dies with the window:
+  // note which, so each chat can offer to carry on after the reload
+  const busy = Object.entries(runner.liveMap()).filter(([, s]) => s !== 'idle').map(([id]) => id)
+  if (busy.length) {
+    const m = cutoffs()
+    for (const id of busy) m[id] = Date.now()
+    saveCutoffs(m)
+  }
+  runner.stopAll(true)
+  scan.saveCacheNow()
+}
 
 module.exports = { activate, deactivate }

@@ -11,6 +11,7 @@
    Claude or a transcript is drawn with textContent or md(), which escapes. */
 
 const CHAT = {
+  cutoff: new Set(),     // chats whose last reply a window reload cut off
   state: new Map(),      // chat id -> what the host says about its Claude here
   drafts: new Map(),     // chat id -> unsent text
   images: new Map(),     // chat id -> pasted pictures waiting to go
@@ -332,6 +333,7 @@ function submit (c) {
   if (!images.length && localCommand(c, text)) return
   if (whereRunning(id) === 'elsewhere') return
   const p = picksFor(id)
+  CHAT.cutoff.delete(id)
   send({ type: 'chatSend', id, text, images: images.map(im => ({ mediaType: im.mediaType, data: im.data })), model: p.model, mode: p.mode, effort: p.effort })
   const queued = !!CHAT.state.get(id)?.busy
   CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, images: images.length, at: Date.now(), queued }])
@@ -381,6 +383,15 @@ function paintComposer () {
     b.title = 'A new chat with this one\'s full context, run from the logbook'
     b.onclick = () => send({ type: 'chatFork', id })
     c.block.appendChild(b)
+  } else if (CHAT.cutoff.has(id) && !CHAT.state.get(id)?.busy) {
+    c.block.hidden = false
+    c.block.appendChild(el('span', '', 'Claude\'s last reply was cut off when the window reloaded or closed.'))
+    const go = el('button', 'btn pri', 'Continue')
+    go.title = 'Asks Claude to pick up where it stopped'
+    go.onclick = () => { c.ta.value = 'Your last reply was cut off when the editor window reloaded. Please continue from where you stopped.'; submit(c) }
+    const x = el('button', 'btn', 'Dismiss')
+    x.onclick = () => { CHAT.cutoff.delete(id); send({ type: 'chatCutoffClear', id }); paintComposer() }
+    c.block.append(go, x)
   }
   const now = CHAT.state.get(id)
   c.ta.placeholder = now?.asks?.length ? 'Answer Claude above first'
@@ -809,6 +820,7 @@ if (!BOARD_MODE) {
     // the Settings switch may have flipped
     if (m.type === 'env' && m.cfg) { chatMount(); if (!chatOn()) return }
     if (m.type === 'sessions' || m.type === 'env') { if (COMPOSER && chatTarget()?.id === COMPOSER.id) paintComposer(); return }
+    if (m.type === 'chatCutoff') { CHAT.cutoff = new Set(m.ids || []); paintComposer(); return }
     if (!m.type.startsWith('chat') || !m.id) return
     const id = m.id
     const st = CHAT.state.get(id) || { id, asks: [] }
