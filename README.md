@@ -14,8 +14,10 @@ file diffs each edit made. Search across every transcript, not just titles.
 
 **Pick one back up.** Resume opens the chat in a terminal, the Claude Code
 extension or Claude Desktop, and reveals the terminal already running it rather
-than starting a second one. Branch forks a session with its full context;
-Branch with a brief starts a fresh one from a written handover instead.
+than starting a second one. "New chat from this one" forks a session with its
+full history, like /branch; "New chat from a summary" starts a fresh one from a
+written handover instead. A chat running elsewhere says where, with "Show it"
+for a terminal in this window.
 Claude Desktop may title a resumed chat with its folder name or a generic title,
 because its `claude://resume` link takes no title; rename the chat in Desktop if
 you want it to match the Agent Logbook title.

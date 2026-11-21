@@ -11,7 +11,7 @@ const openTab = (id, beside) => send({ type: 'openTab', id, beside: !!beside })
 const nfmt = n => n >= 1e9 ? (n / 1e9).toFixed(1) + 'B'
   : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M'
   : n >= 1e3 ? (n / 1e3).toFixed(0) + 'K' : String(n | 0)
-const money = n => n >= 100 ? '$' + n.toFixed(0) : '$' + n.toFixed(2)
+const money = n => n >= 100 ? '$' + Math.round(n).toLocaleString('en-US') : '$' + n.toFixed(2)
 const niceDate = d => new Date(d + 'T12:00').toLocaleDateString(undefined,
   { day: 'numeric', month: 'short' })
 const dur = ms => { const m = Math.round(ms / 6e4); return m < 60 ? m + 'm' : (m / 60).toFixed(m / 60 >= 10 ? 0 : 1) + 'h' }
@@ -661,7 +661,7 @@ function paintResources () {
   if (st && CUR) {
     const r = RES?.sessions?.[CUR.id]
     const grp = st.closest('.resgroup')
-    if (grp && grp.hidden !== !r) { grp.hidden = !r; restack(grp.parentElement) }
+    if (grp && grp.hidden !== !heavy(r)) { grp.hidden = !heavy(r); restack(grp.parentElement) }
     if (r) {
       st.textContent = resText(r)
       st.classList.toggle('hot', heavy(r))
@@ -1209,10 +1209,9 @@ function chatFacts (t) {
   if (t.isAgent) return agentFacts(t)
   // replies name the plain model; the 1M window is known from the chat, not the name
   const m = t.info?.model ? modelName(t.info.model) : ''
+  // cost lives in the footer and edits in "files changed": the line stays short
   return [m && t.info.window >= 1e6 && !m.includes('1M') ? m + ' (1M)' : m,
-    `${t.messages} messages`, `${t.edits} edits`, `${nfmt(t.tokens)} tokens`,
-    // Codex bills against a plan, not per token, so there is no figure to show
-    t.provider === 'codex' ? '' : money(t.cost), `${dur(t.activeMs)} active`].filter(Boolean).join(' · ')
+    `${t.messages} messages`, `${dur(t.activeMs)} active`].filter(Boolean).join(' · ')
 }
 
 /** The numbers under an agent's name, wherever it is shown. */
@@ -1623,20 +1622,19 @@ function chatMenu (anchor, t) {
   }
   const sep = () => menu.appendChild(el('div', 'menusep'))
   if (!CHAT_ONLY && !t.isAgent) {
-    item('open', 'Open in editor tab', 'Alt-click in the list: split', () => openTab(t.id))
+    item('open', 'Open in editor tab', '', () => openTab(t.id))
     sep()
   }
+  // a one-off: the default for Resume stays what Settings says
   for (const [key, spec] of Object.entries(TARGETS)) {
-    item(spec.icon, key === 'auto' ? 'Resume where it started' : `Resume in ${spec.label}`, spec.hint, () => {
-      TARGET = key
-      send({ type: 'setTarget', target: key })
-      send({ type: 'resume', id: t.id, target: key })
-    })
+    item(spec.icon, key === 'auto' ? 'Resume where it started' : `Resume in ${spec.label}`, '',
+      () => send({ type: 'resume', id: t.id, target: key }))
   }
   sep()
-  item('fork', 'Branch', 'full context, like /branch', () => send({ type: 'fork', id: t.id }))
-  item('brief', 'Fork with a brief', 'reads a summary', () => send({ type: 'forkBrief', id: t.id }))
+  item('fork', 'New chat from this one', 'full history, like /branch', () => send({ type: 'fork', id: t.id }))
+  item('brief', 'New chat from a summary', 'shorter, cheaper', () => send({ type: 'forkBrief', id: t.id }))
   sep()
+  item(ALLTOOLS ? 'collapse' : 'expand', ALLTOOLS ? 'Collapse all steps' : 'Expand all steps', '', () => $('#detail .foldall')?.click())
   item('chart', 'Stats', '', () => send({ type: 'analytics', id: t.id }))
   item('reload', 'Reload', '', () => send({ type: 'session', id: t.id }))
   item('export', 'Export as Markdown', '', () => send({ type: 'export', id: t.id }))
@@ -1647,7 +1645,10 @@ function chatMenu (anchor, t) {
   const r = anchor.getBoundingClientRect()
   const m = menu.getBoundingClientRect()
   menu.style.left = `${Math.max(8, Math.min(r.right - m.width, window.innerWidth - m.width - 8))}px`
-  menu.style.top = `${Math.min(r.bottom + 4, window.innerHeight - m.height - 8)}px`
+  // a short panel: the menu scrolls inside rather than running off the top
+  const top = Math.max(8, Math.min(r.bottom + 4, window.innerHeight - m.height - 8))
+  menu.style.top = `${top}px`
+  menu.style.maxHeight = `${window.innerHeight - top - 8}px`
   const kill = dismissOn(menu)
 }
 
@@ -1833,9 +1834,9 @@ function showDetail (t, live) {
     // no equivalent, so the buttons would only ever fail
     if (!codex) {
       acts.append(
-        mk('fork', 'Branch: a new session carrying this chat\'s full context, like /branch',
+        mk('fork', 'New chat from this one: carries its full history, like /branch',
           () => send({ type: 'fork', id: t.id })),
-        mk('brief', 'Fork with a brief: a fresh session that reads a summary instead of the whole chat',
+        mk('brief', 'New chat from a summary: reads a short recap instead of the whole chat',
           () => send({ type: 'forkBrief', id: t.id })))
     }
     acts.append(
@@ -1888,6 +1889,7 @@ function showDetail (t, live) {
   find.append(fi, cnt)
   top.insertBefore(findBtn, fresh)
   top.insertBefore(foldAll, fresh)
+  if (top.querySelector('.moremenu')) foldAll.hidden = true      // it lives in the ⋯ menu there
   head.appendChild(find)
   d.appendChild(head)
 
@@ -2241,7 +2243,7 @@ function rowMenu (s, x, y) {
     menu.appendChild(moveSub)
   }
   item('Rename…', () => renamePrompt(s), { icon: 'pencil' })
-  item('Branch with a brief…', () => send({ type: 'forkBrief', id: s.id }), { icon: 'brief' })
+  item('New chat from a summary', () => send({ type: 'forkBrief', id: s.id }), { icon: 'brief' })
   sep()
   item(s.pinned ? 'Unpin' : 'Pin',
     () => send({ type: 'pin', id: s.id }), { icon: 'pin' })
@@ -2555,10 +2557,11 @@ function footer (t) {
   }
   const claude = group('Claude')
   claude.append(
-    stat(`${nfmt(i.context)} / ${nfmt(i.window)}`, `context at the last message · ${pct}% of the window`,
+    stat(`Context ${pct}%`, `${nfmt(i.context)} of ${nfmt(i.window)} tokens in use at the last message`,
       pct >= 90 ? 'hot' : ''),
     stat(`Cache ${i.cachePct}%`, 'share of input tokens served from cache'),
-    stat(money(t.cost), 'cost at API list prices'))
+    // Codex bills against a plan, not per token, so there is no figure to show
+    ...(t.provider === 'codex' ? [] : [stat('~' + money(t.cost), 'what this chat would cost at API list prices - not what a subscription bills')]))
   // the branch only when it says something: nearly every chat is on the same one
   if (row2?.git?.length) {
     const counts = new Map()
@@ -2576,7 +2579,7 @@ function footer (t) {
   rs.classList.add('resstat')
   laptop.appendChild(rs)
   const rnow = RES?.sessions?.[t.sessionId || t.id]
-  laptop.hidden = !rnow
+  laptop.hidden = !heavy(rnow)                // the normal few hundred MB is nothing to act on
   if (rnow) { rs.textContent = resText(rnow); rs.classList.toggle('hot', heavy(rnow)) }
   top.appendChild(facts)
   bar.appendChild(top)
@@ -2601,6 +2604,7 @@ function footer (t) {
       row.onclick = () => send({ type: 'openFile', path: f.path })
       list.appendChild(row)
     }
+    head.title = 'Files this chat changed. Click to list them'
     head.onclick = () => { list.hidden = !list.hidden; caret.textContent = list.hidden ? '▸' : '▾' }
     bar.append(head, list)
   }

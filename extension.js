@@ -1887,6 +1887,25 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           case 'chatCutoffClear':
             clearCutoff(String(msg.id || ''))
             break
+          case 'chatWhere': {
+            // a chat running outside the logbook: where, as far as can be told
+            const s = scan.index().find(x => x.id === msg.id)
+            if (!s) break
+            const term = await terminalForSession(s.id, false, true)
+            const from = s.entrypoint || ''
+            const where = term ? 'terminal'
+              : from === 'claude-vscode' || from === 'vscode' ? 'claude'
+                : from === 'claude-desktop' ? 'desktop'
+                  : from === 'cli' ? 'outside' : ''
+            post({ type: 'chatWhere', id: s.id, where })
+            break
+          }
+          case 'chatShow': {
+            const term = await terminalForSession(String(msg.id || ''), false, true)
+            if (term) term.show(false)
+            else vscode.window.setStatusBarMessage('$(info) That terminal is no longer open in this window', 3000)
+            break
+          }
           case 'chatAnswer':
             runner.answer(msg.id, msg.requestId, {
               allow: !!msg.allow, always: !!msg.always,

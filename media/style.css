@@ -238,12 +238,17 @@ input.rename { flex: 1; font-size: 13px; padding: 2px 6px; border-radius: 4px;
   background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
   border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border));
   border-radius: 6px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.24) }
-.menuitem { display: flex; width: 100%; align-items: baseline; gap: 8px; text-align: left;
+.menuitem { display: flex; width: 100%; align-items: center; min-height: 26px; gap: 8px; text-align: left;
   background: none; border: 0; border-radius: 4px; padding: 4px 8px; font-size: 12px;
   color: var(--vscode-menu-foreground, var(--vscode-foreground)) }
 .menuitem:hover { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
   color: var(--vscode-menu-selectionForeground, inherit) }
-.menuitem em { font-style: normal; font-size: 11px; opacity: .6; margin-left: auto }
+.menuitem em { font-style: normal; font-size: 11px; opacity: .6; margin-left: auto; padding-left: 8px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1000 auto }
+.menuitem > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto }
+.menuitem > svg { flex: none }
+.menuitem:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px }
+.menu.chatmenu { overflow-y: auto; overflow-x: hidden; max-width: calc(100vw - 16px) }
 
 .find { display: flex; align-items: center; gap: 4px; margin-top: 6px }
 .find input { flex: 1 1 auto; min-width: 0; height: 32px; padding: 4px 10px; border-radius: 8px;

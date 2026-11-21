@@ -11,6 +11,7 @@
    Claude or a transcript is drawn with textContent or md(), which escapes. */
 
 const CHAT = {
+  where: new Map(),      // chat id -> { where, at }: where a chat running elsewhere runs
   cutoff: new Set(),     // chats whose last reply a window reload cut off
   state: new Map(),      // chat id -> what the host says about its Claude here
   drafts: new Map(),     // chat id -> unsent text
@@ -378,9 +379,25 @@ function paintComposer () {
     b.onclick = () => { b.disabled = true; b.textContent = 'Stopping…'; send({ type: 'chatTakeover', id }) }
     c.block.appendChild(b)
   } else if (blocked) {
-    c.block.appendChild(el('span', '', 'This chat is running in a terminal or another app. Reply there, or carry it on here as a copy.'))
-    const b = el('button', 'btn', 'Continue here as a copy')
-    b.title = 'A new chat with this one\'s full context, run from the logbook'
+    // where, as the host can tell: asked again now and then, as a chat can move
+    const w = CHAT.where.get(id)
+    if (!w || Date.now() - w.at > 15000) send({ type: 'chatWhere', id })
+    const place = {
+      terminal: 'Running in a terminal in this window.',
+      claude: 'Running in the Claude Code panel.',
+      desktop: 'Running in Claude Desktop.',
+      outside: 'Running in a terminal outside this window.',
+    }[w?.where]
+    // with a place named, the buttons say the rest
+    c.block.appendChild(el('span', '', place || 'Running elsewhere. Reply there, or:'))
+    if (w?.where === 'terminal') {
+      const show = el('button', 'btn pri', 'Show it')
+      show.title = 'Bring that terminal to the front'
+      show.onclick = () => send({ type: 'chatShow', id })
+      c.block.appendChild(show)
+    }
+    const b = el('button', 'btn', 'New chat from this one')
+    b.title = 'A new chat here with this one\'s full history. The original keeps running on its own'
     b.onclick = () => send({ type: 'chatFork', id })
     c.block.appendChild(b)
   } else if (CHAT.cutoff.has(id) && !CHAT.state.get(id)?.busy) {
@@ -820,6 +837,7 @@ if (!BOARD_MODE) {
     // the Settings switch may have flipped
     if (m.type === 'env' && m.cfg) { chatMount(); if (!chatOn()) return }
     if (m.type === 'sessions' || m.type === 'env') { if (COMPOSER && chatTarget()?.id === COMPOSER.id) paintComposer(); return }
+    if (m.type === 'chatWhere') { CHAT.where.set(m.id, { where: m.where || '', at: Date.now() }); paintComposer(); return }
     if (m.type === 'chatCutoff') { CHAT.cutoff = new Set(m.ids || []); paintComposer(); return }
     if (!m.type.startsWith('chat') || !m.id) return
     const id = m.id
