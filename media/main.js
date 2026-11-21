@@ -1507,6 +1507,11 @@ let FOLLOW = true
 // Scrolls made here, not by you: they must not fold the header or count as
 // you reading upward.
 let AUTO_UNTIL = 0
+// the last time you scrolled by hand: while text streams in, our own scrolls to
+// the end came faster than the 200ms they mute, so yours were never heard
+let HAND_AT = 0
+let DRAGGING = false                              // holding the scrollbar
+window.addEventListener('pointerup', () => { DRAGGING = false }, true)
 function stickToEnd (body) {
   if (!body || !FOLLOW) return
   AUTO_UNTIL = Date.now() + 200
@@ -1902,8 +1907,10 @@ function showDetail (t, live) {
     if (y < 600 && SHOWN_FROM > 0) { drawEarlier(); return }
     const fromEnd = body.scrollHeight - y - body.clientHeight
     jump.hidden = fromEnd < 120
-    // our own scrolls, and the header settling, say nothing about what you did
-    if (Date.now() < settling || Date.now() < AUTO_UNTIL) { lastY = y; return }
+    // our own scrolls, and the header settling, say nothing about what you did -
+    // unless you are scrolling right now
+    const byHand = DRAGGING || Date.now() - HAND_AT < 400
+    if (!byHand && (Date.now() < settling || Date.now() < AUTO_UNTIL)) { lastY = y; return }
     FOLLOW = fromEnd < 80
     // while you are pointing at the header it stays open, whatever the
     // scroll does underneath - a trackpad's coasting used to fold it away
@@ -1915,6 +1922,13 @@ function showDetail (t, live) {
     else if (y < lastY - 12) slim(false)
     lastY = y
   }
+  // scrolling up by hand lets go of the end at once, before the next reply
+  // chunk can pull you back; scrolling back down to the end picks it up again
+  const hand = up => { HAND_AT = Date.now(); if (up) FOLLOW = false }
+  body.addEventListener('wheel', e => hand(e.deltaY < 0), { passive: true })
+  body.addEventListener('touchmove', () => hand(false), { passive: true })
+  body.addEventListener('pointerdown', e => { if (e.target === body) { DRAGGING = true; hand(false) } })   // the scrollbar
+  body.addEventListener('keydown', e => { if (/^(PageUp|ArrowUp|Home)$/.test(e.key)) hand(true); else if (/^(PageDown|ArrowDown|End|Space| )$/.test(e.key)) hand(false) })
   // reaching for the header brings it back and it stays - only scrolling
   // down again folds it away
   // it settles like any other fold, so the room it takes back is not read as a
