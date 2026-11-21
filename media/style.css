@@ -1637,3 +1637,6 @@ body[data-chat] .dback, body[data-chat] .newinchat { display: none !important }
 .chatshell .shcmd { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family); font-size: 12px }
 .chatshell .shout { margin: 6px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
   font-family: var(--vscode-editor-font-family); font-size: 11px; color: var(--vscode-descriptionForeground) }
+
+/* pictures pasted into an answer to Claude's question */
+.caskpics { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px }

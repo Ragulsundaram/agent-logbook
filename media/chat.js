@@ -757,8 +757,11 @@ function questionCard (c, a) {
   const qs = Array.isArray(a.input?.questions) ? a.input.questions : []
   const chosen = qs.map(() => new Set())
   const other = []
+  // pictures pasted into an answer: a question takes text only, so the host
+  // saves them as files and the answer tells Claude where to open them
+  const pics = qs.map(() => [])
   const sendBtn = el('button', 'btn pri', qs.length > 1 ? 'Send answers' : 'Send answer')
-  const ready = () => { sendBtn.disabled = !qs.every((q, i) => chosen[i].size || other[i]?.value.trim()) }
+  const ready = () => { sendBtn.disabled = !qs.every((q, i) => chosen[i].size || other[i]?.value.trim() || pics[i].length) }
   card.appendChild(el('div', 'caskhead', qs.length > 1 ? 'Claude has some questions' : 'Claude has a question'))
   qs.forEach((q, i) => {
     const box = el('div', 'caskq')
@@ -784,13 +787,50 @@ function questionCard (c, a) {
     own.oninput = () => { if (own.value.trim()) { chosen[i].clear(); for (const x of opts.children) x.classList.remove('on') } ready() }
     own.onkeydown = e => { if (e.key === 'Enter' && !sendBtn.disabled) sendBtn.click() }
     other[i] = own
-    box.append(opts, own)
+    const strip = el('div', 'caskpics')
+    const paintPics = () => {
+      strip.replaceChildren()
+      pics[i].forEach((im, k) => {
+        const chip = el('div', 'cimg')
+        const img = document.createElement('img'); img.src = im.url
+        const x = el('button', 'cimgx', '×'); x.title = 'Remove'
+        x.onclick = () => { pics[i].splice(k, 1); paintPics(); ready() }
+        chip.append(img, x)
+        strip.appendChild(chip)
+      })
+      strip.hidden = !pics[i].length
+    }
+    own.onpaste = e => {
+      const files = [...(e.clipboardData?.items || [])].filter(t => t.type.startsWith('image/')).map(t => t.getAsFile()).filter(Boolean)
+      if (!files.length) return
+      e.preventDefault()
+      for (const f of files) {
+        if (!/^image\/(png|jpeg|gif|webp)$/.test(f.type) || f.size > MAX_IMAGE) { note(c.id, 'Only PNG, JPEG, GIF and WebP pictures under 5 MB can be sent.', true); continue }
+        const r = new FileReader()
+        r.onload = () => {
+          const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(String(r.result))
+          if (!m) return
+          pics[i] = [...pics[i], { mediaType: m[1], data: m[2], url: String(r.result) }].slice(0, 4)
+          for (const x of opts.children) x.classList.remove('on')
+          chosen[i].clear()
+          paintPics(); ready()
+        }
+        r.readAsDataURL(f)
+      }
+    }
+    own.placeholder = 'Something else… (you can paste a picture)'
+    paintPics()
+    box.append(opts, own, strip)
     card.appendChild(box)
   })
   sendBtn.onclick = () => {
     const answers = {}
-    qs.forEach((q, i) => { answers[q.question] = other[i].value.trim() || [...chosen[i]].join(', ') })
-    answer(c, a, { allow: true, answers })
+    const images = {}
+    qs.forEach((q, i) => {
+      answers[q.question] = other[i].value.trim() || [...chosen[i]].join(', ')
+      if (pics[i].length) images[q.question] = pics[i].map(p => ({ mediaType: p.mediaType, data: p.data }))
+    })
+    answer(c, a, { allow: true, answers, images })
   }
   const skip = el('button', 'btn', 'Skip')
   skip.title = 'Tell Claude you would rather not answer'

@@ -1467,6 +1467,34 @@ function chatShell (msg, post) {
     end(code ?? 1)
   })
 }
+/**
+ * Pictures pasted into an answer to Claude's question. A question's answer is
+ * text only, so they are saved as files and the answer says where: Claude opens
+ * them with its Read tool. Kept a week.
+ */
+const PASTE_DIR = path.join(require('node:os').homedir(), '.agent-logbook', 'pastes')
+function pastedNote (id, list) {
+  const pics = (Array.isArray(list) ? list : []).slice(0, 4)
+    .filter(im => im && /^image\/(png|jpeg|gif|webp)$/.test(im.mediaType) &&
+      typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < 7e6)
+  if (!pics.length || !/^[\w-]+$/.test(String(id))) return ''
+  const paths = []
+  try {
+    fs.mkdirSync(PASTE_DIR, { recursive: true })
+    for (const f of fs.readdirSync(PASTE_DIR)) {
+      const p = path.join(PASTE_DIR, f)
+      try { if (Date.now() - fs.statSync(p).mtimeMs > 7 * 864e5) fs.rmSync(p) } catch {}
+    }
+    pics.forEach((im, i) => {
+      const ext = im.mediaType.split('/')[1].replace('jpeg', 'jpg')
+      const p = path.join(PASTE_DIR, `${id}-${Date.now()}-${i + 1}.${ext}`)
+      fs.writeFileSync(p, Buffer.from(im.data, 'base64'))
+      paths.push(p)
+    })
+  } catch { return '' }
+  return `\n\n(The user attached ${paths.length === 1 ? 'a picture' : `${paths.length} pictures`} to this answer: ${paths.join(', ')}. Open ${paths.length === 1 ? 'it' : 'them'} with the Read tool.)`
+}
+
 /** Commands run since the last message, in the shape Claude Code's terminal writes them. */
 function shellContext (id) {
   const list = SHELL_OUT.get(id)
@@ -1965,7 +1993,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             runner.answer(msg.id, msg.requestId, {
               allow: !!msg.allow, always: !!msg.always,
               answers: msg.answers && typeof msg.answers === 'object' ? Object.fromEntries(Object.entries(msg.answers)
-                .map(([k, v]) => [String(k), String(v)])) : null,
+                .map(([k, v]) => [String(k), String(v) + pastedNote(msg.id, msg.images?.[k])])) : null,
               message: msg.message ? String(msg.message) : '',
             })
             break
