@@ -2052,8 +2052,18 @@ function harnessNote (e) {
     return { kind: 'agent', text: summary + word + (bits ? ` · ${bits}` : ''), detail: report }
   }
   if (kind === 'peer') {
+    const from = (raw.match(/<agent-message[^>]*\bfrom="([^"]+)"/) || [])[1] || ''
     const body = raw.replace(/^Another Claude session sent a message:\s*/, '')
       .replace(/<agent-message[^>]*>/, '').replace(/<\/agent-message>\s*$/, '').trim()
+    // a sub-agent handing its report back: the same as a finished agent - one
+    // line, with the report folded under it, not the harness preamble in full
+    if (/^\[Subagent hand-back\]/.test(body)) {
+      const at = body.search(/The report follows:\s*\n/)
+      let report = at < 0 ? body : body.slice(at).replace(/^The report follows:\s*\n/, '')
+      // the harness indents every line of the report by two spaces
+      if (report.split('\n').every(l => !l.trim() || l.startsWith('  '))) report = report.replace(/^ {2}/gm, '')
+      return { kind: 'agent', text: 'An agent reported back', detail: report.trim(), from }
+    }
     return { kind: 'peer', text: body }
   }
   return null
@@ -2133,7 +2143,7 @@ function parseMore (st, raw) {
     if (e.isSidechain && !keepSidechain) continue
     const note = harnessNote(e)
     if (note) {
-      turns.push({ role: 'note', kind: note.kind, text: note.text, detail: note.detail || '',
+      turns.push({ role: 'note', kind: note.kind, text: note.text, detail: note.detail || '', from: note.from || '',
         tools: [], images: [], edits: [], ts: e.timestamp || '' })
       continue
     }

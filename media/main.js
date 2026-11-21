@@ -2163,7 +2163,9 @@ function noteCard (n) {
   if (n.ts) head.appendChild(el('span', '', clock(n.ts)))
   card.appendChild(head)
   const body = el('div', 'nbody')
-  body.innerHTML = window.md(n.text)
+  // a hand-back names the agent by id: say which one, from this chat's agents
+  const who = n.from && (CUR?.agents || []).find(a => a.id === n.from)
+  body.innerHTML = window.md(who ? `**${who.description}** reported back` : n.text)
   addCopyButtons(body)
   card.appendChild(body)
   // an agent's full report, when the notification carried one - folded, since
