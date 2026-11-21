@@ -412,4 +412,7 @@ function stopAll (now) {
 /** A Claude for this chat was just ended outside the runner. */
 const markEnded = id => ENDED.set(id, Date.now())
 
-module.exports = { init, has, endedRecently, liveMap, state, send, answer, interrupt, setModel, setMode, setEffort, stop, stopAll, markEnded }
+/** The folder Claude runs in for this chat, when it runs here. */
+const cwdOf = id => RUNS.get(id)?.cwd || ''
+
+module.exports = { init, cwdOf, has, endedRecently, liveMap, state, send, answer, interrupt, setModel, setMode, setEffort, stop, stopAll, markEnded }

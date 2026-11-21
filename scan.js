@@ -86,6 +86,12 @@ const clean = t => {
   if (s.includes('<local-command-')) {
     for (const k of ['stdout', 'stderr', 'caveat']) s = cutBlocks(s, `<local-command-${k}>`, `</local-command-${k}>`)
   }
+  // a "!" command, as Claude Code's terminal writes it: shown as typed, output left out
+  if (s.includes('<bash-input>')) {
+    s = s.replace(/<bash-input>([\s\S]*?)<\/bash-input>/g, (_, c) => '! ' + c.trim())
+    for (const k of ['stdout', 'stderr']) s = cutBlocks(s, `<bash-${k}>`, `</bash-${k}>`)
+    s = s.replace(/\n{3,}/g, '\n\n')
+  }
   if (s.includes('<command-')) {
     for (const k of ['name', 'message', 'args']) s = cutBlocks(s, `<command-${k}>`, `</command-${k}>`)
   }

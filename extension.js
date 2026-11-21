@@ -1427,6 +1427,54 @@ function saveCutoffs (m) {
     fs.writeFileSync(CUTOFF_FILE, JSON.stringify(m))
   } catch {}
 }
+// "!" commands typed in the logbook: running ones, and finished output waiting to
+// go to Claude with the next message, as Claude Code's terminal does
+const SHELLS = new Map()          // key -> child process
+const SHELL_OUT = new Map()       // chat id -> [{ cmd, out, code }]
+const ANSI = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07]*\x07/g
+function chatShell (msg, post) {
+  const id = String(msg.id || ''), key = String(msg.key || ''), cmd = String(msg.cmd || '')
+  if (!/^[\w-]+$/.test(id) || !/^\w+$/.test(key) || !cmd.trim()) return
+  const end = (code, extra) => post({ type: 'chatShellEnd', id, key, code, chunk: extra || '' })
+  const s = scan.index().find(x => x.id === id)
+  const cwd = runner.cwdOf?.(id) || NEW_CHATS.get(id)?.cwd || s?.cwd
+  if (!cwd || !fs.existsSync(cwd)) return end(1, 'The chat\'s folder was not found.\n')
+  // your login shell, so PATH and tools match a terminal
+  const sh = process.env.SHELL || '/bin/zsh'
+  const env = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' }
+  delete env.CLAUDECODE
+  const p = require('node:child_process').spawn(sh, ['-lc', cmd], { cwd, env })
+  SHELLS.set(key, p)
+  let out = '', pending = '', timer = null
+  const flush = () => { timer = null; if (pending) { post({ type: 'chatShellOut', id, key, chunk: pending }); pending = '' } }
+  const take = d => {
+    const t = String(d).replace(ANSI, '').replace(/\r(?!\n)/g, '\n')
+    out = (out + t).slice(-60000)
+    pending += t
+    if (!timer) timer = setTimeout(flush, 150)
+  }
+  p.stdout.on('data', take)
+  p.stderr.on('data', take)
+  p.on('error', e => take(String(e.message) + '\n'))
+  p.on('close', code => {
+    SHELLS.delete(key)
+    clearTimeout(timer); flush()
+    const list = SHELL_OUT.get(id) || []
+    // the tail is what matters in a long install log, and keeps Claude's context sane
+    list.push({ cmd, out: out.length > 20000 ? '…' + out.slice(-20000) : out, code: code ?? 1 })
+    SHELL_OUT.set(id, list)
+    end(code ?? 1)
+  })
+}
+/** Commands run since the last message, in the shape Claude Code's terminal writes them. */
+function shellContext (id) {
+  const list = SHELL_OUT.get(id)
+  if (!list?.length) return ''
+  SHELL_OUT.delete(id)
+  return list.map(x => `<bash-input>${x.cmd}</bash-input>\n<bash-stdout>${x.out.trimEnd()}</bash-stdout>` +
+    (x.code ? `\n<bash-stderr>Exited with code ${x.code}</bash-stderr>` : '')).join('\n') + '\n\n'
+}
+
 function clearCutoff (id) {
   const m = cutoffs()
   if (!(id in m)) return
@@ -1452,7 +1500,7 @@ function chatSend (msg, post) {
   if (!text.trim() && !images.length) return
   const pick = (v, ok) => ok(v) ? v : ''
   const opts = {
-    text, images,
+    text: shellContext(id) + text, images,
     model: pick(String(msg.model || ''), v => /^[\w.[\]-]{0,60}$/.test(v)),
     mode: pick(msg.mode, v => CHAT_MODES.includes(v)) || pick(cfg('chatPermissionMode', 'default'), v => CHAT_MODES.includes(v)),
     effort: pick(msg.effort, v => CHAT_EFFORTS.includes(v)),
@@ -1883,6 +1931,12 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           }
           case 'chatSend':
             chatSend(msg, post)
+            break
+          case 'chatShell':
+            chatShell(msg, post)
+            break
+          case 'chatShellStop':
+            SHELLS.get(String(msg.key || ''))?.kill('SIGTERM')
             break
           case 'chatCutoffClear':
             clearCutoff(String(msg.id || ''))

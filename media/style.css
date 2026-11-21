@@ -1629,3 +1629,11 @@ body[data-mode="sidebar"] #rescan { display: none !important }
 body[data-chat] #limits, body[data-chat] #lnudges, body[data-chat] #tabs,
 body[data-chat] #view-chats > .bar, body[data-chat] #rows,
 body[data-chat] .dback, body[data-chat] .newinchat { display: none !important }
+
+/* a "!" command run from the message box, and its output */
+.chatshell { margin: 8px 0; border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 6px 8px }
+.chatshell.failed { border-color: color-mix(in srgb, var(--vscode-errorForeground) 50%, transparent) }
+.chatshell .shhead { display: flex; align-items: center; gap: 8px }
+.chatshell .shcmd { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family); font-size: 12px }
+.chatshell .shout { margin: 6px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: var(--vscode-editor-font-family); font-size: 11px; color: var(--vscode-descriptionForeground) }

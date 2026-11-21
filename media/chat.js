@@ -11,6 +11,7 @@
    Claude or a transcript is drawn with textContent or md(), which escapes. */
 
 const CHAT = {
+  shell: new Map(),      // chat id -> "!" commands run here: { key, cmd, out, running, code, sentWith }
   where: new Map(),      // chat id -> { where, at }: where a chat running elsewhere runs
   cutoff: new Set(),     // chats whose last reply a window reload cut off
   state: new Map(),      // chat id -> what the host says about its Claude here
@@ -190,6 +191,26 @@ function paintLive () {
     if (meta) w.appendChild(el('div', 'chatmeta', meta))
     live.appendChild(w)
   }
+  // "!" commands: what ran, its output, and whether Claude has seen it yet
+  for (const sh of CHAT.shell.get(id) || []) {
+    const w = el('div', 'chatshell' + (sh.running ? ' running' : sh.code ? ' failed' : ''))
+    const head = el('div', 'shhead')
+    head.append(el('code', 'shcmd', '! ' + sh.cmd))
+    if (sh.running) {
+      const stop = el('button', 'btn', 'Stop')
+      stop.onclick = () => send({ type: 'chatShellStop', id, key: sh.key })
+      head.appendChild(stop)
+    }
+    w.appendChild(head)
+    if (sh.out) {
+      const pre = el('pre', 'shout', sh.out.length > 20000 ? '…' + sh.out.slice(-20000) : sh.out)
+      w.appendChild(pre)
+      requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight })
+    }
+    w.appendChild(el('div', 'chatmeta', sh.running ? 'Running in the chat\'s folder…'
+      : `${sh.code ? `Exited with code ${sh.code}` : 'Done'} · ${sh.sentWith ? 'sent to Claude with your message' : 'Claude sees this with your next message'}`))
+    live.appendChild(w)
+  }
   echoes.filter(e => !isQueued(e)).forEach(drawEcho)
   const p = CHAT.partial.get(id)
   if (p?.text) {
@@ -342,8 +363,26 @@ function submit (c) {
   if (!text.trim() && !images.length) return
   if (!images.length && localCommand(c, text)) return
   if (whereRunning(id) === 'elsewhere') return
+  // "!" runs a command in the chat's folder, as in Claude Code's terminal: Claude
+  // does not answer it, but gets the command and its output with your next message
+  if (!images.length && /^\s*!/.test(text)) {
+    const cmd = text.replace(/^\s*!/, '').trim()
+    if (!cmd) return
+    const key = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+    CHAT.shell.set(id, [...(CHAT.shell.get(id) || []), { key, cmd, out: '', running: true, code: null }])
+    send({ type: 'chatShell', id, key, cmd })
+    c.ta.value = ''
+    c.fit()
+    c.slash.hidden = true
+    FOLLOW = true
+    placeLive()
+    paintComposer()
+    return
+  }
   const p = picksFor(id)
   CHAT.cutoff.delete(id)
+  // finished commands go to Claude with this message; they leave the view once it lands
+  for (const sh of CHAT.shell.get(id) || []) if (!sh.running && !sh.sentWith) { sh.sentWith = text; sh.sentAt = Date.now() }
   send({ type: 'chatSend', id, text, images: images.map(im => ({ mediaType: im.mediaType, data: im.data })), model: p.model, mode: p.mode, effort: p.effort })
   const queued = !!CHAT.state.get(id)?.busy
   CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, images: images.length, at: Date.now(), queued }])
@@ -422,8 +461,8 @@ function paintComposer () {
   const now = CHAT.state.get(id)
   c.ta.placeholder = now?.asks?.length ? 'Answer Claude above first'
     : now?.busy ? 'Queue a message…'
-    : where === 'here' || CHAT.here.has(id) ? 'Message Claude… (/ for commands)'
-      : 'Continue here… (/ for commands)'
+    : where === 'here' || CHAT.here.has(id) ? 'Message Claude… (/ for commands, ! for a shell command)'
+      : 'Continue here… (/ for commands, ! for a shell command)'
   paintPickers(c)
   paintAsks(c)
   paintImages(c)
@@ -825,6 +864,13 @@ function caughtUp (t) {
     if (left.length) CHAT.echo.set(id, left); else CHAT.echo.delete(id)
   }
   if (CHAT.landed.has(id)) { CHAT.landed.delete(id); CHAT.partial.delete(id) }
+  // a command sent along with a message is in the transcript once that message is
+  const sh = CHAT.shell.get(id)
+  if (sh?.length) {
+    const users = (t.turns || []).filter(x => x.role === 'user' && x.text).slice(-4)
+    const left = sh.filter(x => !x.sentWith || !(users.some(u => String(u.text).includes('! ' + x.cmd.slice(0, 80))) || Date.now() - x.sentAt > 15000))
+    if (left.length) CHAT.shell.set(id, left); else CHAT.shell.delete(id)
+  }
 }
 
 if (!BOARD_MODE) {
@@ -846,6 +892,14 @@ if (!BOARD_MODE) {
     // the Settings switch may have flipped
     if (m.type === 'env' && m.cfg) { chatMount(); if (!chatOn()) return }
     if (m.type === 'sessions' || m.type === 'env') { if (COMPOSER && chatTarget()?.id === COMPOSER.id) paintComposer(); return }
+    if (m.type === 'chatShellOut' || m.type === 'chatShellEnd') {
+      const sh = (CHAT.shell.get(m.id) || []).find(x => x.key === m.key)
+      if (!sh) return
+      if (m.chunk) sh.out = (sh.out + m.chunk).slice(-200000)
+      if (m.type === 'chatShellEnd') { sh.running = false; sh.code = m.code }
+      if (COMPOSER?.id === m.id) placeLive()
+      return
+    }
     if (m.type === 'chatWhere') { CHAT.where.set(m.id, { where: m.where || '', at: Date.now() }); paintComposer(); return }
     if (m.type === 'chatCutoff') { CHAT.cutoff = new Set(m.ids || []); paintComposer(); return }
     if (!m.type.startsWith('chat') || !m.id) return
