@@ -11,6 +11,7 @@
    Claude or a transcript is drawn with textContent or md(), which escapes. */
 
 const CHAT = {
+  sentLog: new Map(),    // chat id -> messages sent from here, oldest first: Up brings them back
   shell: new Map(),      // chat id -> "!" commands run here: { key, cmd, out, running, code, sentWith }
   where: new Map(),      // chat id -> { where, at }: where a chat running elsewhere runs
   cutoff: new Set(),     // chats whose last reply a window reload cut off
@@ -292,6 +293,8 @@ function buildComposer (id) {
   ta.onkeydown = e => {
     if (!c.slash.hidden && slashKey(c, e)) return
     if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); cycleMode(c); return }
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && !e.isComposing &&
+      recall(c, e.key === 'ArrowUp' ? -1 : 1)) { e.preventDefault(); return }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(c) }
     else if (e.key === 'Escape' && !e.isComposing) {
       // like the terminal: Escape stops a reply in progress
@@ -381,6 +384,8 @@ function submit (c) {
   }
   const p = picksFor(id)
   CHAT.cutoff.delete(id)
+  CHAT.sentLog.set(id, [...(CHAT.sentLog.get(id) || []), text].slice(-50))
+  c.hist = null
   // finished commands go to Claude with this message; they leave the view once it lands
   for (const sh of CHAT.shell.get(id) || []) if (!sh.running && !sh.sentWith) { sh.sentWith = text; sh.sentAt = Date.now() }
   send({ type: 'chatSend', id, text, images: images.map(im => ({ mediaType: im.mediaType, data: im.data })), model: p.model, mode: p.mode, effort: p.effort })
@@ -401,6 +406,41 @@ function submit (c) {
   if (CHAT.here.has(id)) pendingIntro(id)
   placeLive()
   paintComposer()
+}
+
+/**
+ * Up and Down in the box walk through what you sent in this chat, newest first,
+ * as Claude Code's terminal does - so a message you stopped comes straight back
+ * to edit. Only from an empty box, or while already walking, and only from the
+ * first line (Up) or last line (Down), so moving through a long draft still works.
+ */
+function recall (c, dir) {
+  const ta = c.ta
+  const walking = c.hist && ta.value === c.hist.list[c.hist.at]
+  if (!walking && ta.value.trim()) return false
+  const before = ta.value.slice(0, ta.selectionStart), after = ta.value.slice(ta.selectionEnd)
+  if (walking && dir < 0 && before.includes('\n')) return false
+  if (walking && dir > 0 && after.includes('\n')) return false
+  if (!walking) {
+    if (dir > 0) return false
+    // what this chat has from you: its transcript, plus anything sent since
+    const mine = (CUR?.id === c.id ? CUR.turns || [] : []).filter(t => t.role === 'user' && t.text).map(t => String(t.text))
+    for (const s of CHAT.sentLog.get(c.id) || []) if (!mine.slice(-5).includes(s)) mine.push(s)
+    const list = mine.filter((s, i) => s.trim() && s !== mine[i - 1])
+    if (!list.length) return false
+    c.hist = { list, at: list.length, draft: ta.value }
+  }
+  const at = c.hist.at + dir
+  if (at < 0) return true                                    // the oldest: stay there
+  c.hist.at = at
+  ta.value = at >= c.hist.list.length ? c.hist.draft : c.hist.list[at]
+  if (at >= c.hist.list.length) c.hist = null                // back past the newest: your draft
+  CHAT.drafts.set(c.id, ta.value)
+  c.fit()
+  paintGo(c)
+  const end = ta.value.length
+  ta.setSelectionRange(end, end)
+  return true
 }
 
 function note (id, text, err) {
