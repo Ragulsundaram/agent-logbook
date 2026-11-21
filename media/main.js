@@ -3,7 +3,9 @@ const $ = s => document.querySelector(s)
 const el = (t, c, txt) => { const n = document.createElement(t); if (c) n.className = c; if (txt != null) n.textContent = txt; return n }
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 const rx = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const send = m => vs.postMessage(m)
+// in a one-chat tab, opening another chat (a branch link) opens it in its own tab
+const send = m => vs.postMessage(CHAT_ONLY && m.type === 'session' && m.id && m.id !== CHAT_ONLY
+  ? { type: 'openTab', id: m.id, beside: true } : m)
 // an editor tab holding one chat only: no list, no tabs, nothing else opens in it
 let CHAT_ONLY = document.body.dataset.chat || ''
 const openTab = (id, beside) => send({ type: 'openTab', id, beside: !!beside })

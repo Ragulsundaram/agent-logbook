@@ -1340,10 +1340,15 @@ function turnsFor (id, part, ti) {
   if (Number.isInteger(ti) && ti >= (full?.turns?.length || 0)) { full = null; ensureFull(id) }
   return full?.turns
 }
+const REREAD = new Map()            // chat id -> when a missing picture last made it read on
 function imageAt (id, ti, ii, part) {
   const turns = turnsFor(id, part, ti)
-  // a picture added to a turn this copy already has: read on once and look again
-  if (!part && Number.isInteger(ii) && turns?.[ti] && !turns[ti].images?.[ii]) { full = null; ensureFull(id) }
+  // a picture added to a turn this copy already has: read on and look again -
+  // at most every few seconds per chat, so a bad index cannot force read after read
+  if (!part && Number.isInteger(ii) && turns?.[ti] && !turns[ti].images?.[ii] && Date.now() - (REREAD.get(id) || 0) > 5000) {
+    REREAD.set(id, Date.now())
+    full = null; ensureFull(id)
+  }
   return (part ? turns : full?.turns)?.[ti]?.images?.[ii]?.src || null
 }
 

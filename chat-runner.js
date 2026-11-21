@@ -23,7 +23,7 @@ const STDERR_KEEP = 4000
 const RUNS = new Map()              // chat id -> its process and state
 const ENDED = new Map()             // chat id -> when its Claude here last quit
 const STOPPING = new Map()          // chat id -> a Claude told to leave that has not exited yet
-const DEFERRED = new Map()          // chat id -> a send waiting for that Claude to go; a stop cancels it
+const DEFERRED = new Map()          // chat id -> sends waiting, in order, for that Claude to go; a stop cancels them
 let OPTS = { bin: () => null, emit: () => {}, onChange: () => {} }
 // what the last Claude to start reported: offered before any chat has started
 let KNOWN = { commands: [], models: [] }
@@ -320,15 +320,18 @@ function send (id, args) {
   // transcript would tangle it, so end that one and start once it has gone
   const old = !r && STOPPING.get(id)
   if (old && old.exitCode === null && old.signalCode === null) {
+    // every message sent meanwhile waits its turn, in the order it was sent
+    const queue = DEFERRED.get(id)
+    if (queue) { queue.push(args); return true }
+    const waiting = [args]
+    DEFERRED.set(id, waiting)
     try { old.kill() } catch {}
-    const ticket = {}
-    DEFERRED.set(id, ticket)
     old.once('exit', () => {
       STOPPING.delete(id)
-      // stopped while it waited: it does not start after all
-      if (DEFERRED.get(id) !== ticket) return
+      // stopped while they waited: none of them starts after all
+      if (DEFERRED.get(id) !== waiting) return
       DEFERRED.delete(id)
-      send(id, args)
+      for (const a of waiting) send(id, a)
     })
     return true
   }
