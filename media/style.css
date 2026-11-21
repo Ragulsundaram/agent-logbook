@@ -439,6 +439,8 @@ mark.on { background: var(--amber); color: #000 }
 .split .caret { gap: 4px }
 .tcaret { font-size: 11px; opacity: .8 }
 .menuitem .mico { width: 14px; height: 14px; flex: none }
+/* solid icons (the Claude mark, expand/collapse) take the text colour, as outlines do */
+.menuitem .mico:not(.outline) { fill: currentColor }
 .menuitem.on { background: var(--clay-dim);
   color: var(--vscode-foreground) }
 
