@@ -442,6 +442,9 @@ function send (id, args) {
   })
   r.pending++
   r.busy = true
+  // a reply that just ended was waiting to see whether more was coming: this is
+  // more, and its own turn will settle it, so the wait must not end it first
+  clearTimeout(r.nextTurn); r.nextTurn = null
   armIdle(r)
   emit(id, { type: 'chatState', state: state(id) })
   OPTS.onChange(id)

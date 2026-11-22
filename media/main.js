@@ -1487,7 +1487,7 @@ function drawEarlier (count = MORE_DRAW) {
 let LAST_SIGS = []
 // what a block looks like on screen: its size, and the state of any agent it
 // launched - a card turning from running to done has to be redrawn too
-const blockSig = (b, t) => [b.role, (b.text || '').length, b.tools.length,
+const blockSig = (b, t) => [b.role, (b.text || '').length, (b.detail || '').length, b.tools.length,
   (b.images || []).length, (b.edits || []).length, b.ts || '',
   b.tools.filter(x => x.useId).map(x => {
     const a = (t.agents || []).find(g => g.toolUseId === x.useId)

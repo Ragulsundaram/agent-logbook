@@ -2948,6 +2948,8 @@ function toMarkdown (t) {
   for (const turn of t.turns) {
     out.push(`### ${turn.role === 'user' ? 'You' : 'Claude'}`, '')
     if (turn.text) out.push(turn.text, '')
+    // a note's folded part (a compaction's summary, an agent's report) goes out too
+    if (turn.detail) out.push(turn.detail, '')
     for (const tool of turn.tools) out.push(`> \`${tool.name}\``, '')
   }
   return out.join('\n')
