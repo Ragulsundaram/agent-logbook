@@ -3,12 +3,17 @@ const $ = s => document.querySelector(s)
 const el = (t, c, txt) => { const n = document.createElement(t); if (c) n.className = c; if (txt != null) n.textContent = txt; return n }
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 const rx = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const send = m => vs.postMessage(m)
+// in a one-chat tab, opening another chat (a branch link) opens it in its own tab
+const send = m => vs.postMessage(CHAT_ONLY && m.type === 'session' && m.id && m.id !== CHAT_ONLY
+  ? { type: 'openTab', id: m.id, beside: true } : m)
+// an editor tab holding one chat only: no list, no tabs, nothing else opens in it
+let CHAT_ONLY = document.body.dataset.chat || ''
+const openTab = (id, beside) => send({ type: 'openTab', id, beside: !!beside })
 
 const nfmt = n => n >= 1e9 ? (n / 1e9).toFixed(1) + 'B'
   : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M'
   : n >= 1e3 ? (n / 1e3).toFixed(0) + 'K' : String(n | 0)
-const money = n => n >= 100 ? '$' + n.toFixed(0) : '$' + n.toFixed(2)
+const money = n => n >= 100 ? '$' + Math.round(n).toLocaleString('en-US') : '$' + n.toFixed(2)
 const niceDate = d => new Date(d + 'T12:00').toLocaleDateString(undefined,
   { day: 'numeric', month: 'short' })
 const dur = ms => { const m = Math.round(ms / 6e4); return m < 60 ? m + 'm' : (m / 60).toFixed(m / 60 >= 10 ? 0 : 1) + 'h' }
@@ -16,6 +21,13 @@ const ago = ts => {
   const s = (Date.now() - ts) / 1000
   return s < 3600 ? Math.max(1, s / 60 | 0) + 'm' : s < 86400 ? (s / 3600 | 0) + 'h'
     : s < 6048e2 ? (s / 86400 | 0) + 'd' : (s / 6048e2 | 0) + 'w'
+}
+/** A message's stamp: the time alone for today, the full stamp otherwise. */
+const msgClock = ts => {
+  const d = new Date(ts)
+  if (d.toDateString() !== new Date().toDateString()) return clock(ts)
+  if (DATEFMT === 'iso') return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
 const clock = ts => {
   if (!ts) return ''
@@ -275,7 +287,7 @@ document.querySelectorAll('.tab').forEach(b => {
 $('#newchat').appendChild(icon('plus'))
 $('#rescan').appendChild(icon('reload'))
 tips()                                   // the header row
-$('#newchat').onclick = () => send({ type: 'newChat' })
+$('#newchat').onclick = e => newChatMenu(e.currentTarget)   // chat.js: here, or in a terminal
 // the title-bar icon only exists in the sidebar, so the button lives here too
 $('#boardbtn').appendChild(icon('pulse'))
 $('#boardbtn').onclick = () => send({ type: 'openBoard' })
@@ -651,7 +663,7 @@ function paintResources () {
   if (st && CUR) {
     const r = RES?.sessions?.[CUR.id]
     const grp = st.closest('.resgroup')
-    if (grp && grp.hidden !== !r) { grp.hidden = !r; restack(grp.parentElement) }
+    if (grp && grp.hidden !== !heavy(r)) { grp.hidden = !heavy(r); restack(grp.parentElement) }
     if (r) {
       st.textContent = resText(r)
       st.classList.toggle('hot', heavy(r))
@@ -842,20 +854,6 @@ function fillViewport () {
   })
 }
 
-/** More rows as you reach the end, rather than a button for every batch. */
-function onListScroll () {
-  const box = $('#rows')
-  if (!box || box.scrollTop + box.clientHeight < box.scrollHeight - 160) return
-  let grew = false
-  for (const [k, total] of GROUPSIZE) {
-    const at = SHOWN.get(k) || PAGE
-    if (at >= total) continue
-    SHOWN.set(k, at + MORE)
-    grew = true
-    break                                  // one folder at a time, in order
-  }
-  if (grew) draw()
-}
 const GROUPSIZE = new Map()
 
 /** Search results: a summary line, then one card per chat, expandable to its hits. */
@@ -899,7 +897,7 @@ function messageMatches (q) {
     const chev = el('span', 'chev2', '›')
     const live = SESSIONS.find(x => x.id === c.id)?.live
     head.append(chev, sourceIcon(c.provider), el('span', 't', c.title))
-    if (live) head.appendChild(el('span', live === 'busy' ? 'spinner' : 'dot idle'))
+    if (live) head.appendChild(el('span', live === 'busy' ? 'spinner' : live === 'waiting' ? 'dot needs' : 'dot idle'))
     const badge = el('span', 'count', String(c.total))
     badge.title = `${c.total} match${c.total === 1 ? '' : 'es'} in this chat`
     head.appendChild(badge)
@@ -979,6 +977,7 @@ function openAt (id, q) {
   send({ type: 'session', id })
 }
 let JUMP = ''
+let FIND_OPEN = ''        // the chat whose find box you opened; it stays open across live redraws
 let PERF = null   // timing of an open from search, written to the host's log
 
 function ghead (name, items, open, flip) {
@@ -1004,9 +1003,10 @@ function chatRow (s) {
   const rb = resBadge(s.id)
   if (rb) r.appendChild(rb)
   r.appendChild(el('span', 'age', ago(s.lastTs)))
-  // busy gets a turning ring, idle a steady dot, anything else nothing at all
-  r.appendChild(el('span',
-    s.live === 'busy' ? 'spinner' : 'dot' + (s.live === 'idle' ? ' idle' : ' off')))
+  // busy gets a turning ring, waiting on you an amber dot, idle a steady dot, anything else nothing
+  const dot = el('span', s.live === 'busy' ? 'spinner' : 'dot' + (s.live === 'waiting' ? ' needs' : s.live === 'idle' ? ' idle' : ' off'))
+  if (s.live === 'waiting') dot.title = 'Claude is waiting for you'
+  r.appendChild(dot)
 
   // hover actions, floated over the right edge like the row's own toolbar
   const acts = el('div', 'rowacts')
@@ -1026,7 +1026,10 @@ function chatRow (s) {
   r.appendChild(acts)
 
   r.title = `${s.project} · ${s.messages} messages · ${nfmt(s.tokens)} tokens · ${money(s.cost)}`
-  r.onclick = () => { (PERF = { id: s.id, t0: performance.now() }, send({ type: 'session', id: s.id })) }
+  r.onclick = e => {
+    if (e.altKey && s.provider !== 'codex') return openTab(s.id, true)   // Alt: straight to its own tab, split
+    PERF = { id: s.id, t0: performance.now() }; send({ type: 'session', id: s.id })
+  }
   warmOnHover(r, s.id)
   r.oncontextmenu = e => { e.preventDefault(); rowMenu(s, e.clientX, e.clientY) }
   return r
@@ -1103,7 +1106,7 @@ function putImage (m) {
  */
 let PENDING_CHAT = null
 function showPending (id) {
-  closeDetail()
+  closeDetail(true)
   PENDING_CHAT = id
   $('#tabs').hidden = TAB === 'chats'   // a chat opened in the background must not take the tab row from another page
   $('#view-chats .bar').hidden = true
@@ -1114,7 +1117,7 @@ function showPending (id) {
   const top = el('div', 'dtop')
   const back = el('button', 'iconbtn', '‹')
   back.title = 'All chats'
-  back.onclick = () => { PENDING_CHAT = null; closeDetail() }
+  back.onclick = () => { PENDING_CHAT = null; CHAT_ONLY ? send({ type: 'session', id: CHAT_ONLY }) : closeDetail() }
   top.append(back, el('h2', '', 'New chat'))
   const head = el('div', 'dhead')
   head.appendChild(top)
@@ -1123,7 +1126,9 @@ function showPending (id) {
   d.append(head, wait)
 }
 
-function closeDetail () {
+function closeDetail (forPending) {
+  // a one-chat tab keeps its chat, except to make room for a copy started from it
+  if (CHAT_ONLY && !forPending) return
   if (CUR) PENDING_CHAT = null
   CUR = null
   SEEN.disconnect()
@@ -1193,10 +1198,9 @@ function chatFacts (t) {
   if (t.isAgent) return agentFacts(t)
   // replies name the plain model; the 1M window is known from the chat, not the name
   const m = t.info?.model ? modelName(t.info.model) : ''
+  // cost lives in the footer and edits in "files changed": the line stays short
   return [m && t.info.window >= 1e6 && !m.includes('1M') ? m + ' (1M)' : m,
-    `${t.messages} messages`, `${t.edits} edits`, `${nfmt(t.tokens)} tokens`,
-    // Codex bills against a plan, not per token, so there is no figure to show
-    t.provider === 'codex' ? '' : money(t.cost), `${dur(t.activeMs)} active`].filter(Boolean).join(' · ')
+    `${t.messages} messages`, `${dur(t.activeMs)} active`].filter(Boolean).join(' · ')
 }
 
 /** The numbers under an agent's name, wherever it is shown. */
@@ -1433,10 +1437,18 @@ function renderBlocks (t, blocks, from, body, to = blocks.length, before = null)
     // copy button a code block puts in the same corner
     if (!next || next.role !== turn.role) {
       const when = el('div', 'when')
-      const text = run.join('\n\n')
-      if (text) when.appendChild(msgCopyButton(text))
-      when.appendChild(el('span', 'whot',
-        (turn.role === 'user' ? 'You' : 'Claude') + (turn.ts ? ' · ' + clock(turn.ts) : '')))
+      // the run's text is gathered when the button is pressed, not now: a live
+      // write then only has to redraw the blocks that changed, not the whole run
+      if (run.length || blocks.slice(runStart(blocks, bi), bi).some(x => x.text)) {
+        when.appendChild(msgCopyButton(() => {
+          const at = Number(w.dataset.bi)
+          return ALL_BLOCKS.slice(runStart(ALL_BLOCKS, at), at + 1).map(x => x.text).filter(Boolean).join('\n\n')
+        }))
+      }
+      // today's messages show just the time; the full date is on hover
+      const who = el('span', 'whot', (turn.role === 'user' ? 'You' : 'Claude') + (turn.ts ? ' · ' + msgClock(turn.ts) : ''))
+      if (turn.ts) who.title = clock(turn.ts)
+      when.appendChild(who)
       w.appendChild(when)
       run = []
     }
@@ -1498,6 +1510,11 @@ let FOLLOW = true
 // Scrolls made here, not by you: they must not fold the header or count as
 // you reading upward.
 let AUTO_UNTIL = 0
+// the last time you scrolled by hand: while text streams in, our own scrolls to
+// the end came faster than the 200ms they mute, so yours were never heard
+let HAND_AT = 0
+let DRAGGING = false                              // holding the scrollbar
+window.addEventListener('pointerup', () => { DRAGGING = false }, true)
 function stickToEnd (body) {
   if (!body || !FOLLOW) return
   AUTO_UNTIL = Date.now() + 200
@@ -1518,10 +1535,11 @@ function updateLive (t) {
   let k = 0
   while (k < sigs.length && k < LAST_SIGS.length && sigs[k] === LAST_SIGS[k]) k++
   if (k < sigs.length || sigs.length !== LAST_SIGS.length) {
-    // back to the start of the run: the block that ended it carried the run's
-    // copy line, and if the run grew that line has to move to the new end
-    while (k > 0 && blocks[k - 1] && blocks[k] && blocks[k - 1].role === blocks[k].role &&
-      blocks[k].role !== 'note') k--
+    // one block back, not to the start of the run: only the block before the
+    // change can gain or lose the run's attribution line. Redrawing the whole
+    // run reset a selection, find marks and opened tool cards every second
+    // during a long turn.
+    if (k > 0) k--
     for (const n of [...body.children]) {
       if (Number(n.dataset.bi) >= k) { releaseImages(n); n.remove() }
     }
@@ -1549,7 +1567,8 @@ function updateLive (t) {
     const tree = oldFoot.querySelector('.ftree')
     const treeOpen = !!(tree && !tree.hidden)
     fresh.querySelector('.runstrip')?.remove()
-    for (const n of [...oldFoot.children]) if (n !== runner) n.remove()
+    // the message box (chat.js) lives at the top of the footer and stays put
+    for (const n of [...oldFoot.children]) if (n !== runner && !n.classList.contains('composer')) n.remove()
     for (const n of [...fresh.children]) oldFoot.appendChild(n)
     if (treeOpen) {
       const t2 = oldFoot.querySelector('.ftree')
@@ -1585,6 +1604,48 @@ function updateLive (t) {
   return true
 }
 
+/** The chat's actions when the message box is the main one: resume elsewhere, branch, export. */
+function chatMenu (anchor, t) {
+  document.querySelectorAll('body > .menu.chatmenu').forEach(m => m.remove())
+  const menu = el('div', 'menu chatmenu')
+  const item = (ico, label, hint, fn) => {
+    const b = el('button', 'menuitem')
+    b.append(icon(ico, 'mico'), el('span', '', label), el('em', '', hint || ''))
+    b.onclick = () => { kill(); fn() }
+    menu.appendChild(b)
+  }
+  const sep = () => menu.appendChild(el('div', 'menusep'))
+  if (!CHAT_ONLY && !t.isAgent) {
+    item('open', 'Open in editor tab', '', () => openTab(t.id))
+    sep()
+  }
+  // a one-off: the default for Resume stays what Settings says
+  for (const [key, spec] of Object.entries(TARGETS)) {
+    item(spec.icon, key === 'auto' ? 'Resume where it started' : `Resume in ${spec.label}`, '',
+      () => send({ type: 'resume', id: t.id, target: key }))
+  }
+  sep()
+  item('fork', 'New chat from this one', 'full history, like /branch', () => send({ type: 'fork', id: t.id }))
+  item('brief', 'New chat from a summary', 'shorter, cheaper', () => send({ type: 'forkBrief', id: t.id }))
+  sep()
+  item(ALLTOOLS ? 'collapse' : 'expand', ALLTOOLS ? 'Collapse all steps' : 'Expand all steps', '', () => $('#detail .foldall')?.click())
+  item('chart', 'Stats', '', () => send({ type: 'analytics', id: t.id }))
+  item('reload', 'Reload', '', () => send({ type: 'session', id: t.id }))
+  item('export', 'Export as Markdown', '', () => send({ type: 'export', id: t.id }))
+  if (/^[\w-]+$/.test(t.id)) {
+    item('copy', 'Copy resume command', 'for a terminal', () => send({ type: 'copy', text: `claude --resume ${t.id}`, label: 'Resume command copied' }))
+  }
+  document.body.appendChild(menu)
+  const r = anchor.getBoundingClientRect()
+  const m = menu.getBoundingClientRect()
+  menu.style.left = `${Math.max(8, Math.min(r.right - m.width, window.innerWidth - m.width - 8))}px`
+  // a short panel: the menu scrolls inside rather than running off the top
+  const top = Math.max(8, Math.min(r.bottom + 4, window.innerHeight - m.height - 8))
+  menu.style.top = `${top}px`
+  menu.style.maxHeight = `${window.innerHeight - top - 8}px`
+  const kill = dismissOn(menu)
+}
+
 function showDetail (t, live) {
   // the whole chat arriving after its quick first copy: drawn afresh, since the
   // copy's messages were numbered from its own start, and held where the reader is
@@ -1617,7 +1678,7 @@ function showDetail (t, live) {
   // ---- sticky header
   const head = el('div', 'dhead')
   const top = el('div', 'dtop')
-  const back = el('button', 'iconbtn', '‹')
+  const back = el('button', isAgent ? 'iconbtn' : 'iconbtn dback', '‹')
   // an agent thread belongs to a chat, so back goes there rather than to the list
   back.title = isAgent ? 'Back to the chat' : 'All chats'
   back.onclick = isAgent ? () => send({ type: 'session', id: t.sessionId }) : closeDetail
@@ -1639,8 +1700,8 @@ function showDetail (t, live) {
   // a new chat without leaving this one for the list
   const fresh = el('button', 'iconbtn newinchat')
   fresh.appendChild(icon('plus'))
-  fresh.title = 'Start a new Claude session in a terminal'
-  fresh.onclick = () => send({ type: 'newChat' })
+  fresh.title = 'New chat'
+  fresh.onclick = e => newChatMenu(e.currentTarget)
   top.appendChild(fresh)
   head.appendChild(top)
 
@@ -1688,7 +1749,16 @@ function showDetail (t, live) {
 
   // an agent thread has none of this: it cannot be resumed, forked or renamed
   if (isAgent) head.appendChild(agentActs(t))
-  else {
+  else if (CFG.chatHere !== false && !codex) {
+    // chatting here, the box under the chat is the main action: the rest goes in
+    // one menu on the title row instead of a toolbar that took 50-90px of a narrow panel
+    const more = el('button', 'iconbtn moremenu')
+    more.appendChild(icon('dots'))
+    more.title = 'Resume elsewhere, branch, export and more'
+    more.setAttribute('aria-label', 'More actions')
+    more.onclick = e => chatMenu(e.currentTarget, t)
+    top.appendChild(more)
+  } else {
     // ---- one resume button + a dropdown for where
     // one Resume button that honours the chosen target, plus a picker that sets it
     const acts = el('div', 'acts')
@@ -1758,12 +1828,13 @@ function showDetail (t, live) {
     // no equivalent, so the buttons would only ever fail
     if (!codex) {
       acts.append(
-        mk('fork', 'Branch: a new session carrying this chat\'s full context, like /branch',
+        mk('fork', 'New chat from this one: carries its full history, like /branch',
           () => send({ type: 'fork', id: t.id })),
-        mk('brief', 'Fork with a brief: a fresh session that reads a summary instead of the whole chat',
+        mk('brief', 'New chat from a summary: reads a short recap instead of the whole chat',
           () => send({ type: 'forkBrief', id: t.id })))
     }
     acts.append(
+      ...(CHAT_ONLY || codex || isAgent ? [] : [mk('open', 'Open in its own editor tab', () => openTab(t.id))]),
       mk('chart', 'Stats for this chat', () => send({ type: 'analytics', id: t.id })),
       mk('reload', 'Reload this chat', () => send({ type: 'session', id: t.id })),
       mk('export', 'Export as Markdown', () => send({ type: 'export', id: t.id })),
@@ -1775,13 +1846,24 @@ function showDetail (t, live) {
     head.appendChild(acts)
   }
 
-  // ---- in-chat search
+  // ---- in-chat search, out of the way until asked for: the magnifier, or Cmd+F
+  if (FIND_OPEN !== t.id) FIND_OPEN = ''
   const find = el('div', 'find')
+  find.hidden = !(findWas || JUMP || FIND_OPEN)
   const fi = el('input'); fi.type = 'search'; fi.placeholder = 'Find in this chat…'; fi.id = 'find'
   const cnt = el('span', 'cnt', '')
-  // Enter walks the matches, Shift+Enter goes back - no arrow buttons needed
+  // Enter walks the matches, Shift+Enter goes back - no arrow buttons needed;
+  // Escape clears the search and puts the box away
   fi.oninput = () => runFind(fi.value, cnt)
-  fi.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1) } }
+  fi.onkeydown = e => {
+    if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1) }
+    else if (e.key === 'Escape') { e.preventDefault(); closeFind() }
+  }
+  const findBtn = el('button', 'iconbtn findbtn')
+  findBtn.appendChild(icon('find'))
+  findBtn.title = 'Find in this chat (⌘F)'
+  findBtn.setAttribute('aria-label', 'Find in this chat')
+  findBtn.onclick = () => find.hidden ? openFind() : closeFind()
 
   // one switch for every "Ran N commands" block in the chat
   const foldAll = el('button', 'iconbtn foldall')
@@ -1798,7 +1880,10 @@ function showDetail (t, live) {
     paintFold()
   }
   paintFold()
-  find.append(fi, cnt, foldAll)
+  find.append(fi, cnt)
+  top.insertBefore(findBtn, fresh)
+  top.insertBefore(foldAll, fresh)
+  if (top.querySelector('.moremenu')) foldAll.hidden = true      // it lives in the ⋯ menu there
   head.appendChild(find)
   d.appendChild(head)
 
@@ -1825,8 +1910,10 @@ function showDetail (t, live) {
     if (y < 600 && SHOWN_FROM > 0) { drawEarlier(); return }
     const fromEnd = body.scrollHeight - y - body.clientHeight
     jump.hidden = fromEnd < 120
-    // our own scrolls, and the header settling, say nothing about what you did
-    if (Date.now() < settling || Date.now() < AUTO_UNTIL) { lastY = y; return }
+    // our own scrolls, and the header settling, say nothing about what you did -
+    // unless you are scrolling right now
+    const byHand = DRAGGING || Date.now() - HAND_AT < 400
+    if (!byHand && (Date.now() < settling || Date.now() < AUTO_UNTIL)) { lastY = y; return }
     FOLLOW = fromEnd < 80
     // while you are pointing at the header it stays open, whatever the
     // scroll does underneath - a trackpad's coasting used to fold it away
@@ -1838,6 +1925,13 @@ function showDetail (t, live) {
     else if (y < lastY - 12) slim(false)
     lastY = y
   }
+  // scrolling up by hand lets go of the end at once, before the next reply
+  // chunk can pull you back; scrolling back down to the end picks it up again
+  const hand = up => { HAND_AT = Date.now(); if (up) FOLLOW = false }
+  body.addEventListener('wheel', e => hand(e.deltaY < 0), { passive: true })
+  body.addEventListener('touchmove', () => hand(false), { passive: true })
+  body.addEventListener('pointerdown', e => { if (e.target === body) { DRAGGING = true; hand(false) } })   // the scrollbar
+  body.addEventListener('keydown', e => { if (/^(PageUp|ArrowUp|Home)$/.test(e.key)) hand(true); else if (/^(PageDown|ArrowDown|End|Space| )$/.test(e.key)) hand(false) })
   // reaching for the header brings it back and it stays - only scrolling
   // down again folds it away
   // it settles like any other fold, so the room it takes back is not read as a
@@ -1914,6 +2008,8 @@ function phraseFor (name, n) {
   return n > 1 ? `Used ${label} ${n}×` : `Used ${label}`
 }
 
+// "Edited 2 files" means two files: two edits to one file counted as two
+const FILE_TOOLS = new Set(['Edit', 'Read', 'NotebookEdit'])
 /** Merge Edit/Write into one "Edited N files" line, since that is how it reads. */
 function toolSummary (tools) {
   const order = [], counts = new Map()
@@ -1925,7 +2021,7 @@ function toolSummary (tools) {
   const wrap = el('div', 'twork')
   const head = el('div', 'thead2')
   head.append(el('span', 'tsum',
-    order.map(k => phraseFor(k, counts.get(k).length)).join(' · ')),
+    order.map(k => phraseFor(k, FILE_TOOLS.has(k) ? new Set(counts.get(k).map(t => t.detail || t)).size : counts.get(k).length)).join(' · ')),
     el('span', 'chev2', ALLTOOLS ? '⌄' : '›'))
 
   const body = el('div', 'tdetail')
@@ -2019,12 +2115,13 @@ function turnChanges (edits, id) {
  * rendered text - blank lines and ** survive, so Slack and Linear format it
  * instead of showing a wall of text.
  */
-function msgCopyButton (text) {
+function msgCopyButton (textOrFn) {
   const cp = el('button', 'msgcopy')
   cp.appendChild(icon('copy'))
   cp.title = 'Copy this message'
   cp.onclick = e => {
     e.stopPropagation()
+    const text = typeof textOrFn === 'function' ? textOrFn() : textOrFn
     // both flavours, so Slack keeps the bold and the paragraph gaps
     if (!copyRich(text, flatHtml(window.md(text)))) {
       send({ type: 'copy', text, label: 'Message copied' })
@@ -2069,7 +2166,9 @@ function noteCard (n) {
   if (n.ts) head.appendChild(el('span', '', clock(n.ts)))
   card.appendChild(head)
   const body = el('div', 'nbody')
-  body.innerHTML = window.md(n.text)
+  // a hand-back names the agent by id: say which one, from this chat's agents
+  const who = n.from && (CUR?.agents || []).find(a => a.id === n.from)
+  body.innerHTML = window.md(who ? `**${who.description}** reported back` : n.text)
   addCopyButtons(body)
   card.appendChild(body)
   // an agent's full report, when the notification carried one - folded, since
@@ -2113,6 +2212,7 @@ function rowMenu (s, x, y) {
 
   item('Open chat', () => { (PERF = { id: s.id, t0: performance.now() }, send({ type: 'session', id: s.id })) },
     { icon: 'message' })
+  if (s.provider !== 'codex') item('Open in editor tab', () => openTab(s.id), { icon: 'open' })
   item('Resume', () => send({ type: 'resume', id: s.id }), { icon: 'play' })
 
   // a chat can be put anywhere in the editor, like a window manager places
@@ -2148,7 +2248,7 @@ function rowMenu (s, x, y) {
     menu.appendChild(moveSub)
   }
   item('Rename…', () => renamePrompt(s), { icon: 'pencil' })
-  item('Branch with a brief…', () => send({ type: 'forkBrief', id: s.id }), { icon: 'brief' })
+  item('New chat from a summary', () => send({ type: 'forkBrief', id: s.id }), { icon: 'brief' })
   sep()
   item(s.pinned ? 'Unpin' : 'Pin',
     () => send({ type: 'pin', id: s.id }), { icon: 'pin' })
@@ -2462,10 +2562,11 @@ function footer (t) {
   }
   const claude = group('Claude')
   claude.append(
-    stat(`${nfmt(i.context)} / ${nfmt(i.window)}`, `context at the last message · ${pct}% of the window`,
+    stat(`Context ${pct}%`, `${nfmt(i.context)} of ${nfmt(i.window)} tokens in use at the last message`,
       pct >= 90 ? 'hot' : ''),
     stat(`Cache ${i.cachePct}%`, 'share of input tokens served from cache'),
-    stat(money(t.cost), 'cost at API list prices'))
+    // Codex bills against a plan, not per token, so there is no figure to show
+    ...(t.provider === 'codex' ? [] : [stat('~' + money(t.cost), 'what this chat would cost at API list prices - not what a subscription bills')]))
   // the branch only when it says something: nearly every chat is on the same one
   if (row2?.git?.length) {
     const counts = new Map()
@@ -2483,7 +2584,7 @@ function footer (t) {
   rs.classList.add('resstat')
   laptop.appendChild(rs)
   const rnow = RES?.sessions?.[t.sessionId || t.id]
-  laptop.hidden = !rnow
+  laptop.hidden = !heavy(rnow)                // the normal few hundred MB is nothing to act on
   if (rnow) { rs.textContent = resText(rnow); rs.classList.toggle('hot', heavy(rnow)) }
   top.appendChild(facts)
   bar.appendChild(top)
@@ -2508,6 +2609,7 @@ function footer (t) {
       row.onclick = () => send({ type: 'openFile', path: f.path })
       list.appendChild(row)
     }
+    head.title = 'Files this chat changed. Click to list them'
     head.onclick = () => { list.hidden = !list.hidden; caret.textContent = list.hidden ? '▸' : '▾' }
     bar.append(head, list)
   }
@@ -2571,6 +2673,32 @@ function startRename (h, t) {
 }
 
 // ---------------------------------------------------------------- find in chat
+function openFind () {
+  const f = $('#detail .find')
+  if (!f || !CUR) return
+  FIND_OPEN = CUR.id
+  f.hidden = false
+  $('#detail .dhead')?.classList.remove('slim')
+  $('#find').focus()
+  $('#find').select()
+}
+
+function closeFind () {
+  const f = $('#detail .find')
+  if (!f) return
+  FIND_OPEN = ''
+  if ($('#find').value) { $('#find').value = ''; runFind('', f.querySelector('.cnt')) }
+  f.hidden = true
+}
+
+// Cmd+F (Ctrl+F) on an open chat opens its find box
+document.addEventListener('keydown', e => {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'f') return
+  if ($('#detail').hidden || !$('#detail .find')) return
+  e.preventDefault()
+  openFind()
+})
+
 function runFind (q, cnt) {
   const body = $('.msgs')
   if (!body) return
@@ -3167,6 +3295,14 @@ window.addEventListener('message', e => {
   if (!m || typeof m.type !== 'string') return
   // the board shows chats but never opens one: that goes to the sidebar
   if (BOARD_MODE && (m.type === 'session' || m.type === 'results')) return
+  // a one-chat tab shows its chat and that chat's agents, whatever else is sent
+  // - except a copy started from it, which the tab then becomes
+  if (CHAT_ONLY && m.type === 'session' && m.fromPending && m.data?.id && m.data.id === PENDING_CHAT) {
+    CHAT_ONLY = m.data.id
+    try { vs.setState({ chat: CHAT_ONLY }) } catch {}
+    send({ type: 'chatTabIs', id: CHAT_ONLY })
+  }
+  if (CHAT_ONLY && m.type === 'session' && m.data && m.data.id !== CHAT_ONLY && m.data.sessionId !== CHAT_ONLY) return
   if (m.type === 'env' && BOARD_MODE && m.cfg) send({ type: 'board' })
   if (m.type === 'env') {
     // partial env messages (a group edit, a settings snapshot) leave it alone
@@ -3254,7 +3390,7 @@ window.addEventListener('message', e => {
   }
   if (m.type === 'analytics') showAnalytics(m.data)
 })
-$('#rows').onscroll = onListScroll
+// more chats come from each folder's "Show more": scrolling near it used to press it for you
 // a wider or taller panel should fill itself too
 new ResizeObserver(() => { if ($('#detail').hidden) fillViewport() }).observe($('#rows'))
 
@@ -4060,6 +4196,10 @@ if (BOARD_MODE) {
 
 send({ type: 'ready' })
 send({ type: 'trashed' })
+if (CHAT_ONLY) {
+  try { vs.setState({ chat: CHAT_ONLY }) } catch {}
+  send({ type: 'session', id: CHAT_ONLY })
+}
 
 // ---------------------------------------------------------------- settings
 // The extension's own settings, in the panel rather than buried in the editor's
@@ -4606,6 +4746,18 @@ function renderSettings () {
     ['claude', 'The Claude Code extension'], ['desktop', 'Claude Desktop']])
   toggle(resume, 'skipPermissions', 'Skip permission prompts',
     'Claude runs every tool without asking first', false)
+
+  const here = section('message', 'Chatting here', 'Talk to Claude from the logbook, or keep it read-only the way it was.')
+  toggle(here, 'chatHere', 'Chat here',
+    'a message box under each Claude chat, and "New chat here" on the + button. Off: chats are resumed in a terminal or another app', true)
+  if (CFG.chatHere !== false) {
+    pick(here, 'chatPermissionMode', 'Claude may', 'each chat can change this from its box', [
+      ['default', 'Ask before edits and commands'], ['acceptEdits', 'Edit files without asking'],
+      ['plan', 'Plan first, then ask'], ['auto', 'Decide what is safe']])
+    pick(here, 'chatEffort', 'Effort', 'how hard Claude thinks; /effort in a chat changes it', [
+      ['', "Claude's own setting"], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']])
+  }
+  box.prepend(here)          // the setting people come here for first, not 2,700px down
 
   const exp = section('export', 'Exporting', 'Where Export puts a chat, and what it writes there.')
   const dir = CFG.exportDirectory || ''

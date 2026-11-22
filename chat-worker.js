@@ -7,6 +7,7 @@
 // Images and diffs come from here too: this thread keeps the chat it last read.
 const { parentPort } = require('node:worker_threads')
 const scan = require('./scan')
+scan.readOnlyCache()          // the extension keeps the chat-list cache; this thread only reads it
 
 // read the chat list once at start, so the first chat opened does not wait for it
 try { scan.index() } catch {}

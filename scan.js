@@ -86,6 +86,12 @@ const clean = t => {
   if (s.includes('<local-command-')) {
     for (const k of ['stdout', 'stderr', 'caveat']) s = cutBlocks(s, `<local-command-${k}>`, `</local-command-${k}>`)
   }
+  // a "!" command, as Claude Code's terminal writes it: shown as typed, output left out
+  if (s.includes('<bash-input>')) {
+    s = s.replace(/<bash-input>([\s\S]*?)<\/bash-input>/g, (_, c) => '! ' + c.trim())
+    for (const k of ['stdout', 'stderr']) s = cutBlocks(s, `<bash-${k}>`, `</bash-${k}>`)
+    s = s.replace(/\n{3,}/g, '\n\n')
+  }
   if (s.includes('<command-')) {
     for (const k of ['name', 'message', 'args']) s = cutBlocks(s, `<command-${k}>`, `</command-${k}>`)
   }
@@ -264,7 +270,7 @@ function summarise (file, prev, agent) {
  * changed on disk; deep throws the cache away and re-parses every transcript.
  */
 function rescan (deep) {
-  if (deep) { try { fs.unlinkSync(CACHE_FILE) } catch {} }
+  if (deep) { cacheMem = null; try { fs.unlinkSync(CACHE_FILE) } catch {} }
   return index(true).length
 }
 
@@ -428,22 +434,35 @@ function withAgents (base, cache, next) {
   let names
   try { names = fs.readdirSync(dir).filter(n => n.endsWith('.jsonl')) } catch { return base }
   if (!names.length) return base
+  // the merged copy is reused while neither the chat nor its agents changed:
+  // cloning every chat's summary on every refresh was most of the refresh
+  const stamps = names.map(n => { try { return fs.statSync(path.join(dir, n)).mtimeMs } catch { return 0 } })
+  const sig = names.join('|') + '#' + stamps.join('|')
+  const memo = AGENT_MERGED.get(base)
+  if (memo && memo.sig === sig) {
+    for (const n of names) { const f = path.join(dir, n); if (cache[f]) next[f] = cache[f] }
+    return memo.out
+  }
   const out = structuredClone(base)
   out.agentTokens = 0; out.agentCost = 0
-  for (const n of names) {
+  let complete = true                 // an agent that could not be read is retried, not remembered
+  for (const [i, n] of names.entries()) {
     const f = path.join(dir, n)
-    let mt; try { mt = fs.statSync(f).mtimeMs } catch { continue }
+    const mt = stamps[i]
+    if (!mt) continue
     const hit = cache[f]
     const rec = hit && hit.mtime === mt ? hit : { mtime: mt, s: summarise(f, hit?.s, true) }
-    if (!rec.s) continue
+    if (!rec.s) { complete = false; continue }
     next[f] = rec
     mergeUsage(out, rec.s)
     out.agentTokens += rec.s.tokens; out.agentCost += rec.s.cost
   }
   out.tokens = Object.values(out.models).reduce((n, m) => n + m.input + m.output + m.cacheWrite + m.cacheRead, 0)
   out.cost = Object.entries(out.models).reduce((n, [m, u]) => n + costOf(m, u), 0)
+  if (complete) AGENT_MERGED.set(base, { sig, out })
   return out
 }
+const AGENT_MERGED = new WeakMap()   // a chat's summary -> it merged with its agents' (freed with the summary)
 
 function mergeUsage (to, from) {
   for (const [m, u] of Object.entries(from.models || {})) {
@@ -465,13 +484,42 @@ function mergeUsage (to, from) {
   for (const [op, n] of Object.entries(from.ops || {})) to.ops[op] = (to.ops[op] || 0) + n
 }
 
+// Written by one thread only (the extension's own; worker threads read it), at
+// most every 30s, and through a temporary file so a write cut short or two
+// writers at once can never leave a broken cache - which meant re-reading every
+// chat on the next start.
+let cacheWriter = true, cacheSave = null
+const readOnlyCache = () => { cacheWriter = false }
+function saveCacheNow () {
+  clearTimeout(cacheSave); cacheSave = null
+  if (!cacheWriter || !cacheMem) return
+  try {
+    const tmp = `${CACHE_FILE}.${process.pid}.tmp`
+    writePrivate(tmp, JSON.stringify({ v: CACHE_V, files: cacheMem }))
+    fs.renameSync(tmp, CACHE_FILE)
+  } catch {}
+}
+function saveCacheSoon () {
+  if (!cacheWriter || cacheSave) return
+  cacheSave = setTimeout(saveCacheNow, 30000)
+  cacheSave.unref?.()
+}
+
+// The summaries from the last pass, kept in memory. While a chat is being
+// written the list is refreshed every second, and reading and rewriting the
+// whole cache file (megabytes) each time was most of that pass's cost.
+let cacheMem = null
 function index (force) {
   if (!force && memo && Date.now() - memoAt < 3000) return memo
-  let cache = {}
-  try {
-    const raw = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'))
-    if (raw && raw.v === CACHE_V) cache = raw.files || {}
-  } catch {}
+  let cache = cacheMem
+  if (!cache) {
+    cache = {}
+    try {
+      const raw = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'))
+      if (raw && raw.v === CACHE_V) cache = raw.files || {}
+    } catch {}
+  }
+  let changed = !cacheMem
   const next = {}, out = []
   let dirs = []
   try { dirs = fs.readdirSync(PROJECTS) } catch { memo = []; memoAt = Date.now(); return memo }
@@ -484,6 +532,7 @@ function index (force) {
       let mt; try { mt = fs.statSync(file).mtimeMs } catch { continue }
       const hit = cache[file]
       const rec = hit && hit.mtime === mt ? hit : { mtime: mt, s: summarise(file, hit?.s) }
+      if (rec !== hit) changed = true
       if (!rec.s) continue
       next[file] = rec
       out.push(withAgents(rec.s, cache, next))
@@ -494,12 +543,16 @@ function index (force) {
     let mt; try { mt = fs.statSync(file).mtimeMs } catch { continue }
     const hit = cache[file]
     const rec = hit && hit.mtime === mt ? hit : { mtime: mt, s: summariseCodex(file) }
+    if (rec !== hit) changed = true
     if (!rec.s) continue
     next[file] = rec                                // cached either way, so the parse is not repeated
     if (!rec.s.messages || imported.has(rec.s.id)) continue
     out.push(rec.s)
   }
-  try { writePrivate(CACHE_FILE, JSON.stringify({ v: CACHE_V, files: next })) } catch {}
+  // a file that went away changes the set too
+  if (!changed && Object.keys(next).length !== Object.keys(cache).length) changed = true
+  cacheMem = next
+  if (changed) saveCacheSoon()
   // a name we keep ourselves overrides the one read out of the file
   const titles = state().titles
   if (titles) {
@@ -1278,9 +1331,25 @@ function ensureFull (key) {
 }
 
 /** `part`: the request came from the partial first copy, whose turns are numbered from its own start. */
-const turnsFor = (id, part) => part && partCopy?.id === id ? partCopy.turns : (ensureFull(id), full?.turns)
+function turnsFor (id, part, ti) {
+  if (part && partCopy?.id === id) return partCopy.turns
+  ensureFull(id)
+  // a running chat is followed by another thread, so this one's copy can be
+  // older than the message asked about: read on to the end and look again
+  // - only for a real index past what it has, so a bad one cannot force a re-read
+  if (Number.isInteger(ti) && ti >= (full?.turns?.length || 0)) { full = null; ensureFull(id) }
+  return full?.turns
+}
+const REREAD = new Map()            // chat id -> when a missing picture last made it read on
 function imageAt (id, ti, ii, part) {
-  return turnsFor(id, part)?.[ti]?.images?.[ii]?.src || null
+  const turns = turnsFor(id, part, ti)
+  // a picture added to a turn this copy already has: read on and look again -
+  // at most every few seconds per chat, so a bad index cannot force read after read
+  if (!part && Number.isInteger(ii) && turns?.[ti] && !turns[ti].images?.[ii] && Date.now() - (REREAD.get(id) || 0) > 5000) {
+    REREAD.set(id, Date.now())
+    full = null; ensureFull(id)
+  }
+  return (part ? turns : full?.turns)?.[ti]?.images?.[ii]?.src || null
 }
 
 const lines = s => (s ? String(s).split('\n').length : 0)
@@ -1799,7 +1868,7 @@ function toolDetail (name, input = {}) {
 
 /** The before/after text of one recorded edit, for the diff view. */
 function editAt (id, ti, ei, part) {
-  return turnsFor(id, part)?.[ti]?.edits?.[ei] || null
+  return turnsFor(id, part, ti)?.[ti]?.edits?.[ei] || null
 }
 
 // ------------------------------------------------------------------ sub-agents
@@ -1993,8 +2062,18 @@ function harnessNote (e) {
     return { kind: 'agent', text: summary + word + (bits ? ` · ${bits}` : ''), detail: report }
   }
   if (kind === 'peer') {
+    const from = (raw.match(/<agent-message[^>]*\bfrom="([^"]+)"/) || [])[1] || ''
     const body = raw.replace(/^Another Claude session sent a message:\s*/, '')
       .replace(/<agent-message[^>]*>/, '').replace(/<\/agent-message>\s*$/, '').trim()
+    // a sub-agent handing its report back: the same as a finished agent - one
+    // line, with the report folded under it, not the harness preamble in full
+    if (/^\[Subagent hand-back\]/.test(body)) {
+      const at = body.search(/The report follows:\s*\n/)
+      let report = at < 0 ? body : body.slice(at).replace(/^The report follows:\s*\n/, '')
+      // the harness indents every line of the report by two spaces
+      if (report.split('\n').every(l => !l.trim() || l.startsWith('  '))) report = report.replace(/^ {2}/gm, '')
+      return { kind: 'agent', text: 'An agent reported back', detail: report.trim(), from }
+    }
     return { kind: 'peer', text: body }
   }
   return null
@@ -2074,7 +2153,7 @@ function parseMore (st, raw) {
     if (e.isSidechain && !keepSidechain) continue
     const note = harnessNote(e)
     if (note) {
-      turns.push({ role: 'note', kind: note.kind, text: note.text, detail: note.detail || '',
+      turns.push({ role: 'note', kind: note.kind, text: note.text, detail: note.detail || '', from: note.from || '',
         tools: [], images: [], edits: [], ts: e.timestamp || '' })
       continue
     }
@@ -2391,7 +2470,9 @@ function board (live, folders) {
   const roots = (folders || []).map(f => f.replace(/\/+$/, ''))
   const mine = cwd => !roots.length || roots.some(r => cwd === r || (cwd || '').startsWith(r + '/'))
   for (const rec of index()) {
-    const status = live[rec.id]
+    // a chat run from the logbook says exactly when it is waiting on you
+    const exact = live[rec.id] === 'waiting'
+    const status = exact ? 'busy' : live[rec.id]
     if (!status || !mine(rec.cwd)) continue
     const codex = rec.provider === 'codex'
     let raw = '', size = 0, len = 0, tailStart = 0
@@ -2418,7 +2499,7 @@ function board (live, folders) {
       context: info.context, window: info.window,
       reply: said ? said.text : '', replyTs: said ? Date.parse(said.ts) || 0 : 0,
       ask: asked ? asked.text : '', askTs: asked ? Date.parse(asked.ts) || 0 : 0,
-      doing: now.doing || '', waiting: now.waiting || null,
+      doing: now.doing || '', waiting: now.waiting || (exact ? 'permission' : null),
     })
   }
   // the chat that last had a message on top, whichever side wrote it
@@ -2708,7 +2789,8 @@ function sessionList (live) {
     // A chat written to seconds ago counts as busy before Claude's own status
     // catches up - but only while its turn is still open. Once Claude has marked
     // the turn done it is idle straight away, rather than for another 15 seconds.
-    live: (Date.now() - s.lastTs < 15000 && live[s.id] && s.turnOpen !== false)
+    // waiting on you is known exactly (a chat run from the logbook) and never overridden
+    live: (Date.now() - s.lastTs < 15000 && live[s.id] && live[s.id] !== 'waiting' && s.turnOpen !== false)
       ? 'busy' : (live[s.id] || null),
     lastTs: s.lastTs, messages: s.messages, edits: s.edits,
     tokens: s.tokens, cost: s.cost, activeMs: s.activeMs,
@@ -2830,4 +2912,4 @@ try {
 
 module.exports = {
   writePrivate, mkdirPrivate, board, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
-  groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME }
+  readOnlyCache, saveCacheNow, groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME }

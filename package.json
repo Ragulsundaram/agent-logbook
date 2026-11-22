@@ -2,7 +2,7 @@
   "name": "agent-logbook",
   "displayName": "Agent Logbook",
   "description": "Browse, search, resume and measure your Claude Code and Codex sessions - with sub-agents, cost, and a usage dashboard. Everything stays on your machine.",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "publisher": "ragulsundaram",
   "engines": {
     "vscode": "^1.94.0"
@@ -14,7 +14,8 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:claudeHistory.chat"
   ],
   "contributes": {
     "viewsContainers": {
@@ -332,6 +333,29 @@
           "type": "boolean",
           "default": false,
           "description": "Pop up a notification when a running chat finishes and is waiting for you. A count always shows in the status bar."
+        },
+        "claudeHistory.chatHere": {
+          "type": "boolean",
+          "default": true,
+          "description": "Chat with Claude from the logbook: a message box under each Claude chat, and \"New chat here\" on the + button. Off keeps the logbook read-only, the way it was: chats are resumed in a terminal or another app."
+        },
+        "claudeHistory.chatEffort": {
+          "type": "string",
+          "default": "",
+          "enum": ["", "low", "medium", "high", "xhigh", "max"],
+          "description": "How hard Claude thinks in chats started from the logbook. Empty uses Claude's own setting. Changed with /effort in a chat's box, which also sets it here for new chats."
+        },
+        "claudeHistory.chatPermissionMode": {
+          "type": "string",
+          "default": "default",
+          "enum": ["default", "acceptEdits", "plan", "auto"],
+          "enumDescriptions": [
+            "Claude asks before editing files or running commands",
+            "File edits go through; commands still ask",
+            "Claude plans first and asks you to approve the plan",
+            "Claude decides what is safe to run without asking"
+          ],
+          "description": "What Claude may do without asking when you chat from the logbook. Each chat can change it from the box under the conversation."
         }
       }
     }

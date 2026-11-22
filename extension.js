@@ -3,6 +3,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const scan = require('./scan')
 const mcp = require('./mcp-setup')
+const runner = require('./chat-runner')
 
 const cfg = (k, dflt) => vscode.workspace.getConfiguration('claudeHistory').get(k, dflt)
 
@@ -10,7 +11,7 @@ const cfg = (k, dflt) => vscode.workspace.getConfiguration('claudeHistory').get(
 const SETTINGS = ['topBars', 'sort', 'showLiveFirst', 'pageSize', 'dateFormat',
   'resumeTarget', 'skipPermissions', 'exportSourceCopy', 'chatLayout',
   'limitAlerts', 'resetSoonWeeklyHours', 'resetSoonSessionMinutes', 'unusedPercent', 'boardAllWindows',
-  'finishAlerts']
+  'finishAlerts', 'chatHere', 'chatPermissionMode', 'chatEffort']
 // Shown in the Settings tab but changed only through a folder dialog, never by a
 // value the webview sends: it decides where files get written.
 const SHOWN = ['exportDirectory']
@@ -59,8 +60,19 @@ function watchTranscripts (ctx) {
   const dirty = new Set()       // chat ids known to have changed, whatever noticed it
   const files = new Map()       // open chat id -> its transcript and how it last looked
   const stamp = f => { try { const s = fs.statSync(f); return s.size + ':' + s.mtimeMs } catch { return '' } }
+  // one refresh at a time: on a big chat a read can outlast the 1s gap, and
+  // overlapping ones queued up and delivered stale copies late
+  let flushing = false, again = false
   const flush = async () => {
     timer = null
+    if (flushing) { again = true; return }
+    flushing = true
+    try { await flushOnce() } finally {
+      flushing = false
+      if (again) { again = false; bump() }
+    }
+  }
+  const flushOnce = async () => {
     lastRun = Date.now()
     scan.index(true)
     broadcast({ type: 'sessions', data: scan.sessionList(live) })
@@ -73,7 +85,7 @@ function watchTranscripts (ctx) {
     const fresh = new Map()
     for (const [post, id] of open) {
       if (!ids.has(id)) continue
-      if (!fresh.has(id)) fresh.set(id, chatCall('transcript', id))
+      if (!fresh.has(id)) fresh.set(id, liveCall('transcript', id))
       const data = await fresh.get(id)
       if (open.get(post) !== id) continue        // moved to another chat meanwhile
       post({ type: 'session', data, live: true })
@@ -125,6 +137,9 @@ function watchTranscripts (ctx) {
     },
     // Refresh redraws the chats on screen too, not only the list behind them
     refreshOpen: () => { for (const id of open.values()) dirty.add(id); clearTimeout(timer); flush().catch(() => {}) },
+    // a chat run from the logbook says when it has written, rather than
+    // waiting for the folder watcher to notice
+    poke: id => { dirty.add(id); bump() },
   }
 }
 /**
@@ -166,21 +181,32 @@ function searcher () {
  * sent, so two chats clicked in turn arrive in turn. If the worker is gone, the
  * read happens here as it used to.
  */
-let CHATW = null, chatSeq = 0
+// Two lanes. The live refresh of a running chat re-reads the whole of it about
+// once a second, and a long chat takes most of that second to read: in one lane,
+// opening any other chat waited behind those reads. It gets a lane of its own.
+const CHATW = { main: null, live: null }
+let chatSeq = 0
 const chatWaiting = new Map()       // id -> { fn, args, resolve }
 const chatHere = (fn, args) => { try { return scan[fn](...args) } catch { return null } }
 
-function chatWorker () {
-  if (CHATW) return CHATW
+function chatWorker (lane = 'main') {
+  if (CHATW[lane]) return CHATW[lane]
   const { Worker } = require('node:worker_threads')
   const w = new Worker(path.join(__dirname, 'chat-worker.js'))
+  const mine = new Set()            // calls sent to this worker, answered here if it dies
+  w.mine = mine
   const fail = () => {
-    if (CHATW === w) CHATW = null
-    for (const c of chatWaiting.values()) c.resolve(chatHere(c.fn, c.args))
-    chatWaiting.clear()
+    if (CHATW[lane] === w) CHATW[lane] = null
+    for (const id of mine) {
+      const c = chatWaiting.get(id)
+      chatWaiting.delete(id)
+      if (c) c.resolve(chatHere(c.fn, c.args))
+    }
+    mine.clear()
   }
   w.on('message', m => {
     const c = chatWaiting.get(m.id)
+    mine.delete(m.id)
     if (!c) return
     chatWaiting.delete(m.id)
     c.resolve(m.error ? chatHere(c.fn, c.args) : m.data)
@@ -188,19 +214,22 @@ function chatWorker () {
   w.on('error', fail)
   w.on('exit', fail)
   w.unref()
-  CHATW = w
+  CHATW[lane] = w
   return w
 }
 
-function chatCall (fn, ...args) {
+function callOn (lane, fn, args) {
   return new Promise(resolve => {
     let w
-    try { w = chatWorker() } catch { return resolve(chatHere(fn, args)) }
+    try { w = chatWorker(lane) } catch { return resolve(chatHere(fn, args)) }
     const id = ++chatSeq
     chatWaiting.set(id, { fn, args, resolve })
+    w.mine.add(id)
     w.postMessage({ id, fn, args })
   })
 }
+const chatCall = (fn, ...args) => callOn('main', fn, args)
+const liveCall = (fn, ...args) => callOn('live', fn, args)
 
 function runSearch (q, post, limit) {
   // the webview asks for more chats 60 at a time; it is still a message, so bound it
@@ -246,6 +275,7 @@ const broadcast = m => { for (const post of VIEWS) post(m) }
 
 function refreshLive (post) {
   try { live = scan.liveSessions() } catch { live = {} }
+  Object.assign(live, runner.liveMap())
   if (post) post({ type: 'sessions', data: scan.sessionList(live) })
 }
 
@@ -274,6 +304,23 @@ async function pollResources (force) {
     resSig = sig
     broadcast({ type: 'resources', data: r })
   } finally { resPolling = false }
+}
+
+/**
+ * The pid of a Claude the logbook started for this chat and then lost, when
+ * the window reloaded or crashed: it was fed through a pipe (stream-json input)
+ * and its parent is gone, so nothing can type to it or answer its questions.
+ * Anything else running the chat - a terminal, the Claude extension - is left alone.
+ */
+async function orphanPid (id) {
+  if (!/^[\w-]+$/.test(String(id || '')) || runner.has(id)) return 0
+  const pid = scan.livePid(id)
+  if (!pid) return 0
+  // asked without blocking: this runs each time a chat is opened
+  const out = await new Promise(resolve => require('node:child_process').execFile('ps', ['-o', 'ppid=,args=', '-p', String(pid)],
+    { encoding: 'utf8', timeout: 3000 }, (err, stdout) => resolve(err ? '' : String(stdout).trim())))
+  const m = /^(\d+)\s+(.*)$/s.exec(out)
+  return m && m[1] === '1' && /--input-format[ =]stream-json/.test(m[2]) && m[2].includes(id) ? pid : 0
 }
 
 /** Every process at or under a pid, deepest first, so children go before parents. */
@@ -381,6 +428,20 @@ function noteFinishes (list) {
   paintFinished()
 }
 
+/**
+ * One check of which chats are running, for every view at once. Asking the
+ * CLI starts a process each time, so it runs every 3s while a view is on
+ * screen and every 15s when none is - the status bar's "finished" note still
+ * needs it then. Each view used to run its own 3s check, never pausing.
+ */
+const ON_SCREEN = new Map()             // view -> is it on screen
+let DEACTIVATED = false
+function livePoller () {
+  if (DEACTIVATED) return
+  const onScreen = [...ON_SCREEN.values()].some(v => { try { return v() } catch { return false } })
+  pollLive().catch(() => {}).finally(() => { liveTimer = setTimeout(livePoller, onScreen ? 3000 : 15000) })
+}
+
 let livePolling = false, liveSig = ''
 async function pollLive () {
   if (livePolling) return
@@ -390,20 +451,27 @@ async function pollLive () {
     if (!next) return
     // Codex chats join the same map, so the list dots and the board cover both
     try { Object.assign(next, await scan.codexLiveAsync()) } catch {}
+    // chats talked to from the logbook: their state is known here, exactly
+    Object.assign(next, runner.liveMap())
     live = next
     syncActiveTabName().catch(() => {})          // a new chat may have been titled since
-    // Compare what the panel actually shows, not just what claude reports. A chat
-    // written to in the last few seconds counts as busy even before its status
-    // catches up, and that lapses on a clock rather than on any event - compared
-    // on the reported status alone, the lapse never reached the panel and a
-    // finished chat kept saying Claude was working.
-    const list = scan.sessionList(live)
-    noteFinishes(list)
-    const sig = list.filter(x => x.live).map(x => x.id + ':' + x.live).sort().join(',')
-    if (sig === liveSig) return
-    liveSig = sig
-    broadcast({ type: 'sessions', data: list })
+    publishLive()
   } finally { livePolling = false }
+}
+
+function publishLive () {
+  // Compare what the panel actually shows, not just what claude reports. A chat
+  // written to in the last few seconds counts as busy even before its status
+  // catches up, and that lapses on a clock rather than on any event - compared
+  // on the reported status alone, the lapse never reached the panel and a
+  // finished chat kept saying Claude was working.
+  const list = scan.sessionList(live)
+  noteFinishes(list)
+  paintChatTabs(list)
+  const sig = list.filter(x => x.live).map(x => x.id + ':' + x.live).sort().join(',')
+  if (sig === liveSig) return
+  liveSig = sig
+  broadcast({ type: 'sessions', data: list })
 }
 
 /**
@@ -1064,10 +1132,16 @@ const LAUNCHED = new Map()   // terminal -> the session id we started it with
 function followNewChat (sid, post, term) {
   const projects = path.join(require('node:os').homedir(), '.claude', 'projects')
   const started = Date.now()
+  // a chat started in the logbook has no terminal: it ends when Claude does
+  const ended = term ? () => term.exitStatus !== undefined : () => false
+  // the view may have closed in the meantime
+  const tell = m => { try { post(m) } catch {} }
   const tick = setInterval(async () => {
-    if (term.exitStatus !== undefined || Date.now() - started > 3600e3) {
-      clearInterval(tick); post({ type: 'pendingGone', id: sid }); return
+    if (ended() || Date.now() - started > 3600e3) {
+      clearInterval(tick); NEW_CHATS.delete(sid); tell({ type: 'pendingGone', id: sid }); return
     }
+    // a logbook chat has no file until its first message: nothing to look for yet
+    if (!term && NEW_CHATS.has(sid)) return
     let found = false
     try {
       for (const d of fs.readdirSync(projects)) {
@@ -1080,7 +1154,7 @@ function followNewChat (sid, post, term) {
     const data = await chatCall('transcript', sid)
     if (!data) return
     WATCH?.setOpen(post, sid)
-    post({ type: 'session', data, fromPending: true })
+    tell({ type: 'session', data, fromPending: true })
   }, 1000)
 }
 
@@ -1342,8 +1416,220 @@ async function resumeInClaudeExtension (s) {
   await vscode.env.openExternal(uri)
 }
 
+// ------------------------------------------------------------------ chat here
+const CHAT_MODES = ['default', 'acceptEdits', 'plan', 'auto']
+const CHAT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+// new chats waiting for their first message: where to start them, and what from
+const NEW_CHATS = new Map()
+
+// chats whose reply a window reload cut off, so the chat can offer to carry on
+const CUTOFF_FILE = path.join(require('node:os').homedir(), '.agent-logbook', 'cutoff.json')
+function cutoffs () {
+  let m = {}
+  try { m = JSON.parse(fs.readFileSync(CUTOFF_FILE, 'utf8')) || {} } catch {}
+  // two days on, nobody is coming back to that reply
+  for (const [id, at] of Object.entries(m)) if (Date.now() - at > 2 * 86400e3) delete m[id]
+  return m
+}
+function saveCutoffs (m) {
+  try {
+    scan.mkdirPrivate(path.dirname(CUTOFF_FILE))
+    scan.writePrivate(CUTOFF_FILE, JSON.stringify(m))
+  } catch {}
+}
+// "!" commands typed in the logbook: running ones, and finished output waiting to
+// go to Claude with the next message, as Claude Code's terminal does
+const SHELLS = new Map()          // key -> child process
+const SHELL_OUT = new Map()       // chat id -> [{ cmd, out, code }]
+const ANSI = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07]*\x07/g
+function chatShell (msg, post) {
+  const id = String(msg.id || ''), key = String(msg.key || ''), cmd = String(msg.cmd || '')
+  if (!/^[\w-]+$/.test(id) || !/^\w+$/.test(key) || !cmd.trim()) return
+  const end = (code, extra) => post({ type: 'chatShellEnd', id, key, code, chunk: extra || '' })
+  const s = scan.index().find(x => x.id === id)
+  const cwd = runner.cwdOf(id) || NEW_CHATS.get(id)?.cwd || s?.cwd
+  if (!cwd || !fs.existsSync(cwd)) return end(1, 'The chat\'s folder was not found.\n')
+  // your login shell, so PATH and tools match a terminal
+  const sh = process.env.SHELL || '/bin/zsh'
+  const env = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' }
+  delete env.CLAUDECODE
+  // its own process group, so Stop ends everything the command started, not just the shell
+  const p = require('node:child_process').spawn(sh, ['-lc', cmd], { cwd, env, detached: true })
+  SHELLS.set(key, p)
+  p.stdout.setEncoding('utf8')                // a character split across chunks stays whole
+  p.stderr.setEncoding('utf8')
+  let out = '', pending = '', timer = null
+  const flush = () => { timer = null; if (pending) { post({ type: 'chatShellOut', id, key, chunk: pending }); pending = '' } }
+  const take = d => {
+    const t = String(d).replace(ANSI, '').replace(/\r(?!\n)/g, '\n')
+    out = (out + t).slice(-60000)
+    pending += t
+    if (!timer) timer = setTimeout(flush, 150)
+  }
+  p.stdout.on('data', take)
+  p.stderr.on('data', take)
+  p.on('error', e => take(String(e.message) + '\n'))
+  p.on('close', code => {
+    SHELLS.delete(key)
+    clearTimeout(timer); flush()
+    // the tail is what matters in a long install log, and keeps Claude's context sane;
+    // the last few commands at most, for a chat that may never send again
+    const list = [...(SHELL_OUT.get(id) || []), { cmd, out: out.length > 20000 ? '…' + out.slice(-20000) : out, code: code ?? 1 }].slice(-5)
+    SHELL_OUT.set(id, list)
+    end(code ?? 1)
+  })
+}
+/**
+ * Pictures pasted into an answer to Claude's question. A question's answer is
+ * text only, so they are saved as files and the answer says where: Claude opens
+ * them with its Read tool. Kept a week.
+ */
+const PASTE_DIR = path.join(require('node:os').homedir(), '.agent-logbook', 'pastes')
+let PRUNED_AT = 0
+function prunePastes () {
+  if (Date.now() - PRUNED_AT < 3600e3) return       // once an hour is plenty for a week's limit
+  PRUNED_AT = Date.now()
+  if (!fs.existsSync(PASTE_DIR)) return
+  for (const f of fs.readdirSync(PASTE_DIR)) {
+    const p = path.join(PASTE_DIR, f)
+    try { if (Date.now() - fs.statSync(p).mtimeMs > 7 * 864e5) fs.rmSync(p) } catch {}
+  }
+}
+function pastedNote (id, list) {
+  const pics = (Array.isArray(list) ? list : []).slice(0, 4)
+    .filter(im => im && /^image\/(png|jpeg|gif|webp)$/.test(im.mediaType) &&
+      typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < 7e6)
+  if (!pics.length || !/^[\w-]+$/.test(String(id))) return ''
+  const paths = []
+  try {
+    // screenshots can hold anything: readable by you only, like the cache
+    scan.mkdirPrivate(PASTE_DIR)
+    prunePastes()
+    pics.forEach((im, i) => {
+      const ext = im.mediaType.split('/')[1].replace('jpeg', 'jpg')
+      const p = path.join(PASTE_DIR, `${id}-${Date.now()}-${require('node:crypto').randomBytes(4).toString('hex')}-${i + 1}.${ext}`)
+      scan.writePrivate(p, Buffer.from(im.data, 'base64'))
+      paths.push(p)
+    })
+  } catch { return '' }
+  return `\n\n(The user attached ${paths.length === 1 ? 'a picture' : `${paths.length} pictures`} to this answer: ${paths.join(', ')}. Open ${paths.length === 1 ? 'it' : 'them'} with the Read tool.)`
+}
+
+/** A new chat in the logbook: no Claude yet, it starts with the first message, under this id. */
+function newChatHere (post) {
+  const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+  const sid = require('node:crypto').randomUUID()
+  NEW_CHATS.set(sid, { cwd: cwd || require('node:os').homedir() })
+  post({ type: 'pendingChat', id: sid, here: true, folder: scan.projectName(cwd || '') })
+  followNewChat(sid, post, null)
+}
+
+/**
+ * Chatting from the logbook arrived in 1.9 and is on for everyone, so say so
+ * once: a notification after the update that opens a new chat or the change
+ * list. Not for someone who has already turned chatting off.
+ */
+async function announceChat (ctx) {
+  const KEY = 'announced.chat-1.9'
+  if (ctx.globalState.get(KEY) || !cfg('chatHere', true)) return
+  await ctx.globalState.update(KEY, Date.now())
+  const pick = await vscode.window.showInformationMessage(
+    'Agent Logbook 1.9: chat with Claude right in the logbook. Reply under any chat, or start a new one from +.',
+    'Try it', "What's new")
+  if (pick === 'Try it') {
+    await vscode.commands.executeCommand('claudeHistory.view.focus')
+    // the sidebar may still be loading: wait for it to say it is ready
+    for (let i = 0; i < 40 && !SIDEBAR; i++) await new Promise(r => setTimeout(r, 100))
+    if (SIDEBAR) newChatHere(SIDEBAR)
+  } else if (pick === "What's new") {
+    await vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.joinPath(ctx.extensionUri, 'CHANGELOG.md'))
+  }
+}
+
+/** End a "!" command and everything it started. */
+function stopShell (p) {
+  try { process.kill(-p.pid, 'SIGTERM') } catch { try { p.kill() } catch {} }
+}
+
+/**
+ * Commands run since the last message, in the shape Claude Code's terminal
+ * writes them. Read without taking them: they are dropped only once the message
+ * carrying them was accepted, so a send that fails keeps them for the retry.
+ */
+function shellContext (id) {
+  const list = SHELL_OUT.get(id)
+  if (!list?.length) return { text: '', n: 0 }
+  return { n: list.length, text: list.map(x => `<bash-input>${x.cmd}</bash-input>\n<bash-stdout>${x.out.trimEnd()}</bash-stdout>` +
+    (x.code ? `\n<bash-stderr>Exited with code ${x.code}</bash-stderr>` : '')).join('\n') + '\n\n' }
+}
+function dropShell (id, n) {
+  const left = (SHELL_OUT.get(id) || []).slice(n)       // ones finished since stay for the next message
+  if (left.length) SHELL_OUT.set(id, left); else SHELL_OUT.delete(id)
+}
+
+function clearCutoff (id) {
+  const m = cutoffs()
+  if (!(id in m)) return
+  delete m[id]; saveCutoffs(m)
+  broadcast({ type: 'chatCutoff', ids: Object.keys(m) })
+}
+
+/**
+ * A message typed in the logbook. Claude starts on the chat if it is not
+ * running here yet - never on one running somewhere else, as two Claudes
+ * writing the same transcript would tangle it.
+ */
+function chatSend (msg, post) {
+  const id = String(msg.id || '')
+  const fail = error => post({ type: 'chatError', id, error })
+  if (!/^[\w-]+$/.test(id)) return
+  if (!cfg('chatHere', true)) return fail('Chatting here is turned off in Settings.')
+  const text = String(msg.text || '').replace(/\r/g, '')
+  // pasted pictures: a known type and a sane size, nothing else goes through
+  const images = (Array.isArray(msg.images) ? msg.images : []).slice(0, 8)
+    .filter(im => im && /^image\/(png|jpeg|gif|webp)$/.test(im.mediaType) &&
+      typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < 7e6)
+  if (!text.trim() && !images.length) return
+  const pick = (v, ok) => ok(v) ? v : ''
+  const shell = shellContext(id)
+  const opts = {
+    text: shell.text + text, images,
+    model: pick(String(msg.model || ''), v => /^[\w.[\]-]{0,60}$/.test(v)),
+    mode: pick(msg.mode, v => CHAT_MODES.includes(v)) || pick(cfg('chatPermissionMode', 'default'), v => CHAT_MODES.includes(v)),
+    effort: pick(msg.effort, v => CHAT_EFFORTS.includes(v)),
+  }
+  if (!runner.has(id)) {
+    const fresh = NEW_CHATS.get(id)
+    if (fresh) {
+      opts.cwd = fresh.cwd
+      if (fresh.forkOf) opts.forkOf = fresh.forkOf
+      else opts.fresh = true
+    } else {
+      const s = scan.index().find(x => x.id === id)
+      if (!s) return fail('This chat was not found on disk.')
+      if (s.provider === 'codex') return fail('Codex chats can only be continued in a terminal.')
+      if (live[id] && !runner.endedRecently(id)) return fail('This chat is running somewhere else. Reply there, or continue it here as a copy.')
+      opts.cwd = s.cwd
+    }
+    if (!opts.cwd || !fs.existsSync(opts.cwd)) return fail(`This chat's folder no longer exists${opts.cwd ? `: ${opts.cwd}` : '.'}`)
+  }
+  try {
+    // not taken (Claude had stopped): keep everything for the retry
+    if (!runner.send(id, opts)) return
+    dropShell(id, shell.n)
+    NEW_CHATS.delete(id)
+    clearCutoff(id)
+  } catch (e) { return fail(e.message) }
+  seenChat(id)
+}
+
+/** A value made safe for an HTML attribute. */
+const attr = v => String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+
 /** Wire up a webview - used by both the sidebar view and the editor tab. */
-function wire (ctx, w, onDispose, mode) {
+function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
+  // the one value put into the page's HTML: a chat id, and only a plain one
+  const chatId = /^[\w-]+$/.test(String(opts.chat || '')) ? attr(opts.chat) : ''
   {
     w.options = {
       enableScripts: true,
@@ -1356,9 +1642,10 @@ function wire (ctx, w, onDispose, mode) {
  style-src ${w.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';
  img-src ${w.cspSource} data:;">
 <link rel="stylesheet" href="${uri('style.css')}"></head>
-<body${mode ? ` data-mode="${mode}"` : ''}>${fs.readFileSync(path.join(ctx.extensionPath, 'media', 'body.html'), 'utf8')}
+<body${mode ? ` data-mode="${mode}"` : ''}${chatId ? ` data-chat="${chatId}"` : ''}>${fs.readFileSync(path.join(ctx.extensionPath, 'media', 'body.html'), 'utf8')}
 <script nonce="${nonce}" src="${uri('md.js')}"></script>
-<script nonce="${nonce}" src="${uri('main.js')}"></script></body></html>`
+<script nonce="${nonce}" src="${uri('main.js')}"></script>
+<script nonce="${nonce}" src="${uri('chat.js')}"></script></body></html>`
 
     const post = m => w.postMessage(m)
 
@@ -1377,9 +1664,11 @@ function wire (ctx, w, onDispose, mode) {
               dateFormat: cfg('dateFormat', 'locale'),
               liveFirst: cfg('showLiveFirst', true),
               cfg: settingsSnapshot(),
+              chatTipSeen: !!ctx.globalState.get('chatTipSeen'),
                   })
             pushLimits(post, 60000)
             post({ type: 'sessions', data: scan.sessionList(live) })
+            post({ type: 'chatCutoff', ids: Object.keys(cutoffs()) })
             break
           case 'sessions':
             post({ type: 'sessions', data: scan.sessionList(live) })
@@ -1403,6 +1692,11 @@ function wire (ctx, w, onDispose, mode) {
             broadcast({ type: 'limits', data: limitsNow() })
             break
           case 'session': {
+            // a one-chat tab keeps its chat: another one (a branch link) gets its own tab
+            if (opts.chat && msg.id !== opts.chat) {
+              if (/^[\w-]+$/.test(String(msg.id || ''))) openChatTab(ctx, msg.id, true)
+              break
+            }
             seenChat(msg.id)
             WATCH?.setOpen(post, msg.id)
             // clicked again while the whole chat is still being read: wait for that
@@ -1410,6 +1704,7 @@ function wire (ctx, w, onDispose, mode) {
             const whole = WHOLE.get(msg.id)
             const data = whole ? await whole : await transcriptSoon(msg.id)
             post({ type: 'session', data })
+            if (opts.onTitle && data?.id === opts.chat) opts.onTitle(data.title)
             // the end of a long chat came first; the whole of it follows and is
             // drawn in place, holding the reader where they are
             if (data?.part) {
@@ -1424,6 +1719,17 @@ function wire (ctx, w, onDispose, mode) {
             }
             break
           }
+          case 'chatTabIs':
+            // a copy started in a one-chat tab: the tab now holds the copy
+            if (opts.chat && /^[\w-]+$/.test(String(msg.id || '')) && opts.retarget) {
+              opts.retarget(opts.chat, msg.id); opts.chat = msg.id
+            }
+            break
+          case 'openTab':
+            // from the sidebar the editor area is free, so the chat takes it whole;
+            // from a logbook tab it goes beside, not over the list it came from
+            if (/^[\w-]+$/.test(String(msg.id || ''))) openChatTab(ctx, msg.id, mode !== 'sidebar' || !!msg.beside)
+            break
           case 'prefetch':
             prefetch(msg.id).catch(() => {})
             break
@@ -1480,6 +1786,12 @@ function wire (ctx, w, onDispose, mode) {
             seenChat(msg.id)
             // typed into the terminal running the chat, only one known to be it
             const text = String(msg.text || '').replace(/\r/g, '').trim()
+            // a chat running in the logbook takes the reply straight in
+            if (text && runner.has(msg.id)) {
+              // a Claude that had already quit does not take it: say so on the card
+              post({ type: 'boardReplied', id: msg.id, ok: runner.send(msg.id, { text }) })
+              break
+            }
             const term = text ? await terminalForSession(msg.id, false, true) : null
             if (!term) {
               vscode.window.showWarningMessage('This chat is not running in a terminal in this window, so the reply could not be sent. Use the terminal button to open it.')
@@ -1707,11 +2019,113 @@ function wire (ctx, w, onDispose, mode) {
                     : `$(check) ${msg.create ? 'Group created' : 'Moved to'} ${name || msg.assign}`, 3000)
             break
           }
+          case 'chatState':
+            post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), orphan: !!(await orphanPid(msg.id)) } })
+            break
+          case 'chatTakeover': {
+            const pid = await orphanPid(msg.id)
+            if (pid) {
+              const tree = processTree(pid)
+              for (const p of tree) { try { process.kill(p, 'SIGTERM') } catch {} }
+              await new Promise(r => setTimeout(r, 2000))
+              for (const p of tree) { try { process.kill(p, 0); process.kill(p, 'SIGKILL') } catch {} }
+              runner.markEnded(msg.id)
+              liveSig = ''; pollLive().catch(() => {})
+            }
+            post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), endedAt: Date.now() } })
+            break
+          }
+          case 'chatSend':
+            chatSend(msg, post)
+            break
+          case 'openChatSetting':
+            vscode.commands.executeCommand('workbench.action.openSettings', 'claudeHistory.chatHere')
+            break
+          case 'chatTipSeen':
+            await ctx.globalState.update('chatTipSeen', Date.now())
+            broadcast({ type: 'env', chatTipSeen: true })
+            break
+          case 'chatShell':
+            chatShell(msg, post)
+            break
+          case 'chatShellStop':
+            if (SHELLS.has(String(msg.key || ''))) stopShell(SHELLS.get(String(msg.key)))
+            break
+          case 'chatCutoffClear':
+            clearCutoff(String(msg.id || ''))
+            break
+          case 'chatWhere': {
+            // a chat running outside the logbook: where, as far as can be told
+            const s = scan.index().find(x => x.id === msg.id)
+            if (!s) break
+            const term = await terminalForSession(s.id, false, true)
+            const from = s.entrypoint || ''
+            const where = term ? 'terminal'
+              : from === 'claude-vscode' || from === 'vscode' ? 'claude'
+                : from === 'claude-desktop' ? 'desktop'
+                  : from === 'cli' ? 'outside' : ''
+            post({ type: 'chatWhere', id: s.id, where })
+            break
+          }
+          case 'chatShow': {
+            const term = await terminalForSession(String(msg.id || ''), false, true)
+            if (term) term.show(false)
+            else vscode.window.setStatusBarMessage('$(info) That terminal is no longer open in this window', 3000)
+            break
+          }
+          case 'chatAnswer': {
+            if (!cfg('chatHere', true)) break
+            // only a question Claude is waiting on, and only its own questions:
+            // nothing is written for an answer that has nowhere to go
+            const ask = runner.askOf(msg.id, msg.requestId)
+            if (!ask) break
+            const asked = new Set((ask.input?.questions || []).map(q => String(q.question || '')))
+            runner.answer(msg.id, msg.requestId, {
+              allow: !!msg.allow, always: !!msg.always,
+              answers: msg.answers && typeof msg.answers === 'object' ? Object.fromEntries(Object.entries(msg.answers)
+                .filter(([k]) => asked.has(String(k)))
+                .map(([k, v]) => [String(k), String(v) + pastedNote(msg.id, msg.images?.[k])])) : null,
+              message: msg.message ? String(msg.message) : '',
+            })
+            break
+          }
+          case 'chatStop':
+            runner.interrupt(msg.id)
+            break
+          case 'chatModel':
+            if (/^[\w.[\]-]{0,60}$/.test(String(msg.value || ''))) runner.setModel(msg.id, String(msg.value || ''))
+            break
+          case 'chatMode':
+            if (CHAT_MODES.includes(msg.value)) runner.setMode(msg.id, msg.value)
+            break
+          case 'chatEffort':
+            if (!msg.value || CHAT_EFFORTS.includes(msg.value)) runner.setEffort(msg.id, msg.value || '')
+            break
+          case 'chatFork': {
+            // a chat busy in a terminal goes on here as a copy, under a new id
+            const s = scan.index().find(x => x.id === msg.id)
+            if (!s || s.provider === 'codex') return
+            const sid = require('node:crypto').randomUUID()
+            NEW_CHATS.set(sid, { cwd: s.cwd, forkOf: s.id })
+            post({ type: 'pendingChat', id: sid, here: true, copyOf: s.title || '', folder: scan.projectName(s.cwd) })
+            followNewChat(sid, post, null)
+            break
+          }
           case 'resume': {
             seenChat(msg.id)
             const s = scan.index().find(x => x.id === msg.id)
             if (!s) return
             const target = resolveTarget(s, msg.target)
+            // two Claudes writing one chat would tangle it, so the logbook's lets go first
+            if (runner.has(s.id)) {
+              const pick = await vscode.window.showWarningMessage(
+                'This chat is running in the logbook. Stop it there and open it elsewhere?', 'Stop and open', 'Cancel')
+              if (pick !== 'Stop and open') return
+              // at once: a Claude finishing its turn while the other starts would tangle the chat
+              runner.stop(s.id, true)
+              await new Promise(r => setTimeout(r, 1200))
+              delete live[s.id]
+            }
             // running in one of this window's terminals is not a conflict - that
             // terminal is the session, and resumeInTerminal just reveals it
             const attached = target === 'terminal' ? await terminalForSession(s.id, false) : null
@@ -1798,6 +2212,7 @@ function wire (ctx, w, onDispose, mode) {
           }
           case 'newChat': {
             const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+            if (msg.where === 'logbook') { newChatHere(post); break }
             const bin = claudeBin()
             // the new chat's id is chosen here, so Resume can find its terminal
             // later from the launch itself rather than by asking claude
@@ -1953,15 +2368,16 @@ function wire (ctx, w, onDispose, mode) {
     pushLimits(post, 0)
     // busy/idle changes constantly while a session runs, so poll it far more
     // often than the plan limits, which only move every few minutes
+    ON_SCREEN.set(post, isVisible)
     let ticks = 0
     const timer = setInterval(() => {
-      pollLive()                                              // shared, async, change-only
+      // which chats are running is checked once for every view, by livePoller
       if (ticks % 3 === 0) pollResources()                   // memory and CPU every ~9s
       if (++ticks % 20 === 0) pushLimits(post, 120000)      // limits every ~60s
     }, 3000)
     pollResources(true)
     if (mode === 'sidebar') SIDEBAR = post
-    onDispose(() => { clearInterval(timer); VIEWS.delete(post); WATCH?.setOpen(post, null) })
+    onDispose(() => { clearInterval(timer); VIEWS.delete(post); ON_SCREEN.delete(post); WATCH?.setOpen(post, null) })
   }
 }
 
@@ -1970,7 +2386,8 @@ class HistoryView {
   resolveWebviewView (view) {
     this.view = view
     view.onDidDispose(() => { SIDEBAR = null })
-    wire(this.ctx, view.webview, fn => view.onDidDispose(fn), 'sidebar')
+    wire(this.ctx, view.webview, fn => view.onDidDispose(fn), 'sidebar', () => view.visible)
+    view.onDidChangeVisibility(() => { if (view.visible) pollLive().catch(() => {}) })
   }
 }
 
@@ -2099,7 +2516,8 @@ function openBoard (ctx) {
   BOARD = vscode.window.createWebviewPanel('claudeHistory.board', 'Live chats',
     vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true })
   BOARD.iconPath = tabIcon(ctx)
-  wire(ctx, BOARD.webview, fn => BOARD.onDidDispose(fn), 'board')
+  const board = BOARD
+  wire(ctx, BOARD.webview, fn => BOARD.onDidDispose(fn), 'board', () => board.visible)
   BOARD.onDidDispose(() => { BOARD = null })
   return BOARD
 }
@@ -2112,8 +2530,62 @@ function openInEditor (ctx, beside) {
     { enableScripts: true, retainContextWhenHidden: true },
   )
   panel.iconPath = tabIcon(ctx)
-  wire(ctx, panel.webview, fn => panel.onDidDispose(fn))
+  wire(ctx, panel.webview, fn => panel.onDidDispose(fn), undefined, () => panel.visible)
   return panel
+}
+
+/** One chat on its own in an editor tab, so several can sit side by side. */
+const CHAT_TABS = new Map()
+function chatTabTitle (id) {
+  const s = scan.index().find(x => x.id === id)
+  const t = s?.title || 'Chat'
+  return t.length > 32 ? t.slice(0, 31) + '…' : t
+}
+function openChatTab (ctx, id, beside) {
+  const open = CHAT_TABS.get(id)
+  if (open) { open.reveal(); return open }
+  const panel = vscode.window.createWebviewPanel('claudeHistory.chat', chatTabTitle(id),
+    beside ? vscode.ViewColumn.Beside : vscode.ViewColumn.Active,
+    { enableScripts: true, retainContextWhenHidden: true })
+  fillChatTab(ctx, panel, id)
+  return panel
+}
+// the tab says whether its chat is working or waiting on you, so a row of chat
+// tabs reads like the list: a coloured dot icon, and a mark before the name
+const TAB_STATE = new WeakMap()          // panel -> { base, state }
+function paintChatTab (ctx, panel, state) {
+  const was = TAB_STATE.get(panel) || { base: panel.title, state: '' }
+  const now = { base: was.base, state: state === 'busy' || state === 'waiting' ? state : '' }
+  TAB_STATE.set(panel, now)
+  const title = (now.state === 'busy' ? '● ' : now.state === 'waiting' ? '◆ ' : '') + now.base
+  if (panel.title !== title) panel.title = title
+  if (now.state === was.state && panel.iconPath) return
+  const f = now.state === 'busy' ? 'tab-busy.svg' : now.state === 'waiting' ? 'tab-wait.svg' : ''
+  panel.iconPath = f ? vscode.Uri.joinPath(ctx.extensionUri, 'media', f) : tabIcon(ctx)
+}
+function paintChatTabs (list) {
+  if (!CHAT_TABS.size || !EXT_CTX) return
+  const by = new Map(list.map(x => [x.id, x.live]))
+  for (const [id, panel] of CHAT_TABS) paintChatTab(EXT_CTX, panel, by.get(id))
+}
+let EXT_CTX = null
+
+function fillChatTab (ctx, panel, id) {
+  CHAT_TABS.set(id, panel)
+  EXT_CTX = ctx
+  TAB_STATE.set(panel, { base: panel.title, state: '' })
+  paintChatTab(ctx, panel, live[id])
+  wire(ctx, panel.webview, fn => panel.onDidDispose(fn), 'chat', () => panel.visible, {
+    chat: id,
+    onTitle: t => {
+      if (!t) return
+      const st = TAB_STATE.get(panel) || { state: '' }
+      TAB_STATE.set(panel, { ...st, base: t.length > 32 ? t.slice(0, 31) + '…' : t })
+      paintChatTab(ctx, panel, st.state)
+    },
+    retarget: (from, to) => { if (CHAT_TABS.get(from) === panel) CHAT_TABS.delete(from); CHAT_TABS.set(to, panel); id = to },
+  })
+  panel.onDidDispose(() => { if (CHAT_TABS.get(id) === panel) CHAT_TABS.delete(id) })
 }
 
 /**
@@ -2205,7 +2677,22 @@ function activate (ctx) {
     vscode.window.onDidCloseTerminal(() => soon(250, 1200)),
     vscode.window.onDidOpenTerminal(() => soon(1200, 2500)))
   setImmediate(claudeBin)   // tells the scanner where claude is before the first live check
+  liveTimer = setTimeout(livePoller, 3000)
   WATCH = watchTranscripts(ctx)
+  runner.init({
+    bin: claudeBin,
+    emit: m => broadcast(m),
+    onWrite: id => WATCH?.poke(id),
+    // started, finished or waiting on you: the list and the board show it now
+    // what the logbook's own Claude is doing is known here: no need to ask the CLI
+    onChange: () => { if (DEACTIVATED) return; Object.assign(live, runner.liveMap()); publishLive() },
+  })
+  // pasted pictures go after a week whether or not another is ever pasted
+  setTimeout(() => { try { prunePastes() } catch {} }, 20000)
+  const pruner = setInterval(() => { PRUNED_AT = 0; try { prunePastes() } catch {} }, 864e5)
+  ctx.subscriptions.push({ dispose: () => clearInterval(pruner) })
+  // said once, a few seconds in, so it does not land on top of the editor starting up
+  setTimeout(() => announceChat(ctx).catch(() => {}), 4000)
   const provider = new HistoryView(ctx)
   ctx.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, diffProvider),
@@ -2214,6 +2701,8 @@ function activate (ctx) {
     // a settings change reaches every open view straight away
     vscode.workspace.onDidChangeConfiguration(e => {
       if (!e.affectsConfiguration('claudeHistory')) return
+      // turned off: the chats running here end, the way closing the editor ends them
+      if (e.affectsConfiguration('claudeHistory.chatHere') && !cfg('chatHere', true)) runner.stopAll()
       { const l = limitsNow(); broadcast({ type: 'limits', data: l }); paintQuotaItem(l); alertLimits(l) }   // thresholds may have moved
       broadcast({
         type: 'env',
@@ -2255,6 +2744,14 @@ function activate (ctx) {
     ...Object.keys(POSITIONS).map(key => vscode.commands.registerCommand(
       `claudeHistory.moveChat.${key}`, async () => moveChat(await chatToMove(), key))),
     vscode.commands.registerCommand('claudeHistory.openBeside', () => openInEditor(ctx, true)),
+    // chat tabs come back after a restart, each on the chat it had
+    vscode.window.registerWebviewPanelSerializer('claudeHistory.chat', {
+      async deserializeWebviewPanel (panel, state) {
+        const id = String(state?.chat || '')
+        if (!/^[\w-]+$/.test(id)) { panel.dispose(); return }
+        fillChatTab(ctx, panel, id)
+      },
+    }),
     vscode.commands.registerCommand('claudeHistory.refresh', () => {
       scan.index(true)                       // re-read every transcript from disk
       refreshLive(broadcast)                 // which chats are running right now
@@ -2267,6 +2764,21 @@ function activate (ctx) {
   if (cfg('openOnStartup', false)) vscode.commands.executeCommand('claudeHistory.view.focus')
 }
 
-function deactivate () { clearInterval(liveTimer) }
+function deactivate () {
+  DEACTIVATED = true
+  clearTimeout(liveTimer)
+  // a "!" command still running would carry on with nobody to see it
+  for (const p of SHELLS.values()) stopShell(p)
+  // a reply in progress, or a question waiting on you, dies with the window:
+  // note which, so each chat can offer to carry on after the reload
+  const busy = Object.entries(runner.liveMap()).filter(([, s]) => s !== 'idle').map(([id]) => id)
+  if (busy.length) {
+    const m = cutoffs()
+    for (const id of busy) m[id] = Date.now()
+    saveCutoffs(m)
+  }
+  runner.stopAll(true)
+  scan.saveCacheNow()
+}
 
 module.exports = { activate, deactivate }

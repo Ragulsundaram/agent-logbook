@@ -29,7 +29,7 @@ reviews:
         instructions: Fail if any changed file (JavaScript, HTML, shell script, workflow or other) adds fetch, http, https, net, tls, dgram, dns, http2, WebSocket, XMLHttpRequest, sendBeacon, EventSource, or a remote URL loaded into a webview. The only allowed request is the existing plan-usage call to api.anthropic.com in scan.js.
       - name: No shell strings or code from strings
         mode: error
-        instructions: Fail if the PR adds exec or execSync from child_process, shell true, eval, new Function, a computed require, dynamic import(), a shell interpreter (sh, bash, zsh, cmd, powershell) run through execFile or spawn with a command string such as -c, or a sendText call built from text that did not come from a validated id or a fixed command.
+        instructions: Fail if the PR adds exec or execSync from child_process, shell true, eval, new Function, a computed require, dynamic import(), a shell interpreter (sh, bash, zsh, cmd, powershell) run through execFile or spawn with a command string such as -c, or a sendText call built from text that did not come from a validated id or a fixed command. The one allowed exception is chatShell in extension.js, which runs the user's login shell with -lc on text the user typed after "!" in the message box (a chatShell message from the webview); fail if any other source of text can reach it, or if another place runs a shell string.
       - name: Webview output escaped
         mode: error
         instructions: Fail if any new innerHTML, outerHTML or insertAdjacentHTML in media/*.js, or any webview HTML built in extension.js or another file, uses a value that is not passed through esc() or is not a fixed string, or if the Content-Security-Policy or nonce in extension.js is changed.
@@ -55,7 +55,7 @@ reviews:
         1. No dependencies, install scripts, bundler or build step.
         2. No network calls except the plan-usage request to api.anthropic.com in scan.js.
         3. No real transcripts, .jsonl files or screenshots of real chats.
-        4. No shell strings: execFile with an argument array; sendText only from validated values.
+        4. No shell strings: execFile with an argument array; sendText only from validated values. Exception: chatShell runs text the user typed after "!" in the message box, and nothing else.
         5. Webview text escaped with esc() or textContent; CSP and nonce in extension.js unchanged.
         6. Any new write location must be added to README.md "What it reads and writes".
         Also flag changes outside the linked issue's scope and edits to CHANGELOG.md or the package.json version.
