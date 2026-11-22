@@ -445,6 +445,8 @@ function send (id, args) {
   // a reply that just ended was waiting to see whether more was coming: this is
   // more, and its own turn will settle it, so the wait must not end it first
   clearTimeout(r.nextTurn); r.nextTurn = null
+  // and a message sent just after Esc is new work, not part of what was stopped
+  clearTimeout(r.stopCheck); r.stopCheck = null
   armIdle(r)
   emit(id, { type: 'chatState', state: state(id) })
   OPTS.onChange(id)
