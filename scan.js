@@ -2187,7 +2187,8 @@ function parseMore (st, raw) {
         continue
       }
       // a slash command, shown as it was typed; the tags around it would clean to nothing
-      const name = (tagIn(raw, 'command-name') || '').trim()
+      // only a record Claude Code wrote: one that opens with the tags, not a message quoting them
+      const name = /^\s*<command-(name|message|args)>/.test(raw) ? (tagIn(raw, 'command-name') || '').trim() : ''
       if (name.startsWith('/')) {
         info.turns++
         const typed = { role: 'user', text: (name + ' ' + (tagIn(raw, 'command-args') || '').trim()).trim(),
@@ -2198,7 +2199,7 @@ function parseMore (st, raw) {
         continue
       }
       // what a built-in command printed (older Claudes write it as a user line)
-      const out = commandOut(raw)
+      const out = /^\s*<local-command-(stdout|stderr)>/.test(raw) ? commandOut(raw) : null
       if (out !== null) {
         if (out) turns.push(outputNote(out, e.timestamp))
         continue

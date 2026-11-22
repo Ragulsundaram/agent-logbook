@@ -1020,7 +1020,7 @@ function chatRow (s) {
   acts.append(
     // rename sits where pin was: renaming is the frequent one, pin lives in the right-click menu
     act('pencil', 'Rename', () => renamePrompt(s)),
-    act('play', 'Resume in a terminal', () => send({ type: 'resume', id: s.id, target: 'terminal' })),
+    act('play', 'Resume in a terminal', () => send({ type: 'resume', id: s.id, target: 'terminal', open: true })),   // running here: just opens it
     act('archive', s.archived ? 'Unarchive' : 'Archive', () => send({ type: 'archive', id: s.id })),
     act('trash', 'Delete chat', () => send({ type: 'trash', id: s.id })))
   r.appendChild(acts)
@@ -1622,7 +1622,7 @@ function chatMenu (anchor, t) {
   // a one-off: the default for Resume stays what Settings says
   for (const [key, spec] of Object.entries(TARGETS)) {
     item(spec.icon, key === 'auto' ? 'Resume where it started' : `Resume in ${spec.label}`, '',
-      () => send({ type: 'resume', id: t.id, target: key, move: true }))
+      () => send({ type: 'resume', id: t.id, target: key }))
   }
   sep()
   item('fork', 'New chat from this one', 'full history, like /branch', () => send({ type: 'fork', id: t.id }))
@@ -3745,7 +3745,7 @@ function boardCard (c) {
   }
   acts.append(
     btn('open', 'Open the whole chat', () => send({ type: 'openChat', id: c.id })),
-    btn('terminal', 'Go to its terminal', () => send({ type: 'resume', id: c.id, target: 'terminal' })))
+    btn('terminal', 'Go to its terminal', () => send({ type: 'resume', id: c.id, target: 'terminal', open: true })))
   head.appendChild(acts)
 
   // status first, since that is what the board is for; the figures only when
@@ -4093,7 +4093,7 @@ function renderStale (list) {
     const acts = el('div', 'bcacts')
     for (const [name, tip, fn] of [
       ['open', 'Open the whole chat', () => send({ type: 'openChat', id: c.id })],
-      ['terminal', 'Go to its terminal', () => send({ type: 'resume', id: c.id, target: 'terminal' })]]) {
+      ['terminal', 'Go to its terminal', () => send({ type: 'resume', id: c.id, target: 'terminal', open: true })]]) {
       const b = el('button', 'bcicon')
       b.appendChild(icon(name)); b.title = tip
       b.onclick = e => { e.stopPropagation(); fn() }

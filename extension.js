@@ -2116,8 +2116,8 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             const s = scan.index().find(x => x.id === msg.id)
             if (!s) return
             // a chat running here is already open for business: Resume just shows it.
-            // Only picking a place to move it to asks to stop it first.
-            if (runner.has(s.id) && !msg.move) {
+            // A named place (a terminal, the app) is a move, and asks to stop it first.
+            if (runner.has(s.id) && (!msg.target || msg.open)) {
               if (CHAT_TABS.has(s.id) || mode === 'board' || mode === 'chat') openChatTab(ctx, s.id, false)
               else post({ type: 'openHere', id: s.id })
               break

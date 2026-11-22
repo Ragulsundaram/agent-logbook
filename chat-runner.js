@@ -254,6 +254,7 @@ function onLine (r, m) {
       if (e.type === 'message_start') {
         clearTimeout(r.expectTurn); r.expectTurn = null
         clearTimeout(r.nextTurn); r.nextTurn = null
+        clearTimeout(r.stopCheck); r.stopCheck = null    // a turn did start: it ends with its own result
         r.partial = { text: '', thinking: false, tool: '' }
         r.busy = true                 // a queued message's turn starting counts as working
       } else if (e.type === 'content_block_start') {
