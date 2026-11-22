@@ -170,6 +170,8 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort } = {}) {
     pending: 0,                     // messages sent that Claude has not finished answering
     bg: [],                         // background agents and commands still running
     expectTurn: null,               // a background task finished: Claude's own turn is coming
+    nextTurn: null,                 // a reply ended with messages still counted: their turn should start soon
+    stopCheck: null,                // Esc was pressed: the reply should end soon
   }
   RUNS.set(id, r)
   proc.stdout.setEncoding('utf8')
@@ -198,7 +200,7 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort } = {}) {
   function finish (code) {
     if (r.ended) return
     r.ended = true
-    clearTimeout(r.idle); clearTimeout(r.partialTimer); clearTimeout(r.expectTurn)
+    clearTimeout(r.idle); clearTimeout(r.partialTimer); clearTimeout(r.expectTurn); clearTimeout(r.nextTurn); clearTimeout(r.stopCheck)
     if (RUNS.get(id) === r) RUNS.delete(id)
     ENDED.set(id, Date.now())
     // a newer Claude already took this chat over (a message sent while this one
@@ -251,6 +253,7 @@ function onLine (r, m) {
       const e = m.event || {}
       if (e.type === 'message_start') {
         clearTimeout(r.expectTurn); r.expectTurn = null
+        clearTimeout(r.nextTurn); r.nextTurn = null
         r.partial = { text: '', thinking: false, tool: '' }
         r.busy = true                 // a queued message's turn starting counts as working
       } else if (e.type === 'content_block_start') {
@@ -350,6 +353,12 @@ function onLine (r, m) {
       const stopped = m.subtype === 'error_during_execution' || m.terminal_reason === 'interrupted'
       r.pending = stopped ? 0 : Math.max(0, r.pending - 1)
       r.busy = r.pending > 0
+      clearTimeout(r.stopCheck); r.stopCheck = null
+      // Claude can take a message sent mid-reply into the reply it is already
+      // writing, so one answer can cover two messages. A queued message's own
+      // turn starts within a second or two; if none does, there is nothing left
+      clearTimeout(r.nextTurn); r.nextTurn = null
+      if (r.busy) r.nextTurn = setTimeout(() => settle(r, false), 5000)
       r.partial = { text: '', thinking: false, tool: '' }
       clearTimeout(r.partialTimer); r.partialTimer = null
       // an answer that was never given is moot once the turn has ended
@@ -371,6 +380,20 @@ function onLine (r, m) {
       return
     }
   }
+}
+
+/** Nothing more is coming: the chat is done, whatever the count of messages said. */
+function settle (r, stopped) {
+  clearTimeout(r.nextTurn); r.nextTurn = null
+  clearTimeout(r.stopCheck); r.stopCheck = null
+  if (!r.busy || r.ended || RUNS.get(r.id) !== r) return
+  r.pending = 0
+  r.busy = false
+  r.partial = { text: '', thinking: false, tool: '' }
+  emit(r.id, { type: 'chatDone', ms: 0, error: '', stopped })
+  OPTS.onChange(r.id)
+  armIdle(r)
+  if (r.restart && !r.bg.length) { r.restart = false; stop(r.id) }
 }
 
 /**
@@ -452,6 +475,10 @@ function interrupt (id) {
   const r = RUNS.get(id)
   if (!r) return
   control(r, { subtype: 'interrupt' })
+  // a Claude mid-reply ends it at once; one with nothing running says nothing,
+  // and the chat must not keep saying "working" because of it
+  clearTimeout(r.stopCheck)
+  r.stopCheck = setTimeout(() => settle(r, true), 3000)
 }
 
 function setModel (id, model) {
