@@ -2115,6 +2115,13 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             seenChat(msg.id)
             const s = scan.index().find(x => x.id === msg.id)
             if (!s) return
+            // a chat running here is already open for business: Resume just shows it.
+            // A named place (a terminal, the app) is a move, and asks to stop it first.
+            if (runner.has(s.id) && (!msg.target || msg.open)) {
+              if (CHAT_TABS.has(s.id) || mode === 'board' || mode === 'chat') openChatTab(ctx, s.id, false)
+              else post({ type: 'openHere', id: s.id })
+              break
+            }
             const target = resolveTarget(s, msg.target)
             // two Claudes writing one chat would tangle it, so the logbook's lets go first
             if (runner.has(s.id)) {
@@ -2686,7 +2693,18 @@ function activate (ctx) {
     // started, finished or waiting on you: the list and the board show it now
     // what the logbook's own Claude is doing is known here: no need to ask the CLI
     onChange: () => { if (DEACTIVATED) return; Object.assign(live, runner.liveMap()); publishLive() },
+    // Claude's slash commands and models, kept so "/" lists them all straight after a reload
+    onKnown: k => {
+      ctx.globalState.update('chatKnown', k)
+      broadcast({ type: 'chatKnown', commands: k.commands, models: k.models })
+    },
   })
+  runner.seedKnown(ctx.globalState.get('chatKnown'))
+  // and asked afresh once per window, in case skills or plugins changed since
+  setTimeout(() => {
+    if (DEACTIVATED || !cfg('chatHere', true)) return
+    runner.probe(require('node:os').homedir())   // never the open folder: its settings are not asked
+  }, 8000)
   // pasted pictures go after a week whether or not another is ever pasted
   setTimeout(() => { try { prunePastes() } catch {} }, 20000)
   const pruner = setInterval(() => { PRUNED_AT = 0; try { prunePastes() } catch {} }, 864e5)

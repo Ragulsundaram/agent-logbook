@@ -1041,6 +1041,12 @@ if (!BOARD_MODE) {
       return
     }
     if (m.type === 'chatWhere') { CHAT.where.set(m.id, { where: m.where || '', at: Date.now() }); paintComposer(); return }
+    // the full list of slash commands and models, learned from Claude or kept from before
+    if (m.type === 'chatKnown') {
+      if (m.commands?.length) CHAT.commands = m.commands
+      if (m.models?.length) CHAT.models = m.models
+      return
+    }
     if (m.type === 'chatCutoff') { CHAT.cutoff = new Set(m.ids || []); paintComposer(); return }
     if (!m.type.startsWith('chat') || !m.id) return
     const id = m.id

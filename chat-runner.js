@@ -30,6 +30,74 @@ let KNOWN = { commands: [], models: [] }
 
 function init (opts) { OPTS = { ...OPTS, ...opts } }
 
+/** Take in the commands and models a Claude reported, and pass them on to be kept. */
+function learn (x) {
+  x = x || {}
+  const commands = (x.commands || []).map(c => ({ name: String(c.name || ''), description: String(c.description || '').slice(0, 200), hint: String(c.argumentHint || '') }))
+  const models = (x.models || []).map(o => ({ value: String(o.value || ''), label: String(o.displayName || o.value || ''), note: String(o.description || ''), efforts: o.supportsEffort ? (o.supportedEffortLevels || []) : [] }))
+  if (!commands.length && !models.length) return
+  KNOWN = { commands, models }
+  try { OPTS.onKnown?.(KNOWN) } catch {}
+}
+/** What was kept from an earlier window, so "/" lists everything straight after a reload. */
+function seedKnown (k) {
+  if (k && Array.isArray(k.commands) && Array.isArray(k.models) && !KNOWN.commands.length) KNOWN = { commands: k.commands, models: k.models }
+}
+
+/**
+ * Ask Claude for its commands and models without starting a chat: it starts,
+ * answers the handshake and is let go. Nothing is sent to the model and no
+ * chat is saved. One at a time; done is told whether it worked.
+ */
+let PROBING = false
+let FROM_CHAT = false               // a chat here has reported its list this window
+function probe (cwd, done = () => {}) {
+  const bin = OPTS.bin()
+  if (!bin || PROBING) return done(false)
+  PROBING = true
+  const env = { ...process.env, PATH: `${path.dirname(bin)}:${process.env.PATH || ''}` }
+  delete env.CLAUDECODE
+  let proc
+  try {
+    // runs with nobody asking, so it runs nothing: no hooks, no MCP servers, and
+    // only your own settings - a folder just opened gets no say in what starts
+    proc = spawn(bin, ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+      '--no-session-persistence', '--setting-sources', 'user', '--settings', '{"disableAllHooks":true}',
+      '--strict-mcp-config'], { cwd, env, stdio: ['pipe', 'pipe', 'ignore'] })
+  } catch { PROBING = false; return done(false) }
+  let buf = '', ok = false, over = false
+  const end = () => {
+    if (over) return
+    over = true; PROBING = false; clearTimeout(timer)
+    try { proc.stdin.end() } catch {}
+    try { proc.kill() } catch {}
+    // one that lingers past a polite ask is not left behind
+    const hard = setTimeout(() => { try { if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL') } catch {} }, 3000)
+    hard.unref?.()
+    done(ok)
+  }
+  const timer = setTimeout(end, 20000)
+  proc.stdout.setEncoding('utf8')
+  proc.stdout.on('data', d => {
+    buf += d
+    let i
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 1)
+      let m; try { m = JSON.parse(line) } catch { continue }
+      const res = m.type === 'control_response' && m.response
+      if (res && res.request_id === 'probe') {
+        // a chat that started meanwhile knows better: it also has its folder's commands
+        if (res.subtype === 'success') { if (!FROM_CHAT) learn(res.response); ok = true }
+        end(); return
+      }
+    }
+  })
+  proc.stdin.on('error', () => {})
+  proc.on('error', end)
+  proc.on('exit', end)
+  try { proc.stdin.write(JSON.stringify({ type: 'control_request', request_id: 'probe', request: { subtype: 'initialize' } }) + '\n') } catch { end() }
+}
+
 const has = id => RUNS.has(id)
 // the live list lags a few seconds behind: a Claude that just quit here can still be listed as running
 const endedRecently = id => {
@@ -102,6 +170,8 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort } = {}) {
     pending: 0,                     // messages sent that Claude has not finished answering
     bg: [],                         // background agents and commands still running
     expectTurn: null,               // a background task finished: Claude's own turn is coming
+    nextTurn: null,                 // a reply ended with messages still counted: their turn should start soon
+    stopCheck: null,                // Esc was pressed: the reply should end soon
   }
   RUNS.set(id, r)
   proc.stdout.setEncoding('utf8')
@@ -130,7 +200,7 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort } = {}) {
   function finish (code) {
     if (r.ended) return
     r.ended = true
-    clearTimeout(r.idle); clearTimeout(r.partialTimer); clearTimeout(r.expectTurn)
+    clearTimeout(r.idle); clearTimeout(r.partialTimer); clearTimeout(r.expectTurn); clearTimeout(r.nextTurn); clearTimeout(r.stopCheck)
     if (RUNS.get(id) === r) RUNS.delete(id)
     ENDED.set(id, Date.now())
     // a newer Claude already took this chat over (a message sent while this one
@@ -183,6 +253,8 @@ function onLine (r, m) {
       const e = m.event || {}
       if (e.type === 'message_start') {
         clearTimeout(r.expectTurn); r.expectTurn = null
+        clearTimeout(r.nextTurn); r.nextTurn = null
+        clearTimeout(r.stopCheck); r.stopCheck = null    // a turn did start: it ends with its own result
         r.partial = { text: '', thinking: false, tool: '' }
         r.busy = true                 // a queued message's turn starting counts as working
       } else if (e.type === 'content_block_start') {
@@ -270,11 +342,8 @@ function onLine (r, m) {
     case 'control_response': {
       const res = m.response || {}
       if (res.request_id === 'init' && res.subtype === 'success') {
-        const x = res.response || {}
-        KNOWN = {
-          commands: (x.commands || []).map(c => ({ name: String(c.name || ''), description: String(c.description || '').slice(0, 200), hint: String(c.argumentHint || '') })),
-          models: (x.models || []).map(o => ({ value: String(o.value || ''), label: String(o.displayName || o.value || ''), note: String(o.description || ''), efforts: o.supportsEffort ? (o.supportedEffortLevels || []) : [] })),
-        }
+        learn(res.response)
+        FROM_CHAT = true
         emit(r.id, { type: 'chatState', state: state(r.id) })
       }
       return
@@ -285,6 +354,12 @@ function onLine (r, m) {
       const stopped = m.subtype === 'error_during_execution' || m.terminal_reason === 'interrupted'
       r.pending = stopped ? 0 : Math.max(0, r.pending - 1)
       r.busy = r.pending > 0
+      clearTimeout(r.stopCheck); r.stopCheck = null
+      // Claude can take a message sent mid-reply into the reply it is already
+      // writing, so one answer can cover two messages. A queued message's own
+      // turn starts within a second or two; if none does, there is nothing left
+      clearTimeout(r.nextTurn); r.nextTurn = null
+      if (r.busy) r.nextTurn = setTimeout(() => settle(r, false), 5000)
       r.partial = { text: '', thinking: false, tool: '' }
       clearTimeout(r.partialTimer); r.partialTimer = null
       // an answer that was never given is moot once the turn has ended
@@ -306,6 +381,20 @@ function onLine (r, m) {
       return
     }
   }
+}
+
+/** Nothing more is coming: the chat is done, whatever the count of messages said. */
+function settle (r, stopped) {
+  clearTimeout(r.nextTurn); r.nextTurn = null
+  clearTimeout(r.stopCheck); r.stopCheck = null
+  if (!r.busy || r.ended || RUNS.get(r.id) !== r) return
+  r.pending = 0
+  r.busy = false
+  r.partial = { text: '', thinking: false, tool: '' }
+  emit(r.id, { type: 'chatDone', ms: 0, error: '', stopped })
+  OPTS.onChange(r.id)
+  armIdle(r)
+  if (r.restart && !r.bg.length) { r.restart = false; stop(r.id) }
 }
 
 /**
@@ -353,6 +442,11 @@ function send (id, args) {
   })
   r.pending++
   r.busy = true
+  // a reply that just ended was waiting to see whether more was coming: this is
+  // more, and its own turn will settle it, so the wait must not end it first
+  clearTimeout(r.nextTurn); r.nextTurn = null
+  // and a message sent just after Esc is new work, not part of what was stopped
+  clearTimeout(r.stopCheck); r.stopCheck = null
   armIdle(r)
   emit(id, { type: 'chatState', state: state(id) })
   OPTS.onChange(id)
@@ -387,6 +481,10 @@ function interrupt (id) {
   const r = RUNS.get(id)
   if (!r) return
   control(r, { subtype: 'interrupt' })
+  // a Claude mid-reply ends it at once; one with nothing running says nothing,
+  // and the chat must not keep saying "working" because of it
+  clearTimeout(r.stopCheck)
+  r.stopCheck = setTimeout(() => settle(r, true), 3000)
 }
 
 function setModel (id, model) {
@@ -453,4 +551,4 @@ const askOf = (id, requestId) => RUNS.get(id)?.asks.get(requestId) || null
 /** The folder Claude runs in for this chat, when it runs here. */
 const cwdOf = id => RUNS.get(id)?.cwd || ''
 
-module.exports = { init, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, setModel, setMode, setEffort, stop, stopAll, markEnded }
+module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, setModel, setMode, setEffort, stop, stopAll, markEnded }

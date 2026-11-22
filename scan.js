@@ -2079,6 +2079,29 @@ function harnessNote (e) {
   return null
 }
 
+// A slash command and what it printed, as Claude Code writes them into the
+// transcript: tagged text the usual cleaning strips away entirely.
+const rawText = e => {
+  const c = e?.message?.content ?? e?.content
+  if (typeof c === 'string') return c
+  return Array.isArray(c) ? c.filter(b => b?.type === 'text').map(b => b.text).join('\n') : ''
+}
+function tagIn (s, n) {
+  const i = s.indexOf(`<${n}>`); if (i < 0) return null
+  const j = s.indexOf(`</${n}>`, i); return j < 0 ? null : s.slice(i + n.length + 2, j)
+}
+// eslint-disable-next-line no-control-regex
+const ANSI_CODES = /\x1b\[[0-9;?]*[ -/]*[@-~]/g
+function commandOut (s) {
+  const out = tagIn(s, 'local-command-stdout'), err = tagIn(s, 'local-command-stderr')
+  if (out === null && err === null) return null
+  const text = [out, err].filter(Boolean).join('\n').replace(ANSI_CODES, '').trim()
+  // /compact says only this; its own "compacted" note already does
+  return /^Compacted\.?$/.test(text) ? '' : text
+}
+const outputNote = (text, ts) => ({ role: 'note', kind: 'command', text,
+  tools: [], images: [], edits: [], ts: ts || '' })
+
 /** Drop the heavy bits: image bytes and edit bodies are fetched on demand. */
 const slim = turns => turns.map((t, ti) => ({
   ...t,
@@ -2145,12 +2168,43 @@ function parseMore (st, raw) {
         turns.push({ role: 'note', kind: 'compact',
           text: m.preTokens ? `Conversation compacted · ${nfmt(m.preTokens)} tokens before` : 'Conversation compacted',
           tools: [], images: [], edits: [], ts: e.timestamp || '' })
+      } else if (e.subtype === 'local_command' && e.content) {
+        // what a built-in command like /context or /cost printed
+        const out = commandOut(e.content)
+        if (out) turns.push(outputNote(out, e.timestamp))
       }
       continue
     }
     if (e.type !== 'user' && e.type !== 'assistant') continue
     // a sub-agent's own file is entirely sidechain, so only a session filters them
     if (e.isSidechain && !keepSidechain) continue
+    if (e.type === 'user' && !e.isMeta) {
+      const raw = rawText(e)
+      // the summary a compaction left: folded under its "compacted" note, not a giant message
+      if (e.isCompactSummary) {
+        const last = turns[turns.length - 1]
+        if (last?.kind === 'compact' && !last.detail) last.detail = clean(raw).replace(/^This session is being continued[^\n]*\n+/, '')
+        continue
+      }
+      // a slash command, shown as it was typed; the tags around it would clean to nothing
+      // only a record Claude Code wrote: one that opens with the tags, not a message quoting them
+      const name = /^\s*<command-(name|message|args)>/.test(raw) ? (tagIn(raw, 'command-name') || '').trim() : ''
+      if (name.startsWith('/')) {
+        info.turns++
+        const typed = { role: 'user', text: (name + ' ' + (tagIn(raw, 'command-args') || '').trim()).trim(),
+          tools: [], images: [], edits: [], ts: e.timestamp || '' }
+        // /compact is written after the note it caused; it reads in the order it happened
+        if (name === '/compact' && turns[turns.length - 1]?.kind === 'compact') turns.splice(turns.length - 1, 0, typed)
+        else turns.push(typed)
+        continue
+      }
+      // what a built-in command printed (older Claudes write it as a user line)
+      const out = /^\s*<local-command-(stdout|stderr)>/.test(raw) ? commandOut(raw) : null
+      if (out !== null) {
+        if (out) turns.push(outputNote(out, e.timestamp))
+        continue
+      }
+    }
     const note = harnessNote(e)
     if (note) {
       turns.push({ role: 'note', kind: note.kind, text: note.text, detail: note.detail || '', from: note.from || '',
@@ -2894,6 +2948,8 @@ function toMarkdown (t) {
   for (const turn of t.turns) {
     out.push(`### ${turn.role === 'user' ? 'You' : 'Claude'}`, '')
     if (turn.text) out.push(turn.text, '')
+    // a note's folded part (a compaction's summary, an agent's report) goes out too
+    if (turn.detail) out.push(turn.detail, '')
     for (const tool of turn.tools) out.push(`> \`${tool.name}\``, '')
   }
   return out.join('\n')

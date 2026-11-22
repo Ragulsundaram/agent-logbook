@@ -1020,7 +1020,7 @@ function chatRow (s) {
   acts.append(
     // rename sits where pin was: renaming is the frequent one, pin lives in the right-click menu
     act('pencil', 'Rename', () => renamePrompt(s)),
-    act('play', 'Resume in a terminal', () => send({ type: 'resume', id: s.id, target: 'terminal' })),
+    act('play', 'Resume in a terminal', () => send({ type: 'resume', id: s.id, target: 'terminal', open: true })),   // running here: just opens it
     act('archive', s.archived ? 'Unarchive' : 'Archive', () => send({ type: 'archive', id: s.id })),
     act('trash', 'Delete chat', () => send({ type: 'trash', id: s.id })))
   r.appendChild(acts)
@@ -1487,7 +1487,7 @@ function drawEarlier (count = MORE_DRAW) {
 let LAST_SIGS = []
 // what a block looks like on screen: its size, and the state of any agent it
 // launched - a card turning from running to done has to be redrawn too
-const blockSig = (b, t) => [b.role, (b.text || '').length, b.tools.length,
+const blockSig = (b, t) => [b.role, (b.text || '').length, (b.detail || '').length, b.tools.length,
   (b.images || []).length, (b.edits || []).length, b.ts || '',
   b.tools.filter(x => x.useId).map(x => {
     const a = (t.agents || []).find(g => g.toolUseId === x.useId)
@@ -2160,6 +2160,7 @@ function noteCard (n) {
     compact: ['compact', 'COMPACTED'],
     agent: ['agent', 'AGENT FINISHED'],
     peer: ['message', 'FROM ANOTHER SESSION'],
+    command: ['terminal', 'COMMAND OUTPUT'],
   }
   const [ico, label] = KINDS[n.kind] || KINDS.compact
   head.append(icon(ico, 'nico'), el('b', '', label))
@@ -2175,7 +2176,7 @@ function noteCard (n) {
   // it is often longer than everything around it
   if (n.detail) {
     const tog = el('button', 'afoldhead')
-    tog.append(el('span', 'chev2', '›'), el('span', '', 'What it reported'))
+    tog.append(el('span', 'chev2', '›'), el('span', '', n.kind === 'compact' ? 'What Claude kept' : 'What it reported'))
     const rep = el('div', 'afoldbody')
     rep.innerHTML = window.md(n.detail)
     addCopyButtons(rep)
@@ -3303,6 +3304,8 @@ window.addEventListener('message', e => {
     send({ type: 'chatTabIs', id: CHAT_ONLY })
   }
   if (CHAT_ONLY && m.type === 'session' && m.data && m.data.id !== CHAT_ONLY && m.data.sessionId !== CHAT_ONLY) return
+  // Resume on a chat running here: open it, as a click on its row would
+  if (m.type === 'openHere' && m.id) { PERF = { id: m.id, t0: performance.now() }; send({ type: 'session', id: m.id }) }
   if (m.type === 'env' && BOARD_MODE && m.cfg) send({ type: 'board' })
   if (m.type === 'env') {
     // partial env messages (a group edit, a settings snapshot) leave it alone
@@ -3742,7 +3745,7 @@ function boardCard (c) {
   }
   acts.append(
     btn('open', 'Open the whole chat', () => send({ type: 'openChat', id: c.id })),
-    btn('terminal', 'Go to its terminal', () => send({ type: 'resume', id: c.id, target: 'terminal' })))
+    btn('terminal', 'Go to its terminal', () => send({ type: 'resume', id: c.id, target: 'terminal', open: true })))
   head.appendChild(acts)
 
   // status first, since that is what the board is for; the figures only when
@@ -4090,7 +4093,7 @@ function renderStale (list) {
     const acts = el('div', 'bcacts')
     for (const [name, tip, fn] of [
       ['open', 'Open the whole chat', () => send({ type: 'openChat', id: c.id })],
-      ['terminal', 'Go to its terminal', () => send({ type: 'resume', id: c.id, target: 'terminal' })]]) {
+      ['terminal', 'Go to its terminal', () => send({ type: 'resume', id: c.id, target: 'terminal', open: true })]]) {
       const b = el('button', 'bcicon')
       b.appendChild(icon(name)); b.title = tip
       b.onclick = e => { e.stopPropagation(); fn() }

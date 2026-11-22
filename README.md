@@ -90,7 +90,11 @@ again" does). The extension itself sends
 nothing to the network for this; it only talks to that local process. A message
 you type starting with `!` runs in your own shell in the chat's folder, as it
 would in a terminal, and Claude gets the command and its output with your next
-message.
+message. So that "/" lists your slash commands straight away, a few seconds
+after a window opens it also starts `claude` once in your home folder to ask
+for them and lets it go: no message is sent, no chat is saved, and it runs no
+hooks, no MCP servers and no settings from the folder you opened. The list is
+kept in the editor's own extension storage until the next one.
 
 ## Settings
 
