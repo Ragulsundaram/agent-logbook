@@ -1622,7 +1622,7 @@ function chatMenu (anchor, t) {
   // a one-off: the default for Resume stays what Settings says
   for (const [key, spec] of Object.entries(TARGETS)) {
     item(spec.icon, key === 'auto' ? 'Resume where it started' : `Resume in ${spec.label}`, '',
-      () => send({ type: 'resume', id: t.id, target: key }))
+      () => send({ type: 'resume', id: t.id, target: key, move: true }))
   }
   sep()
   item('fork', 'New chat from this one', 'full history, like /branch', () => send({ type: 'fork', id: t.id }))
@@ -2160,6 +2160,7 @@ function noteCard (n) {
     compact: ['compact', 'COMPACTED'],
     agent: ['agent', 'AGENT FINISHED'],
     peer: ['message', 'FROM ANOTHER SESSION'],
+    command: ['terminal', 'COMMAND OUTPUT'],
   }
   const [ico, label] = KINDS[n.kind] || KINDS.compact
   head.append(icon(ico, 'nico'), el('b', '', label))
@@ -2175,7 +2176,7 @@ function noteCard (n) {
   // it is often longer than everything around it
   if (n.detail) {
     const tog = el('button', 'afoldhead')
-    tog.append(el('span', 'chev2', '›'), el('span', '', 'What it reported'))
+    tog.append(el('span', 'chev2', '›'), el('span', '', n.kind === 'compact' ? 'What Claude kept' : 'What it reported'))
     const rep = el('div', 'afoldbody')
     rep.innerHTML = window.md(n.detail)
     addCopyButtons(rep)
@@ -3303,6 +3304,8 @@ window.addEventListener('message', e => {
     send({ type: 'chatTabIs', id: CHAT_ONLY })
   }
   if (CHAT_ONLY && m.type === 'session' && m.data && m.data.id !== CHAT_ONLY && m.data.sessionId !== CHAT_ONLY) return
+  // Resume on a chat running here: open it, as a click on its row would
+  if (m.type === 'openHere' && m.id) { PERF = { id: m.id, t0: performance.now() }; send({ type: 'session', id: m.id }) }
   if (m.type === 'env' && BOARD_MODE && m.cfg) send({ type: 'board' })
   if (m.type === 'env') {
     // partial env messages (a group edit, a settings snapshot) leave it alone
