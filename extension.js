@@ -1785,13 +1785,22 @@ const UNTRUSTED = 'Chatting here needs a trusted folder: trust this window (it i
 /** A path as it really is on disk: a shortcut (symlink) followed to where it points. */
 // a path that does not exist yet (a file about to be written) has its nearest existing folder
 // resolved and the rest added back, so it is compared in the same form as its folder
-function real (p) {
+// A shortcut whose target does not exist yet is followed to that target, and any other
+// error reading a path gives no answer at all (null), which counts as outside everything
+function real (p, depth = 0) {
+  if (depth > 20) return null
   let head = path.resolve(p)
   const rest = []
   for (;;) {
-    try { return path.join(fs.realpathSync.native(head), ...rest) } catch {}
+    try { return path.join(fs.realpathSync.native(head), ...rest) } catch (e) {
+      if (e?.code !== 'ENOENT') return null
+    }
+    // a dangling shortcut: where it would lead, not where it sits
+    let link = null
+    try { if (fs.lstatSync(head).isSymbolicLink()) link = fs.readlinkSync(head) } catch (e) { if (e?.code !== 'ENOENT') return null }
+    if (link !== null) return real(path.join(path.resolve(path.dirname(head), link), ...rest), depth + 1)
     const up = path.dirname(head)
-    if (up === head) return path.resolve(p)
+    if (up === head) return null
     rest.unshift(path.basename(head))
     head = up
   }
@@ -1803,7 +1812,9 @@ function real (p) {
  */
 function within (root, p) {
   if (!root || !p) return false
-  const rel = path.relative(real(root), real(p))
+  const r = real(root), q = real(p)
+  if (!r || !q) return false
+  const rel = path.relative(r, q)
   return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel))
 }
 const windowRoots = () => (vscode.workspace.workspaceFolders || []).map(f => path.resolve(f.uri.fsPath))
