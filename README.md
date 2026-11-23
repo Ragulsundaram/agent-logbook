@@ -95,6 +95,13 @@ after a window opens it also starts `claude` once in your home folder to ask
 for them and lets it go: no message is sent, no chat is saved, and it runs no
 hooks, no MCP servers and no settings from the folder you opened. The list is
 kept in the editor's own extension storage until the next one.
+As in Claude's own editor panel, a message you send from the logbook also tells
+Claude which file you have open and the lines you have selected (the line above
+the box shows what goes, with Leave out for one message, and
+`claudeHistory.chatEditorContext` turns it off). Before Claude reads or edits a
+file you have open with unsaved changes, the logbook saves it, and after an
+edit it passes on any new errors the editor reports in that file. Files you
+attach go to Claude with the message: PDFs as they are, text files as their text.
 
 ## Settings
 

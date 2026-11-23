@@ -4774,6 +4774,8 @@ function renderSettings () {
     pick(here, 'chatPermissionMode', 'Claude may', 'each chat can change this from its box', [
       ['default', 'Ask before edits and commands'], ['acceptEdits', 'Edit files without asking'],
       ['plan', 'Plan first, then ask'], ['auto', 'Decide what is safe']])
+    toggle(here, 'chatEditorContext', 'Send what you have open',
+      'Claude sees the file open in the editor and the lines you selected, as in its own panel', true)
     pick(here, 'chatEffort', 'Effort', 'how hard Claude thinks; /effort in a chat changes it', [
       ['', "Claude's own setting"], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']])
   }
