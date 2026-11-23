@@ -312,6 +312,14 @@ async function pollResources (force) {
  * and its parent is gone, so nothing can type to it or answer its questions.
  * Anything else running the chat - a terminal, the Claude extension - is left alone.
  */
+/** The program a running chat's Claude belongs to, read from its process: the Claude app, or not. */
+async function pidHost (pid) {
+  if (!pid) return ''
+  const cmd = await new Promise(resolve => require('node:child_process').execFile('ps', ['-o', 'args=', '-p', String(pid)],
+    { encoding: 'utf8', timeout: 3000 }, (err, stdout) => resolve(err ? '' : String(stdout))))
+  return /\/Claude\.app\/|\/Application Support\/Claude\//.test(cmd) ? 'desktop' : ''
+}
+
 async function orphanPid (id) {
   if (!/^[\w-]+$/.test(String(id || '')) || runner.has(id)) return 0
   const pid = scan.livePid(id)
@@ -1911,6 +1919,8 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               else vscode.window.setStatusBarMessage(`$(check) ${label[c]} ${msg.type === 'mcpConnect' ? 'can now read your chat history - start a new chat to use it' : 'disconnected'}`, 5000)
             }
             post({ type: 'mcp', data: mcp.status() })
+            // chats running here pick the change up with a fresh Claude
+            runner.restartAll()
             break
           }
           case 'board': {
@@ -2169,7 +2179,10 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), orphan: !!(await orphanPid(msg.id)) } })
             break
           case 'chatTakeover': {
-            const pid = await orphanPid(msg.id)
+            // an orphan of this window, or - asked for by name - a Claude sitting idle elsewhere.
+            // Checked again now: one that started working since is not stopped
+            const pid = await orphanPid(msg.id) ||
+              (msg.idle && /^[\w-]+$/.test(String(msg.id || '')) && !runner.has(msg.id) && live[msg.id] === 'idle' ? scan.livePid(msg.id) : 0)
             if (pid) {
               const tree = processTree(pid)
               for (const p of tree) { try { process.kill(p, 'SIGTERM') } catch {} }
@@ -2206,11 +2219,14 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             if (!s) break
             const term = await terminalForSession(s.id, false, true)
             const from = s.entrypoint || ''
-            const where = term ? 'terminal'
+            // where it runs now, not where it started: a terminal chat can be open in the app since
+            const host = term ? '' : await pidHost(scan.livePid(s.id))
+            const where = term ? 'terminal' : host === 'desktop' ? 'desktop'
               : from === 'claude-vscode' || from === 'vscode' ? 'claude'
                 : from === 'claude-desktop' ? 'desktop'
                   : from === 'cli' ? 'outside' : ''
-            post({ type: 'chatWhere', id: s.id, where })
+            // idle there: it can be stopped there and carried on here
+            post({ type: 'chatWhere', id: s.id, where, idle: live[s.id] === 'idle' && !!scan.livePid(s.id) })
             break
           }
           case 'chatShow': {
@@ -2931,6 +2947,24 @@ function activate (ctx) {
     },
   })
   runner.seedKnown(ctx.globalState.get('chatKnown'))
+  // MCP servers added or removed anywhere (here, or with claude mcp in a terminal) reach the
+  // chats running here: Claude only reads them when it starts. The file also holds counters
+  // Claude rewrites all the time, so only a change to the servers themselves counts
+  const claudeJson = path.join(require('node:os').homedir(), '.claude.json')
+  const mcpSig = () => {
+    try {
+      const j = JSON.parse(fs.readFileSync(claudeJson, 'utf8'))
+      return JSON.stringify([j.mcpServers || {}, Object.entries(j.projects || {}).map(([p, v]) => [p, v?.mcpServers || {}])])
+    } catch { return null }
+  }
+  let mcpWas = mcpSig()
+  fs.watchFile(claudeJson, { interval: 5000 }, () => {
+    const now = mcpSig()
+    if (now === null || now === mcpWas) return
+    mcpWas = now
+    if (!DEACTIVATED) runner.restartAll()
+  })
+  ctx.subscriptions.push({ dispose: () => fs.unwatchFile(claudeJson) })
   // what you have open, for the line above the box that says what goes with your message
   ctx.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(ed => { if (isFileEditor(ed)) LAST_EDITOR = ed; postEditor() }),

@@ -797,10 +797,11 @@ function paintComposer () {
     // where, as the host can tell: asked again now and then, as a chat can move
     const w = CHAT.where.get(id)
     if (!w || Date.now() - w.at > 15000) send({ type: 'chatWhere', id })
+    const idle = !!w?.idle
     const place = {
       terminal: 'Running in a terminal in this window.',
       claude: 'Running in the Claude Code panel.',
-      desktop: 'Running in Claude Desktop.',
+      desktop: 'Open in the Claude app.',
       outside: 'Running in a terminal outside this window.',
     }[w?.where]
     // with a place named, the buttons say the rest
@@ -810,6 +811,13 @@ function paintComposer () {
       show.title = 'Bring that terminal to the front'
       show.onclick = () => send({ type: 'chatShow', id })
       c.block.appendChild(show)
+    }
+    // idle there, waiting for a message: it can be let go there and carried on here
+    if (idle) {
+      const take = el('button', 'btn pri', 'Stop it there and continue here')
+      take.title = 'Claude is idle there. It is stopped there and this chat carries on here; nothing it wrote is lost'
+      take.onclick = () => { take.disabled = true; take.textContent = 'Stopping…'; send({ type: 'chatTakeover', id, idle: true }) }
+      c.block.appendChild(take)
     }
     const b = el('button', 'btn', 'New chat from this one')
     b.title = 'A new chat here with this one\'s full history. The original keeps running on its own'
@@ -1422,7 +1430,7 @@ if (!BOARD_MODE) {
       if (COMPOSER?.id === m.id) placeLive()
       return
     }
-    if (m.type === 'chatWhere') { CHAT.where.set(m.id, { where: m.where || '', at: Date.now() }); paintComposer(); return }
+    if (m.type === 'chatWhere') { CHAT.where.set(m.id, { where: m.where || '', idle: !!m.idle, at: Date.now() }); paintComposer(); return }
     // the full list of slash commands and models, learned from Claude or kept from before
     if (m.type === 'chatKnown') {
       if (m.commands?.length) CHAT.commands = m.commands

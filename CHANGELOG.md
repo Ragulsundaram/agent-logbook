@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- A chat open but idle in the Claude app or a terminal elsewhere can be carried on here: Stop it there and continue here ends it there, and nothing it wrote is lost. The chat also says where it is open, such as the Claude app, rather than only where it was started.
+- MCP servers you add or remove, here or with claude mcp in a terminal, reach the chats running in the logbook: an idle chat starts a fresh Claude for its next message, and a busy one does once its reply is done.
+
 ## 1.10.0
 
 - Background commands and agents each get a card while they run, working or not: Output shows what a command printed or the steps an agent has taken so far, and Stop ends just that one. An agent's card says what it is doing now. An agent's report shows as one line with the report folded under it.

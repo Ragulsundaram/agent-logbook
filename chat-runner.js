@@ -907,6 +907,18 @@ function stop (id, now) {
   setTimeout(() => { try { r.proc.kill() } catch {} }, 3000).unref?.()
 }
 
+/**
+ * Claude reads its MCP servers when it starts, so a change to them reaches a
+ * running chat only through a fresh Claude: an idle one is let go now (the next
+ * message starts it again, with the new servers), a busy one once it is done.
+ */
+function restartAll () {
+  for (const [id, r] of RUNS) {
+    if (r.busy || r.asks.size || r.bg.length) r.restart = true
+    else stop(id)
+  }
+}
+
 function stopAll (now) {
   DEFERRED.clear()
   for (const id of [...RUNS.keys()]) stop(id, now)
@@ -921,4 +933,4 @@ const askOf = (id, requestId) => RUNS.get(id)?.asks.get(requestId) || null
 /** The folder Claude runs in for this chat, when it runs here. */
 const cwdOf = id => RUNS.get(id)?.cwd || ''
 
-module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, mcpStatus, setModel, setMode, setEffort, stop, stopAll, markEnded }
+module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, mcpStatus, restartAll, setModel, setMode, setEffort, stop, stopAll, markEnded }
