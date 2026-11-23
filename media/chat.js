@@ -1498,7 +1498,15 @@ if (!BOARD_MODE) {
           const now = Date.now()
           if (m.partial.text.length > 20000 && now - (CHAT.drewAt || 0) < 500) {
             clearTimeout(CHAT.drawLater)
-            CHAT.drawLater = setTimeout(() => { CHAT.drawLater = null; CHAT.drewAt = Date.now(); if (COMPOSER?.id === id) placeLive() }, 500)
+            CHAT.drawLater = setTimeout(() => {
+              CHAT.drawLater = null
+              CHAT.drewAt = Date.now()
+              // only the reply's own text changes: the buttons and cards around it, and focus, stay put
+              const text = CHAT.partial.get(id)?.text
+              const b = COMPOSER?.id === id && COMPOSER.live.querySelector('.chatstream .bubble')
+              if (b && text) b.innerHTML = window.md(text)
+              else if (COMPOSER?.id === id) placeLive()
+            }, 500)
             return
           }
           // drawn now: a later draw still waiting is no longer needed

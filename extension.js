@@ -1782,11 +1782,17 @@ const FILE_SEARCH = new Map()        // view's post -> the @ search in progress
 // would load the folder's settings, hooks and MCP servers: only in a folder the editor trusts
 const UNTRUSTED = 'Chatting here needs a trusted folder: trust this window (it is in Restricted Mode), or, for a chat from another folder, open that folder or run Claude there once in a terminal. Claude would load the folder\'s settings, hooks and MCP servers.'
 
-/** Whether a path is a folder or inside it, compared as full, tidied-up paths. */
+/** A path as it really is on disk: a shortcut (symlink) followed to where it points. */
+const real = p => { try { return fs.realpathSync.native(p) } catch { return path.resolve(p) } }
+/**
+ * Whether a path is a folder or inside it, compared where both really are on disk, so a
+ * shortcut inside a folder that leads elsewhere does not count. Only a leading ".." step
+ * is outside; a name that merely starts with two dots (..scratch) is inside.
+ */
 function within (root, p) {
   if (!root || !p) return false
-  const rel = path.relative(path.resolve(root), path.resolve(p))
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+  const rel = path.relative(real(root), real(p))
+  return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel))
 }
 const windowRoots = () => (vscode.workspace.workspaceFolders || []).map(f => path.resolve(f.uri.fsPath))
 
