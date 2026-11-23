@@ -131,3 +131,19 @@ test('a chat file with tool ids named like object properties does not break its 
     assert.equal(s.edits, 1)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('a failed edit whose id is __proto__ still comes off the counts', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lb-sum-'))
+  const file = path.join(dir, 'chat.jsonl')
+  const L = o => JSON.stringify(o)
+  fs.writeFileSync(file, [
+    L({ type: 'user', timestamp: '2026-01-01T00:00:00Z', message: { role: 'user', content: 'go' } }),
+    L({ type: 'assistant', timestamp: '2026-01-01T00:00:01Z', message: { id: 'm1', role: 'assistant', model: 'claude-sonnet-5', content: [{ type: 'tool_use', id: '__proto__', name: 'Edit', input: { file_path: '/tmp/a.js', old_string: 'a', new_string: 'b' } }] } }),
+    L({ type: 'user', timestamp: '2026-01-01T00:00:02Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: '__proto__', is_error: true, content: 'refused' }] } }),
+  ].join('\n') + '\n')
+  try {
+    const s = summariseForTest(file)
+    assert.equal(s.edits, 0)
+    assert.deepEqual(Object.keys(s.files), [])
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})

@@ -1498,9 +1498,11 @@ if (!BOARD_MODE) {
           const now = Date.now()
           if (m.partial.text.length > 20000 && now - (CHAT.drewAt || 0) < 500) {
             clearTimeout(CHAT.drawLater)
-            CHAT.drawLater = setTimeout(() => { if (COMPOSER?.id === id) placeLive() }, 500)
+            CHAT.drawLater = setTimeout(() => { CHAT.drawLater = null; CHAT.drewAt = Date.now(); if (COMPOSER?.id === id) placeLive() }, 500)
             return
           }
+          // drawn now: a later draw still waiting is no longer needed
+          clearTimeout(CHAT.drawLater); CHAT.drawLater = null
           CHAT.drewAt = now
           bubble.innerHTML = window.md(m.partial.text)
           word.textContent = 'Writing…'

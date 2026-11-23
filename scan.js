@@ -20,7 +20,7 @@ function writePrivate (file, data) {
 const mkdirPrivate = dir => { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); try { fs.chmodSync(dir, 0o700) } catch {} }
 // Bump whenever a summary field changes shape. A cache written by an older build is
 // then ignored rather than quietly feeding the new code fields it never wrote.
-const CACHE_V = 17
+const CACHE_V = 18
 const VSDB = path.join(HOME, 'Library', 'Application Support', 'Cursor',
   'User', 'globalStorage', 'state.vscdb')
 
@@ -249,9 +249,10 @@ function summariseFile (file, prev, agent) {
       s.modelTurns[mk] = (s.modelTurns[mk] || 0) + 1
     }
     for (const b of blocksOf(e)) {
-      if (b?.type === 'tool_result' && s._pend && Object.hasOwn(s._pend, String(b.tool_use_id))) {
-        const [f, op, day] = s._pend[b.tool_use_id]
-        delete s._pend[b.tool_use_id]
+      // keys are prefixed: an id such as __proto__ or constructor is an ordinary key then
+      if (b?.type === 'tool_result' && s._pend && Object.hasOwn(s._pend, 't:' + b.tool_use_id)) {
+        const [f, op, day] = s._pend['t:' + b.tool_use_id]
+        delete s._pend['t:' + b.tool_use_id]
         if (b.is_error) {
           s.edits--; s.ops[op] = Math.max(0, (s.ops[op] || 0) - 1)
           if (day && s.days[day]) s.days[day].edits = Math.max(0, s.days[day].edits - 1)
@@ -269,7 +270,7 @@ function summariseFile (file, prev, agent) {
         // kept until its result comes back: an edit refused or failed is taken off again
         if (b.id) {
           const pend = (s._pend ||= {})
-          pend[b.id] = [f || '', op, bucket ? new Date(ts).toISOString().slice(0, 10) : '']
+          pend['t:' + b.id] = [f || '', op, bucket ? new Date(ts).toISOString().slice(0, 10) : '']
           const keys = Object.keys(pend)
           if (keys.length > 200) for (const k of keys.slice(0, 100)) delete pend[k]
         }

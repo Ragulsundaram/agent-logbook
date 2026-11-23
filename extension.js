@@ -1637,7 +1637,6 @@ function chatSend (msg, post) {
   const ctxNow = msg.noContext ? null : editorContext(id)
   if (ctxNow) opts.context = ctxNow.blocks
   if (!runner.has(id)) {
-    if (!vscode.workspace.isTrusted) return fail(UNTRUSTED)
     const fresh = NEW_CHATS.get(id)
     if (fresh) {
       opts.cwd = fresh.cwd
@@ -1652,6 +1651,7 @@ function chatSend (msg, post) {
     }
     opts.dirs = extraDirs(opts.cwd)
     if (!opts.cwd || !fs.existsSync(opts.cwd)) return fail(`This chat's folder no longer exists${opts.cwd ? `: ${opts.cwd}` : '.'}`)
+    if (!folderTrusted(opts.cwd)) return fail(UNTRUSTED)
   }
   try {
     // not taken (Claude had stopped): keep everything for the retry, editor context too
@@ -1712,8 +1712,12 @@ async function chatHook ({ id, callback, input }) {
   if (!file || !path.isAbsolute(file)) return {}
   if (callback === 'lb_save') {
     const doc = vscode.workspace.textDocuments.find(d => d.uri.scheme === 'file' && d.uri.fsPath === file)
-    // only files in the chat's own folders are saved for it; anything else is left as you have it
-    if (doc?.isDirty && inChatFolders(id, file)) {
+    // a file outside the chat's own folders is never saved for it: Claude is asked to wait for you instead
+    if (doc?.isDirty && !inChatFolders(id, file)) {
+      return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
+        permissionDecisionReason: `${path.basename(file)} has unsaved changes in the editor, outside this chat's folders. Ask the user to save it, then try again.` } }
+    }
+    if (doc?.isDirty) {
       // Claude must not read or edit an older copy than you see: if the save fails, it does not go ahead
       let saved = false
       try { saved = await doc.save() } catch {}
@@ -1776,20 +1780,40 @@ const FILE_SEARCH = new Map()        // view's post -> the @ search in progress
 
 // Claude in the logbook runs without its own "do you trust this folder?" prompt, and
 // would load the folder's settings, hooks and MCP servers: only in a folder the editor trusts
-const UNTRUSTED = 'Chatting here is off until you trust this folder (the editor\'s Restricted Mode). Claude would load this folder\'s settings, hooks and MCP servers.'
+const UNTRUSTED = 'Chatting here needs a trusted folder: trust this window (it is in Restricted Mode), or, for a chat from another folder, open that folder or run Claude there once in a terminal. Claude would load the folder\'s settings, hooks and MCP servers.'
+
+/** Whether a path is a folder or inside it, compared as full, tidied-up paths. */
+function within (root, p) {
+  if (!root || !p) return false
+  const rel = path.relative(path.resolve(root), path.resolve(p))
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+}
+const windowRoots = () => (vscode.workspace.workspaceFolders || []).map(f => path.resolve(f.uri.fsPath))
 
 /** The window's other folders, offered to Claude only when the chat itself belongs to one of them. */
 function extraDirs (cwd) {
-  const roots = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath)
-  const inside = d => cwd === d || String(cwd).startsWith(d + path.sep)
-  if (!cwd || !roots.some(inside)) return []
-  return roots.filter(d => d !== cwd && !inside(d)).slice(0, 10)
+  const roots = windowRoots()
+  if (!cwd || !roots.some(d => within(d, cwd))) return []
+  return roots.filter(d => !within(d, cwd)).slice(0, 10)
 }
 
 /** Files Claude may have saved for it: only inside the chat's own folder or the window's folders. */
 function inChatFolders (id, file) {
-  const roots = [runner.cwdOf(id), ...(vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath)].filter(Boolean)
-  return roots.some(d => file === d || file.startsWith(d + path.sep))
+  return [runner.cwdOf(id), ...windowRoots()].some(d => within(d, file))
+}
+
+/**
+ * Whether Claude may run in a chat's folder without asking: the editor trusts the window,
+ * and the folder is one of the window's - or Claude itself has been trusted there before
+ * (its own record of the "do you trust this folder?" answer, for the folder or one above it).
+ */
+function folderTrusted (cwd) {
+  if (!vscode.workspace.isTrusted || !cwd) return false
+  if (windowRoots().some(d => within(d, cwd))) return true
+  try {
+    const projects = JSON.parse(fs.readFileSync(path.join(require('node:os').homedir(), '.claude.json'), 'utf8')).projects || {}
+    return Object.entries(projects).some(([p, v]) => v?.hasTrustDialogAccepted === true && within(p, cwd))
+  } catch { return false }
 }
 
 /**
@@ -1802,7 +1826,6 @@ async function wakeChat (id, msg, post) {
   if (!/^[\w-]+$/.test(id) || !cfg('chatHere', true)) return false
   if (runner.has(id)) return true
   const fail = error => { post({ type: 'chatNotice', id, text: error }); return false }
-  if (!vscode.workspace.isTrusted) return fail(UNTRUSTED)
   // a new chat has nothing to resume yet: its first message starts it
   if (NEW_CHATS.has(id)) return fail('Send your first message to start this chat.')
   const s = scan.index().find(x => x.id === id)
@@ -1811,6 +1834,7 @@ async function wakeChat (id, msg, post) {
   if (live[id] && !runner.endedRecently(id)) return fail('This chat is running somewhere else, so it cannot be asked from here.')
   const cwd = s.cwd
   if (!cwd || !fs.existsSync(cwd)) return fail(`This chat's folder no longer exists${cwd ? `: ${cwd}` : '.'}`)
+  if (!folderTrusted(cwd)) return fail(UNTRUSTED)
   const pick = (v, ok) => ok(v) ? v : ''
   try {
     return await runner.wake(id, {
@@ -2261,6 +2285,14 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
                 `Claude there has ${n} command${n === 1 ? '' : 's'} running that it started (a server, a watcher). Stop ${n === 1 ? 'it' : 'them'} too and continue here?`,
                 { modal: true }, 'Stop and continue here')
               if (ok !== 'Stop and continue here') pid = 0
+              else {
+                // the dialog may have stayed open a while: still idle, and still Claude, before anything stops
+                const again = await scan.liveSessionsAsync()
+                if (again?.[msg.id] !== 'idle' || scan.livePid(msg.id) !== pid || !(await isClaudeProcess(pid))) {
+                  post({ type: 'chatNotice', id: msg.id, text: 'Claude started working there, so it was left running. Try again once it is done.' })
+                  pid = 0
+                }
+              }
             }
             if (pid) {
               for (const p of tree) { try { process.kill(p, 'SIGTERM') } catch {} }
