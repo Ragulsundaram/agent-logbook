@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.11.1
+
+- Copying from a chat works like a browser's copy: Slack, Notion, Docs and email keep the bold, italics, links and numbered lists, and a plain text box gets clean words without ** or other Markdown marks.
+
 ## 1.11.0
 
 - A chat that is idle in a terminal or another app can be continued here, not only as a copy. Its Claude is stopped first, and only once it is checked to be idle.
