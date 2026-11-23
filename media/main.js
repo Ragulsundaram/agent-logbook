@@ -251,7 +251,8 @@ document.addEventListener('contextmenu', e => {
   if (pre) item('Copy code', () => send({ type: 'copy', text: pre.textContent, label: 'Code copied' }))
   if (src) {
     item('Copy message', () => {
-      if (!copyMarkdown(src)) send({ type: 'copy', text: src, label: 'Message copied' })
+      // the browser could not copy: the editor's clipboard gets the same plain words instead
+      if (!copyMarkdown(src)) send({ type: 'copy', text: plainOfMarkdown(src), label: 'Message copied' })
     })
   }
   if (!menu.childElementCount) return
@@ -2157,7 +2158,7 @@ function msgCopyButton (textOrFn) {
     const text = typeof textOrFn === 'function' ? textOrFn() : textOrFn
     // both flavours, so Slack keeps the bold and the paragraph gaps
     if (!copyMarkdown(text)) {
-      send({ type: 'copy', text, label: 'Message copied' })
+      send({ type: 'copy', text: plainOfMarkdown(text), label: 'Message copied' })
     }
     cp.classList.add('done')
     setTimeout(() => cp.classList.remove('done'), 1200)
@@ -3510,11 +3511,14 @@ function plainText (host) {
 }
 
 /** The copy button's text, from the Markdown Claude wrote: the same two versions as a selection. */
+// parsed in a detached document: nothing runs, and nothing is put into the page
+const markdownBody = markdown => new DOMParser().parseFromString(window.md(markdown), 'text/html').body
 function copyMarkdown (markdown) {
-  // parsed in a detached document: nothing runs, and nothing is put into the page
-  const host = new DOMParser().parseFromString(window.md(markdown), 'text/html').body
+  const host = markdownBody(markdown)
   return copyRich(plainText(host), richHtml(host.innerHTML))
 }
+/** The plain words of some Markdown, for when only plain text can be copied. */
+const plainOfMarkdown = markdown => plainText(markdownBody(markdown))
 
 function copyRich (plain, html) {
   const onCopy = e => {
