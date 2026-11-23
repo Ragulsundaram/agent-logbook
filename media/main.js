@@ -1521,16 +1521,24 @@ let AUTO_UNTIL = 0
 // the end came faster than the 200ms they mute, so yours were never heard
 let HAND_AT = 0
 let DRAGGING = false                              // holding the scrollbar
-window.addEventListener('pointerup', () => { DRAGGING = false }, true)
+// letting go (or a gesture the system called off) ends the drag, and the chat catches up
+// with what Claude wrote meanwhile - if you let go at the end
+const dragEnd = () => {
+  if (!DRAGGING) return
+  DRAGGING = false
+  const body = document.querySelector('#detail .msgs')
+  if (body) requestAnimationFrame(() => stickToEnd(body))
+}
+for (const ev of ['pointerup', 'pointercancel', 'touchend', 'touchcancel']) window.addEventListener(ev, dragEnd, true)
 function stickToEnd (body) {
   if (!body || !FOLLOW) return
-  // you are scrolling right now (dragging the bar, or just moved it): Claude's text waits for you
-  if (DRAGGING || Date.now() - HAND_AT < 400) return
+  // you are holding the scrollbar (or a finger on the list): Claude's text waits until you let go
+  if (DRAGGING) return
   AUTO_UNTIL = Date.now() + 200
   body.scrollTop = body.scrollHeight
   // and again once the browser has laid out what was just added
   requestAnimationFrame(() => {
-    if (!FOLLOW || DRAGGING || Date.now() - HAND_AT < 400) return
+    if (!FOLLOW || DRAGGING) return
     AUTO_UNTIL = Date.now() + 200
     body.scrollTop = body.scrollHeight
   })
@@ -1939,6 +1947,7 @@ function showDetail (t, live) {
   const hand = up => { HAND_AT = Date.now(); if (up) FOLLOW = false }
   body.addEventListener('wheel', e => hand(e.deltaY < 0), { passive: true })
   body.addEventListener('touchmove', () => hand(false), { passive: true })
+  body.addEventListener('touchstart', () => { DRAGGING = true }, { passive: true })
   body.addEventListener('pointerdown', e => { if (e.target === body) { DRAGGING = true; hand(false) } })   // the scrollbar
   body.addEventListener('keydown', e => { if (/^(PageUp|ArrowUp|Home)$/.test(e.key)) hand(true); else if (/^(PageDown|ArrowDown|End|Space| )$/.test(e.key)) hand(false) })
   // reaching for the header brings it back and it stays - only scrolling
