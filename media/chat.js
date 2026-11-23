@@ -530,7 +530,7 @@ function buildComposer (id) {
 }
 
 // text files Claude can read as they are, by extension when the type is not given
-const TEXT_EXT = ['txt', 'md', 'csv', 'tsv', 'json', 'yaml', 'yml', 'xml', 'html', 'css', 'js', 'ts', 'jsx', 'tsx', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'cs', 'php', 'sh', 'sql', 'log', 'diff', 'patch', 'toml', 'ini', 'env', 'conf']
+const TEXT_EXT = 'txt md csv tsv json yaml yml xml html css js ts jsx tsx py rb go rs java kt swift c h cpp cs php sh sql log diff patch toml ini env conf'.split(' ')
 const MAX_PDF = 20 * 1024 * 1024
 const MAX_TEXT = 400 * 1024
 /** A picture goes as a picture; a PDF or a text file is attached by name. */
