@@ -12,14 +12,15 @@ scan.readOnlyCache()          // the extension keeps the chat-list cache; this t
 // read the chat list once at start, so the first chat opened does not wait for it
 try { scan.index() } catch {}
 
-const CALLS = new Set(['transcript', 'transcriptQuick', 'agentTranscript', 'imageAt', 'editAt'])
+const CALLS = new Set(['transcript', 'transcriptQuick', 'agentTranscript', 'agentActivity', 'imageAt', 'editAt'])
 
 parentPort.on('message', msg => {
   if (!msg || !CALLS.has(msg.fn)) return
   try {
     let data = scan[msg.fn](...msg.args)
     // a chat this thread has not seen yet: a new one started after its last look
-    if (data == null && msg.fn !== 'imageAt' && msg.fn !== 'editAt') {
+    // (an agent with nothing written yet is not one: that is a normal answer, asked every 2s)
+    if (data == null && !['imageAt', 'editAt', 'agentActivity'].includes(msg.fn)) {
       scan.index(true)
       data = scan[msg.fn](...msg.args)
     }

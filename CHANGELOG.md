@@ -8,7 +8,14 @@
 - New chats start on the mode and effort you picked last.
 - Open a chat in its own editor tab, from its menu, the list's right-click menu, or Alt-click for a split, and keep several side by side. Tabs show whether their chat is working or waiting on you, and come back after a restart.
 - A chat running in a terminal or another app says where, with Show it for a terminal in this window, or continues here as a new chat with its full history.
-- A chat waiting on background agents or commands stays marked as working until Claude has taken their results up, and an agent's report shows as one line with the report folded under it.
+- Background commands and agents each get a card while they run, working or not: Output shows what a command printed or the steps an agent has taken so far, and Stop ends just that one. An agent's card says what it is doing now. An agent's report shows as one line with the report folded under it.
+- Working and done come from Claude itself, so a chat no longer sticks on "working". One Esc stops the reply and the turns queued behind it, and a queued message can be taken back.
+- The status line says what is happening: the command or file a step is on, compacting, retrying after an error, hooks running, or thinking with a token count. A sub-agent's current step and Claude's thinking show under it.
+- Claude sees the file you have open and the lines you have selected, saved first if they had unsaved changes, and hears about new errors after its edits. Approvals can open the change in the editor's diff view, and Deny and stop ends the reply.
+- Attach PDFs and text files as well as pictures, and @ picks a file from the chat's folder.
+- Commands, searches and web fetches show what they printed, any step that fails shows its error, and a failed step says so on the folded line. Edits you deny, or that fail, no longer count as changes.
+- Claude's to-do list, /btw for a side question, /thinking, /mcp, and effort changes without a restart. Notices for usage limits, a model switch, an expired sign-in or new terms, and the auto mode "keep going?" question. A pop-up when Claude asks something while you are looking elsewhere.
+- /clear carries on in the fresh chat, and new skills appear in / without a reload. A message starting with ! turns the box into a shell command.
 - If a window reload or close cuts off a reply, the chat says so and offers Continue.
 - A tidier chat view: the chat's actions sit in one menu on the title row, cost shows once as an estimate at API prices, context shows as a percentage, and the laptop's memory and CPU appear only when a chat is using a lot.
 - Faster and steadier: live updates redraw only what changed, the running-chats check slows down while the panel is hidden, and the chat list refreshes in a fraction of the time.

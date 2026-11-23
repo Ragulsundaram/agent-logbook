@@ -20,7 +20,7 @@ function writePrivate (file, data) {
 const mkdirPrivate = dir => { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); try { fs.chmodSync(dir, 0o700) } catch {} }
 // Bump whenever a summary field changes shape. A cache written by an older build is
 // then ignored rather than quietly feeding the new code fields it never wrote.
-const CACHE_V = 16
+const CACHE_V = 17
 const VSDB = path.join(HOME, 'Library', 'Application Support', 'Cursor',
   'User', 'globalStorage', 'state.vscdb')
 
@@ -98,11 +98,31 @@ const clean = t => {
   return s.trim()
 }
 
+// blocks the logbook sends beside your words, each as a text block of its own: what the
+// editor had open, and an attached file. Recognised only as a whole block, by how it
+// opens, so the same words quoted in a message are left alone
+const SENT_IDE = /^<(ide_opened_file|ide_selection)>[\s\S]*This may or may not be related to the current task\.<\/\1>$/
+const SENT_FILE = /^<attached-file name="([^"\n]*)">\n[\s\S]*\n<\/attached-file>$/
+const sentBlock = (t, fromHere) => {
+  // the whole block, exactly as it is written: a message that merely starts the same way is kept.
+  // Editor context is the form Claude's own editor panel writes too, so it is hidden from any of them
+  if (SENT_IDE.test(t)) return ''
+  // an attached file is the logbook's own: only in a message the logbook sent
+  const f = fromHere && SENT_FILE.exec(t)
+  return f ? `📎 ${f[1]}` : null
+}
 const textOf = m => {
   const c = m?.message?.content ?? m?.content
   if (typeof c === 'string') return clean(c)
   if (!Array.isArray(c)) return ''
-  return clean(c.filter(b => b?.type === 'text').map(b => b.text).join('\n'))
+  const blocks = c.filter(b => b?.type === 'text').map(b => String(b.text || ''))
+  // only a message you sent carries the logbook's blocks, and before your words: the last
+  // block is always yours, whatever it looks like, and Claude's replies are left as written
+  const mine = (m?.type || m?.message?.role) === 'user'
+  // the logbook runs Claude through its SDK mode, which records itself as sdk-cli
+  const fromHere = m?.entrypoint === 'sdk-cli'
+  const texts = blocks.map((t, i) => { const k = mine && i < blocks.length - 1 ? sentBlock(t, fromHere) : null; return k === null ? t : k }).filter(Boolean)
+  return clean(texts.join('\n'))
 }
 const blocksOf = m => {
   const c = m?.message?.content ?? m?.content
@@ -220,6 +240,16 @@ function summarise (file, prev, agent) {
       s.modelTurns[mk] = (s.modelTurns[mk] || 0) + 1
     }
     for (const b of blocksOf(e)) {
+      if (b?.type === 'tool_result' && s._pend?.[b.tool_use_id]) {
+        const [f, op, day] = s._pend[b.tool_use_id]
+        delete s._pend[b.tool_use_id]
+        if (b.is_error) {
+          s.edits--; s.ops[op] = Math.max(0, (s.ops[op] || 0) - 1)
+          if (day && s.days[day]) s.days[day].edits = Math.max(0, s.days[day].edits - 1)
+          if (f && s.files[f]) { if (--s.files[f] <= 0) delete s.files[f] }
+        }
+        continue
+      }
       if (b?.type !== 'tool_use') continue
       if (EDITS.includes(b.name)) {
         s.edits++; if (bucket) bucket.edits++
@@ -227,6 +257,13 @@ function summarise (file, prev, agent) {
         if (f) s.files[f] = (s.files[f] || 0) + 1
         const op = b.name === 'Write' ? 'write' : b.name === 'NotebookEdit' ? 'notebook' : 'edit'
         s.ops[op] = (s.ops[op] || 0) + 1
+        // kept until its result comes back: an edit refused or failed is taken off again
+        if (b.id) {
+          const pend = (s._pend ||= {})
+          pend[b.id] = [f || '', op, bucket ? new Date(ts).toISOString().slice(0, 10) : '']
+          const keys = Object.keys(pend)
+          if (keys.length > 200) for (const k of keys.slice(0, 100)) delete pend[k]
+        }
       } else if (b.name === 'Bash' && /\brm\s/.test(String(b.input?.command || ''))) {
         s.ops.delete = (s.ops.delete || 0) + 1
       }
@@ -1152,7 +1189,7 @@ function snippet (text, at, needle) {
 // bytes added since, the same way the summaries are. A search then scans the
 // index rather than the disk.
 const SEARCH_FILE = path.join(HOME, '.claude', '.chistory-search.json')
-const SEARCH_V = 2
+const SEARCH_V = 3
 let SIDX = null
 let sidxSave = null
 
@@ -2033,6 +2070,78 @@ function agentTranscript (id, agentId) {
 }
 
 /**
+ * A background agent's work so far, as plain lines: each step it took, a few
+ * lines of what that step printed, and what it wrote. What the Output button
+ * on an agent's card shows while it runs; its own record is the only place
+ * this lives, as Claude has no output stream for an agent.
+ */
+function agentActivity (id, agentId) {
+  if (!/^[\w-]+$/.test(String(id)) || !/^[\w-]+$/.test(String(agentId))) return null
+  let file = null
+  const rec = index().find(s => s.id === id)
+  if (rec) file = path.join(agentDir(rec.file), `agent-${agentId}.jsonl`)
+  else {
+    // a chat started a moment ago may not be listed yet: its folder is named after it
+    const root = path.join(HOME, '.claude', 'projects')
+    try {
+      for (const d of fs.readdirSync(root)) {
+        const f = path.join(root, d, id, 'subagents', `agent-${agentId}.jsonl`)
+        if (fs.existsSync(f)) { file = f; break }
+      }
+    } catch {}
+  }
+  return file ? activityOf(file) : null
+}
+
+/** The activity lines for one agent file. */
+function activityOf (file) {
+  let st; try { st = fs.statSync(file) } catch { return null }
+  // asked every 2s while its Output is open: read again only once the agent has written more
+  const seen = ACTIVITY.get(file)
+  if (seen && seen.size === st.size && seen.mtime === st.mtimeMs) return seen.text
+  // only the end is shown, so only the end is read: a long-running agent's record can be
+  // large. The window grows until it holds a whole step - the call and what it returned -
+  // so one huge last result (a long failing command's output) is never all that is read
+  let raw = '', win = 512 * 1024, cut = false
+  try {
+    for (;;) {
+      if (win >= st.size) { raw = fs.readFileSync(file, 'utf8'); cut = false; break }
+      cut = true
+      const fd = fs.openSync(file, 'r')
+      const buf = Buffer.alloc(win)
+      fs.readSync(fd, buf, 0, win, st.size - win)
+      fs.closeSync(fd)
+      const s = buf.toString('utf8')
+      const i = s.indexOf('\n')
+      raw = i < 0 ? '' : s.slice(i + 1)              // from the first whole line
+      // every result read must have its call in the window too, or a failure near the end
+      // could not be shown as one: read further back until none is missing its call
+      const calls = new Set([...raw.matchAll(/"id":"([\w-]+)"/g)].map(x => x[1]))
+      const orphan = [...raw.matchAll(/"tool_use_id":"([\w-]+)"/g)].some(x => !calls.has(x[1]))
+      const a = raw.search(/^.*"type":"assistant"/m)
+      if (a >= 0 && !orphan) { raw = raw.slice(a); break }
+      win *= 4
+    }
+  } catch { return null }
+  const { turns } = parseTranscript(raw, true)
+  const out = cut ? ['… earlier steps left out', ''] : []
+  for (const t of turns) {
+    if (t.role === 'assistant') {
+      for (const x of t.tools) {
+        out.push(`› ${x.name}${x.detail ? ': ' + String(x.detail).split('\n')[0].slice(0, 160) : ''}${x.err ? '  (failed)' : ''}`)
+        if (x.out) out.push(...x.out.split('\n').slice(0, 6).map(l => '    ' + l.slice(0, 200)))
+      }
+      if (t.text) out.push(t.text.trim(), '')
+    } else if (t.role === 'user' && t.text && !out.length && !cut) out.push('Asked to: ' + t.text.replace(/\s+/g, ' ').slice(0, 200) + (t.text.length > 200 ? '…' : ''), '')
+  }
+  const text = out.join('\n').slice(-60000)
+  ACTIVITY.set(file, { size: st.size, mtime: st.mtimeMs, text })
+  if (ACTIVITY.size > 20) ACTIVITY.delete(ACTIVITY.keys().next().value)
+  return text
+}
+const ACTIVITY = new Map()
+
+/**
  * Messages Claude Code writes into the conversation itself, under the user's
  * name: a background agent reporting that it finished, or another Claude
  * session passing something on. They are recorded as user turns but were never
@@ -2102,6 +2211,13 @@ function commandOut (s) {
 const outputNote = (text, ts) => ({ role: 'note', kind: 'command', text,
   tools: [], images: [], edits: [], ts: ts || '' })
 
+const OUTPUT_TOOLS = /^(Bash|Grep|Glob|WebFetch|WebSearch|BashOutput|mcp__)/
+/** A tool result's text, whichever shape it came in, without terminal colours. */
+function toolOutput (c) {
+  const t = typeof c === 'string' ? c : Array.isArray(c) ? c.filter(x => x?.type === 'text').map(x => x.text).join('\n') : ''
+  return String(t).replace(ANSI_CODES, '').replace(/<\/?tool_use_error>/g, '').trim()
+}
+
 /** Drop the heavy bits: image bytes and edit bodies are fetched on demand. */
 const slim = turns => turns.map((t, ti) => ({
   ...t,
@@ -2129,6 +2245,8 @@ function parseTranscript (raw, keepSidechain) {
 function parseStart (keepSidechain) {
   return {
     keepSidechain, turns: [], byFile: new Map(), cacheRead: 0, readable: 0, model: '',
+    toolIdx: new Map(),        // tool_use id -> its tool, so the result that follows can be pinned on it
+    editIdx: new Map(),        // tool_use id -> the edit it made, taken back if the edit was refused or failed
     // the footer numbers: context used, cache efficiency, turns, and files touched
     info: { series: [], context: 0, window: 2e5, cachePct: 0, turns: 0, files: [] },
   }
@@ -2250,6 +2368,30 @@ function parseMore (st, raw) {
       byFile.set(file, f)
     }
 
+    // what a tool printed, or the error it hit, pinned on the call that ran it
+    for (const b of blocksOf(e)) {
+      if (b?.type !== 'tool_result') continue
+      const tool = st.toolIdx?.get(b.tool_use_id)
+      if (!tool) continue
+      st.toolIdx.delete(b.tool_use_id)
+      const out = toolOutput(b.content)
+      tool.err = !!b.is_error
+      // an edit that was refused or failed changed nothing: it leaves the changes lists
+      const ed = st.editIdx?.get(b.tool_use_id)
+      st.editIdx?.delete(b.tool_use_id)
+      if (ed && b.is_error) {
+        ed.turn.edits = ed.turn.edits.filter(x => x !== ed.edit)
+        const f = byFile.get(ed.file)
+        if (f) {
+          f.edits--; f.adds -= ed.d.adds; f.dels -= ed.d.dels
+          if (f.edits <= 0) byFile.delete(ed.file)
+        }
+      }
+      // file reads and listings are long and say little; commands, searches and errors are kept
+      const keep = tool.err ? 800 : OUTPUT_TOOLS.test(tool.name) ? 1200 : 0
+      if (keep && out) tool.out = out.length > keep ? out.slice(0, keep) + '\n…' : out
+    }
+
     const text = textOf(e)
     const edits = blocksOf(e)
       .filter(b => b?.type === 'tool_use' && EDITS.includes(b.name) &&
@@ -2269,12 +2411,20 @@ function parseMore (st, raw) {
       .map(b => b.name === 'Agent'
         ? { name: b.name, detail: toolDetail(b.name, b.input), useId: b.id }
         : { name: b.name, detail: toolDetail(b.name, b.input) })
+    blocksOf(e).filter(b => b?.type === 'tool_use' && b.id).forEach((b, i) => st.toolIdx?.set(b.id, tools[i]))
+    // results arrive within a few records: a call that never got one is not waited on for ever
+    if (st.toolIdx?.size > 400) for (const k of [...st.toolIdx.keys()].slice(0, 200)) st.toolIdx.delete(k)
     const images = blocksOf(e)
       .filter(b => b?.type === 'image' && b.source?.type === 'base64' && b.source.data)
       .map(b => ({ src: `data:${b.source.media_type || 'image/png'};base64,${b.source.data}` }))
       .concat(shots)
     if ((!text || JUNK.test(text)) && !tools.length && !images.length) continue
-    turns.push({ role: e.type, text: JUNK.test(text) ? '' : text, tools, images, edits, ts: e.timestamp || '' })
+    const turn = { role: e.type, text: JUNK.test(text) ? '' : text, tools, images, edits, ts: e.timestamp || '' }
+    turns.push(turn)
+    // each edit remembers its call, so a refusal that comes back later can take it off again
+    blocksOf(e).filter(b => b?.type === 'tool_use' && EDITS.includes(b.name) && (b.input?.file_path || b.input?.notebook_path))
+      .forEach((b, k) => { if (b.id && edits[k]) st.editIdx?.set(b.id, { turn, edit: edits[k], file: edits[k].path, d: { adds: edits[k].adds, dels: edits[k].dels } }) })
+    if (st.editIdx?.size > 400) for (const k of [...st.editIdx.keys()].slice(0, 200)) st.editIdx.delete(k)
   }
   st.cacheRead = cacheRead; st.readable = readable
 }
@@ -2967,5 +3117,5 @@ try {
 } catch {}
 
 module.exports = {
-  writePrivate, mkdirPrivate, board, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
+  writePrivate, mkdirPrivate, board, agentActivity, activityOf, textOf, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
   readOnlyCache, saveCacheNow, groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME }

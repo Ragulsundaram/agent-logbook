@@ -1488,6 +1488,8 @@ let LAST_SIGS = []
 // what a block looks like on screen: its size, and the state of any agent it
 // launched - a card turning from running to done has to be redrawn too
 const blockSig = (b, t) => [b.role, (b.text || '').length, (b.detail || '').length, b.tools.length,
+  // a tool's output lands after the call: the block is redrawn when it does
+  b.tools.filter(x => x.out || x.err).length,
   (b.images || []).length, (b.edits || []).length, b.ts || '',
   b.tools.filter(x => x.useId).map(x => {
     const a = (t.agents || []).find(g => g.toolUseId === x.useId)
@@ -2020,9 +2022,12 @@ function toolSummary (tools) {
   }
   const wrap = el('div', 'twork')
   const head = el('div', 'thead2')
+  const failed = tools.filter(t => t.err).length
   head.append(el('span', 'tsum',
-    order.map(k => phraseFor(k, FILE_TOOLS.has(k) ? new Set(counts.get(k).map(t => t.detail || t)).size : counts.get(k).length)).join(' · ')),
-    el('span', 'chev2', ALLTOOLS ? '⌄' : '›'))
+    order.map(k => phraseFor(k, FILE_TOOLS.has(k) ? new Set(counts.get(k).map(t => t.detail || t)).size : counts.get(k).length)).join(' · ')))
+  // a step that failed says so on the folded line, not only inside it
+  if (failed) head.appendChild(el('span', 'tfail', `${failed} failed`))
+  head.appendChild(el('span', 'chev2', ALLTOOLS ? '⌄' : '›'))
 
   const body = el('div', 'tdetail')
   body.hidden = !ALLTOOLS
@@ -2046,6 +2051,13 @@ function toolSummary (tools) {
       }
       card.appendChild(cp)
     }
+    // what it printed, or the error it hit
+    if (t.out) {
+      const out = el('pre', 'tout' + (t.err ? ' err' : ''))
+      out.textContent = t.out
+      card.appendChild(out)
+    } else if (t.err) card.appendChild(el('div', 'tout err', 'Failed'))
+    if (t.err) card.classList.add('failed')
     body.appendChild(card)
   }
   head.onclick = () => {
@@ -2506,7 +2518,10 @@ function runnerStrip () {
   return strip
 }
 
-const isBusy = id => SESSIONS.find(x => x.id === id)?.live === 'busy'
+// a chat running in the logbook has its own status line under the reply: the
+// walking figure is for chats running somewhere else
+const isBusy = id => SESSIONS.find(x => x.id === id)?.live === 'busy' &&
+  !(typeof whereRunning === 'function' && whereRunning(id) === 'here')
 
 /** Show or hide the runner on the chat that is open, as its state changes. */
 function paintRunner () {
@@ -2550,7 +2565,10 @@ function footer (t) {
   spark.title = 'Open the analytics for this chat'
   spark.onclick = () => send({ type: 'analytics', id: t.id })
   top.appendChild(spark)
-  const pct = i.window ? Math.round(i.context / i.window * 100) : 0
+  // a chat running here has Claude's own count; otherwise it is worked out from the transcript
+  const live = typeof CHAT !== 'undefined' ? CHAT.state.get(t.id) : null
+  const counted = live?.running ? live.context : null
+  const pct = Number.isFinite(counted) ? counted : i.window ? Math.round(i.context / i.window * 100) : 0
   const facts = el('div', 'fnums')
   const row2 = SESSIONS.find(x => x.id === t.id)
   // two labelled groups rather than one long run: what the conversation uses
@@ -4757,6 +4775,8 @@ function renderSettings () {
     pick(here, 'chatPermissionMode', 'Claude may', 'each chat can change this from its box', [
       ['default', 'Ask before edits and commands'], ['acceptEdits', 'Edit files without asking'],
       ['plan', 'Plan first, then ask'], ['auto', 'Decide what is safe']])
+    toggle(here, 'chatEditorContext', 'Send what you have open',
+      'Claude sees the file open in the editor and the lines you selected, as in its own panel', true)
     pick(here, 'chatEffort', 'Effort', 'how hard Claude thinks; /effort in a chat changes it', [
       ['', "Claude's own setting"], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']])
   }
