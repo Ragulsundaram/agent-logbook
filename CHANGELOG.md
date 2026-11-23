@@ -13,7 +13,7 @@
 - The status line says what is happening: the command or file a step is on, compacting, retrying after an error, hooks running, or thinking with a token count. A sub-agent's current step and Claude's thinking show under it.
 - Claude sees the file you have open and the lines you have selected, saved first if they had unsaved changes, and hears about new errors after its edits. Approvals can open the change in the editor's diff view, and Deny and stop ends the reply.
 - Attach PDFs and text files as well as pictures, and @ picks a file from the chat's folder.
-- Each step shows what it printed, and a failed step says so. Edits you deny, or that fail, no longer count as changes.
+- Commands, searches and web fetches show what they printed, any step that fails shows its error, and a failed step says so on the folded line. Edits you deny, or that fail, no longer count as changes.
 - Claude's to-do list, /btw for a side question, /thinking, /mcp, and effort changes without a restart. Notices for usage limits, a model switch, an expired sign-in or new terms, and the auto mode "keep going?" question. A pop-up when Claude asks something while you are looking elsewhere.
 - /clear carries on in the fresh chat, and new skills appear in / without a reload. A message starting with ! turns the box into a shell command.
 - If a window reload or close cuts off a reply, the chat says so and offers Continue.

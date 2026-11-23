@@ -1699,11 +1699,11 @@ body[data-chat] .dback, body[data-chat] .newinchat { display: none !important }
 .chatside .shhead { display: flex; align-items: center; gap: 8px }
 .chatside .shcmd { flex: 1 1 auto; min-width: 0 }
 .chatside .bgkind { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; opacity: .7 }
-.chatside .bubble { margin-top: 4px }
+.chatside .bubble { margin-top: 4px; white-space: pre-wrap }
 .mcprow { display: flex; align-items: center; gap: 8px; padding: 2px 0 }
 .mcpdot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-descriptionForeground) }
 .mcprow.ok .mcpdot { background: #4caf50 }
 .mcprow.bad .mcpdot { background: var(--vscode-errorForeground) }
 /* a question's choice with a preview */
-.caskpreview { margin-top: 6px; font-size: 12px; text-align: left }
+.caskpreview { margin: 6px 0 0; font-size: 11px; text-align: left; white-space: pre-wrap; font-family: var(--vscode-editor-font-family) }
 .bgtask .bgnow { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }

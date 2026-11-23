@@ -314,7 +314,7 @@ function paintLive () {
     const a = el('div', 'bubble')
     if (q.a === null) a.textContent = 'Thinking…'
     else if (q.a === false) a.textContent = 'No answer came back.'
-    else a.innerHTML = window.md(q.a)
+    else a.textContent = q.a
     w.appendChild(a)
     live.appendChild(w)
   }
@@ -328,6 +328,7 @@ function paintLive () {
     head.appendChild(x)
     w.appendChild(head)
     if (servers === 'loading') w.appendChild(el('div', 'chatmeta', 'Asking Claude…'))
+    else if (servers === 'unavailable') w.appendChild(el('div', 'chatmeta', 'Claude did not answer. Try /mcp again.'))
     else if (!servers.length) w.appendChild(el('div', 'chatmeta', 'This chat has no MCP servers.'))
     else for (const v of servers) {
       const row = el('div', 'mcprow ' + (v.status === 'connected' ? 'ok' : v.status === 'failed' ? 'bad' : ''))
@@ -426,8 +427,10 @@ function giveBack (id, e) {
     const now = CHAT.drafts.get(id) || ''
     CHAT.drafts.set(id, now.trim() ? `${e.text}\n${now}` : e.text)
   }
-  if (e.pics?.length) CHAT.images.set(id, [...e.pics, ...(CHAT.images.get(id) || [])].slice(0, 8))
-  if (e.docs?.length) CHAT.files.set(id, [...e.docs, ...(CHAT.files.get(id) || [])].slice(0, 8))
+  if (e.pics?.length) CHAT.images.set(id, [...e.pics, ...(CHAT.images.get(id) || [])])
+  if (e.docs?.length) CHAT.files.set(id, [...e.docs, ...(CHAT.files.get(id) || [])])
+  // left out of the editor's file before: still left out when it is sent again
+  if (e.noContext) CHAT.skipCtx.add(id)
   if (COMPOSER?.id === id) { COMPOSER.ta.value = CHAT.drafts.get(id) || ''; COMPOSER.fit(); paintImages(COMPOSER); paintGo(COMPOSER) }
 }
 
@@ -642,8 +645,10 @@ function askMention (c) {
   const m = /(?:^|\s)@([\w./-]*)$/.exec(before)
   if (!m) { c.mention = null; return }
   const q = m[1]
-  if (c.mention?.q === q) return
-  c.mention = { q, list: c.mention?.list || [], at: before.length - q.length - 1 }
+  const at = before.length - q.length - 1
+  // the same letters typed somewhere else in the box: the list stays, the place moves
+  if (c.mention?.q === q) { c.mention.at = at; return }
+  c.mention = { q, list: c.mention?.list || [], at }
   clearTimeout(MENTION_SOON)
   MENTION_SOON = setTimeout(() => send({ type: 'chatFiles', id: c.id, q }), 120)
 }
@@ -669,6 +674,7 @@ function submit (c, only) {
   const images = only ? [] : CHAT.images.get(id) || []
   const files = only ? [] : CHAT.files.get(id) || []
   if (!text.trim() && !images.length && !files.length) return
+  if (images.length > 8 || files.length > 8) { note(id, 'A message can carry at most 8 pictures and 8 files. Remove some, then send.', true); return }
   if (!images.length && !files.length && localCommand(c, text)) return
   if (whereRunning(id) === 'elsewhere') return
   // "!" runs a command in the chat's folder, as in Claude Code's terminal: Claude
@@ -706,7 +712,7 @@ function submit (c, only) {
   const noContext = CHAT.skipCtx.delete(id)
   send({ type: 'chatSend', id, uuid, text, images: images.map(im => ({ mediaType: im.mediaType, data: im.data })), files, noContext, model: p.model, mode: p.mode, effort: p.effort })
   const queued = !!CHAT.state.get(id)?.busy
-  CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, uuid, images: images.length, files: files.length, pics: images, docs: files, at: Date.now(), queued }])
+  CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, uuid, images: images.length, files: files.length, pics: images, docs: files, noContext, at: Date.now(), queued }])
   CHAT.notes.delete(id)
   CHAT.done.delete(id)
   const st = CHAT.state.get(id) || { id, asks: [] }
@@ -891,7 +897,7 @@ function paintPickers (c) {
   const p = picksFor(c.id)
   const st = CHAT.state.get(c.id)
   // once Claude is running, what it reports wins: plan approval switches the mode
-  if (st?.running && st.mode && modes().some(m => m[0] === st.mode)) p.mode = st.mode
+  if (st?.running && st.mode) p.mode = st.mode
   const opts = (sel, list, value) => {
     // rebuilt only when the choices change: rebuilding shut a list you had open
     const sig = JSON.stringify(list) + '|' + value
@@ -906,7 +912,9 @@ function paintPickers (c) {
     }
     sel.value = list.some(x => x[0] === value) ? value : list[0][0]
   }
-  opts(c.mode, modes(), p.mode)
+  // the mode Claude is in shows even when it is no longer offered (bypass, after the setting went off)
+  const list = modes()
+  opts(c.mode, list.some(m => m[0] === p.mode) || p.mode !== BYPASS[0] ? list : [...list, BYPASS], p.mode)
 }
 
 // ------------------------------------------------------------ /model and /effort
@@ -926,7 +934,7 @@ const LOCAL = [
   { name: 'mcp', hint: '', description: 'The MCP servers this chat has, and whether each is connected' },
 ]
 /** Commands the box handles itself, with whatever follows them. */
-const OWN = /^\/(btw|thinking|mcp)\b\s*([\s\S]*)$/
+const OWN = /^\/(btw|thinking|mcp)(?:\s+([\s\S]*))?$/
 
 /** The choices after "/model " or "/effort ", as slash rows. */
 function localChoices (c) {
@@ -943,7 +951,7 @@ function localChoices (c) {
 /** "/model opus" or "/effort high": handled here, never sent to Claude. */
 function localCommand (c, text) {
   const own = OWN.exec(text.trim())
-  if (own) return ownCommand(c, own[1], own[2].trim())
+  if (own) return ownCommand(c, own[1], (own[2] || '').trim())
   const m = /^\/(model|effort)(?:\s+(\S+))?\s*$/.exec(text.trim())
   if (!m) return false
   if (!m[2]) { c.ta.value = '/' + m[1] + ' '; paintSlash(c); return true }
@@ -1239,7 +1247,7 @@ function questionCard (c, a) {
       b.appendChild(el('b', '', o.label || ''))
       if (o.description) b.appendChild(el('span', '', o.description))
       // a choice can come with a preview of what it would look like
-      if (o.preview) { const pv = el('div', 'caskpreview bubble'); pv.innerHTML = window.md(String(o.preview)); b.appendChild(pv) }
+      if (o.preview) b.appendChild(el('pre', 'caskpreview', String(o.preview)))
       b.onclick = () => {
         if (!q.multiSelect) { chosen[i].clear(); for (const x of opts.children) x.classList.remove('on') }
         if (chosen[i].has(o.label)) { chosen[i].delete(o.label); b.classList.remove('on') } else { chosen[i].add(o.label); b.classList.add('on') }
@@ -1367,6 +1375,8 @@ function caughtUp (t) {
     const users = (t.turns || []).filter(x => x.role === 'user' && x.text).slice(-(echoes.length + 2))
     const busy = !!CHAT.state.get(id)?.busy
     const left = echoes.filter(echo => {
+      // a queued message leaves when its own turn starts or it is taken back, not on matching words
+      if (echo.queued && echo.uuid && busy) return true
       const want = echo.text.trim().slice(0, 120)
       if (want && users.some(u => String(u.text).includes(want))) return false
       // a queued one waits as long as Claude is busy; an unqueued one shows for 15s at most
@@ -1513,6 +1523,7 @@ if (!BOARD_MODE) {
         const e = echoes.find(x => x.uuid === m.uuid)
         if (!e) return
         if (m.state === 'started') { e.queued = false; break }
+        if (m.state === 'notcancelled') { note(id, 'Too late to take that back: Claude has already started on it.', false); break }
         if (!['cancelled', 'discarded', 'refused'].includes(m.state)) return
         // taken back: it leaves the chat, and its words and attachments come back to the box
         CHAT.echo.set(id, echoes.filter(x => x !== e))
@@ -1558,7 +1569,11 @@ if (!BOARD_MODE) {
         break
       }
       case 'chatMcpList':
-        CHAT.mcp.set(id, m.list || [])
+        CHAT.mcp.set(id, Array.isArray(m.list) ? m.list : 'unavailable')
+        break
+      case 'chatTaskStopFailed':
+        CHAT.stopping.delete(id + '|' + m.taskId)
+        note(id, 'That task did not stop. Try Stop again.', true)
         break
       case 'chatAuth':
         note(id, 'Claude is signed out, or its sign-in has expired. Sign in again, then send your message again.', true,

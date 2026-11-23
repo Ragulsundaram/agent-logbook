@@ -20,7 +20,7 @@ function writePrivate (file, data) {
 const mkdirPrivate = dir => { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); try { fs.chmodSync(dir, 0o700) } catch {} }
 // Bump whenever a summary field changes shape. A cache written by an older build is
 // then ignored rather than quietly feeding the new code fields it never wrote.
-const CACHE_V = 16
+const CACHE_V = 17
 const VSDB = path.join(HOME, 'Library', 'Application Support', 'Cursor',
   'User', 'globalStorage', 'state.vscdb')
 
@@ -95,18 +95,23 @@ const clean = t => {
   if (s.includes('<command-')) {
     for (const k of ['name', 'message', 'args']) s = cutBlocks(s, `<command-${k}>`, `</command-${k}>`)
   }
-  // what the editor had open, sent along with a message: not something you typed
-  if (s.includes('<ide_')) for (const k of ['ide_opened_file', 'ide_selection']) s = cutBlocks(s, `<${k}>`, `</${k}>`)
-  // a file attached to a message: its name stands in for its text
-  if (s.includes('<attached-file')) s = s.replace(/<attached-file name="([^"]*)">[\s\S]*?<\/attached-file>/g, (_, n) => `📎 ${n}`)
   return s.trim()
 }
 
+// blocks the logbook sends beside your words, each as a text block of its own: what the
+// editor had open, and an attached file. Recognised only as a whole block, by how it
+// opens, so the same words quoted in a message are left alone
+const sentBlock = t => {
+  if (/^<ide_(opened_file|selection)>/.test(t)) return ''
+  const f = /^<attached-file name="([^"\n]*)">\n/.exec(t)
+  return f ? `📎 ${f[1]}` : null
+}
 const textOf = m => {
   const c = m?.message?.content ?? m?.content
   if (typeof c === 'string') return clean(c)
   if (!Array.isArray(c)) return ''
-  return clean(c.filter(b => b?.type === 'text').map(b => b.text).join('\n'))
+  const texts = c.filter(b => b?.type === 'text').map(b => { const k = sentBlock(String(b.text || '')); return k === null ? b.text : k }).filter(Boolean)
+  return clean(texts.join('\n'))
 }
 const blocksOf = m => {
   const c = m?.message?.content ?? m?.content
@@ -224,6 +229,16 @@ function summarise (file, prev, agent) {
       s.modelTurns[mk] = (s.modelTurns[mk] || 0) + 1
     }
     for (const b of blocksOf(e)) {
+      if (b?.type === 'tool_result' && s._pend?.[b.tool_use_id]) {
+        const [f, op, day] = s._pend[b.tool_use_id]
+        delete s._pend[b.tool_use_id]
+        if (b.is_error) {
+          s.edits--; s.ops[op] = Math.max(0, (s.ops[op] || 0) - 1)
+          if (day && s.days[day]) s.days[day].edits = Math.max(0, s.days[day].edits - 1)
+          if (f && s.files[f]) { if (--s.files[f] <= 0) delete s.files[f] }
+        }
+        continue
+      }
       if (b?.type !== 'tool_use') continue
       if (EDITS.includes(b.name)) {
         s.edits++; if (bucket) bucket.edits++
@@ -231,6 +246,13 @@ function summarise (file, prev, agent) {
         if (f) s.files[f] = (s.files[f] || 0) + 1
         const op = b.name === 'Write' ? 'write' : b.name === 'NotebookEdit' ? 'notebook' : 'edit'
         s.ops[op] = (s.ops[op] || 0) + 1
+        // kept until its result comes back: an edit refused or failed is taken off again
+        if (b.id) {
+          const pend = (s._pend ||= {})
+          pend[b.id] = [f || '', op, bucket ? new Date(ts).toISOString().slice(0, 10) : '']
+          const keys = Object.keys(pend)
+          if (keys.length > 200) for (const k of keys.slice(0, 100)) delete pend[k]
+        }
       } else if (b.name === 'Bash' && /\brm\s/.test(String(b.input?.command || ''))) {
         s.ops.delete = (s.ops.delete || 0) + 1
       }

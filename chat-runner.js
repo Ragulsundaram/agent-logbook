@@ -556,6 +556,8 @@ function onLine (r, m) {
       const asked = Date.now() - (r.interruptedAt || 0) < 15000
       const stopped = ['aborted_streaming', 'aborted_tools', 'interrupted'].includes(m.terminal_reason) ||
         (m.subtype === 'error_during_execution' && asked)
+      // an Esc counts for the turn it stopped, not for a later one that fails on its own
+      r.interruptedAt = 0
       const done = { ms: m.duration_ms || 0, error: m.is_error ? errorText(m).slice(0, 2000) : '', stopped, denied: deniedOf(m) }
       // how full the context is now, as Claude counts it
       contextUsage(r)
@@ -578,7 +580,7 @@ function onLine (r, m) {
       // turn starts within a second or two; if none does, there is nothing left
       clearTimeout(r.nextTurn); r.nextTurn = null
       if (r.busy) r.nextTurn = setTimeout(() => settle(r, false), 5000)
-      r.partial = freshPartial()
+      r.partial = freshPartial(); r.agentAct = ''
       r.status = ''
       clearTimeout(r.partialTimer); r.partialTimer = null
       // an answer that was never given is moot once the turn has ended
@@ -628,6 +630,7 @@ function turnOver (r) {
   r.partial = freshPartial(); r.status = ''; r.retry = null; r.agentAct = ''
   const done = r.lastResult || { ms: 0, error: '', stopped: Date.now() - (r.interruptedAt || 0) < 15000 }
   r.lastResult = null
+  r.interruptedAt = 0
   if (was) emit(r.id, { type: 'chatDone', ...done })
   else emit(r.id, { type: 'chatState', state: state(r.id) })
   OPTS.onChange(r.id)
@@ -788,7 +791,10 @@ function interrupt (id) {
 function stopTask (id, taskId) {
   const r = RUNS.get(id)
   if (!r || !r.bg.some(t => t.id === taskId)) return false
-  control(r, { subtype: 'stop_task', task_id: taskId })
+  // a stop that Claude refuses, or never answers, says so, so Stop can be pressed again
+  control(r, { subtype: 'stop_task', task_id: taskId }, res => {
+    if (!res && RUNS.get(r.id) === r && r.bg.some(t => t.id === taskId)) emit(r.id, { type: 'chatTaskStopFailed', taskId })
+  })
   return true
 }
 

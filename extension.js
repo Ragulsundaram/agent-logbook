@@ -1599,8 +1599,8 @@ function chatSend (msg, post) {
     name: String(f?.name || 'file').replace(/[\r\n<>"]/g, '').slice(0, 120),
     mediaType: f?.mediaType === 'application/pdf' ? 'application/pdf' : 'text/plain',
     data: typeof f?.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(f.data) && f.data.length < 2.5e7 ? f.data : '',
-    text: typeof f?.text === 'string' ? f.text.slice(0, 400000) : '',
-  })).filter(f => f.mediaType === 'application/pdf' ? f.data : f.text)
+    text: typeof f?.text === 'string' ? f.text.slice(0, 400000) : null,
+  })).filter(f => f.mediaType === 'application/pdf' ? f.data : typeof f.text === 'string')
   // a file that could not go is said, not dropped quietly
   if (Array.isArray(msg.files) && files.length < Math.min(8, msg.files.length)) return fail('A file was too big or could not be read, so nothing was sent. Remove it and send again.')
   if (!text.trim() && !images.length && !files.length) return fail('There was nothing to send.')
@@ -1614,8 +1614,11 @@ function chatSend (msg, post) {
     effort: pick(msg.effort, v => CHAT_EFFORTS.includes(v)),
     allowBypass: cfg('skipPermissions', false),
     // what you have open in the editor goes with the message, unless you turned it off for this one
-    context: msg.noContext ? [] : editorContext(id),
+    context: [],
   }
+  // what you have open goes with the message, unless you left it out of this one
+  const ctxNow = msg.noContext ? null : editorContext(id)
+  if (ctxNow) opts.context = ctxNow.blocks
   if (!runner.has(id)) {
     const fresh = NEW_CHATS.get(id)
     if (fresh) {
@@ -1635,7 +1638,9 @@ function chatSend (msg, post) {
   }
   try {
     // not taken (Claude had stopped): keep everything for the retry, editor context too
-    if (!runner.send(id, opts)) { SENT_CTX.delete(id); return }
+    if (!runner.send(id, opts)) return
+    // sent: the same file and selection are not sent again until they change
+    if (ctxNow) SENT_CTX.set(id, ctxNow.key)
     dropShell(id, shell.n)
     NEW_CHATS.delete(id)
     clearCutoff(id)
@@ -1663,15 +1668,14 @@ function editorNow (withText) {
 }
 /** What you have open and selected, in the words Claude's own panel uses; only when it changed. */
 function editorContext (id) {
-  if (!cfg('chatEditorContext', true)) return []
+  if (!cfg('chatEditorContext', true)) return null
   const e = editorNow(true)
-  if (!e) return []
-  const key = `${e.file}|${e.a || ''}|${e.b || ''}|${(e.text || '').length}`
-  if (SENT_CTX.get(id) === key) return []
-  SENT_CTX.set(id, key)
-  return [e.sel && e.text
+  if (!e) return null
+  const key = `${e.file}|${e.a || ''}|${e.b || ''}|${require('node:crypto').createHash('sha1').update(e.text || '').digest('hex')}`
+  if (SENT_CTX.get(id) === key) return null
+  return { key, blocks: [e.sel && e.text
     ? `<ide_selection>The user selected the lines ${e.a} to ${e.b} from ${e.file}:\n${e.text}\n\nThis may or may not be related to the current task.</ide_selection>`
-    : `<ide_opened_file>The user opened the file ${e.file} in the IDE. This may or may not be related to the current task.</ide_opened_file>`]
+    : `<ide_opened_file>The user opened the file ${e.file} in the IDE. This may or may not be related to the current task.</ide_opened_file>`] }
 }
 function postEditor () {
   const e = cfg('chatEditorContext', true) ? editorNow() : null
@@ -1689,7 +1693,15 @@ async function chatHook ({ id, callback, input }) {
   if (!file || !path.isAbsolute(file)) return {}
   if (callback === 'lb_save') {
     const doc = vscode.workspace.textDocuments.find(d => d.uri.scheme === 'file' && d.uri.fsPath === file)
-    if (doc?.isDirty) { try { await doc.save() } catch {} }
+    if (doc?.isDirty) {
+      // Claude must not read or edit an older copy than you see: if the save fails, it does not go ahead
+      let saved = false
+      try { saved = await doc.save() } catch {}
+      if (!saved) {
+        return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
+          permissionDecisionReason: `${path.basename(file)} has unsaved changes in the editor that could not be saved. Ask the user to save it, then try again.` } }
+      }
+    }
     // only a file the editor has open has a language server looking at it
     if (input.tool_name !== 'Read' && doc) {
       PROBLEMS_BEFORE.set(`${id}|${file}`, new Set(problemsOf(file)))
@@ -1738,10 +1750,14 @@ async function showProposed (ask) {
   await vscode.commands.executeCommand('vscode.diff', left, right, `${name} · proposed by Claude`, { preview: true })
 }
 
+/** Which chat each open view is showing, so a question is only announced when nobody can see it. */
+const SHOWING = new Map()            // view's post -> { id, visible }
+
 /** Claude stopped to ask you something and you are not looking: say so, once per question. */
 function askAlert (m) {
   const tab = CHAT_TABS.get(m.id)
-  if (vscode.window.state.focused && (tab ? tab.visible : true)) return
+  const shown = tab?.visible || [...SHOWING.values()].some(v => v.id === m.id && v.visible())
+  if (vscode.window.state.focused && shown) return
   const title = scan.index().find(x => x.id === m.id)?.title || 'a chat'
   const what = m.ask?.kind === 'question' ? 'has a question' : m.ask?.kind === 'plan' ? 'has a plan for you to approve' : 'needs your OK'
   vscode.window.showInformationMessage(`Claude ${what}: ${title}`, 'Open').then(pick => {
@@ -2146,6 +2162,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             break
           }
           case 'chatState':
+            SHOWING.set(post, { id: String(msg.id || ''), visible: isVisible })
             post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), orphan: !!(await orphanPid(msg.id)) } })
             break
           case 'chatTakeover': {
@@ -2227,7 +2244,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           }
           case 'chatCancelQueued': {
             const id = String(msg.id || ''), uuid = String(msg.uuid || '')
-            runner.cancelQueued(id, uuid, ok => post({ type: 'chatQueue', id, uuid, state: ok ? 'cancelled' : 'started' }))
+            runner.cancelQueued(id, uuid, ok => post({ type: 'chatQueue', id, uuid, state: ok ? 'cancelled' : 'notcancelled' }))
             break
           }
           case 'chatSide': {
@@ -2583,7 +2600,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
     }, 3000)
     pollResources(true)
     if (mode === 'sidebar') SIDEBAR = post
-    onDispose(() => { clearInterval(timer); VIEWS.delete(post); ON_SCREEN.delete(post); WATCH?.setOpen(post, null) })
+    onDispose(() => { clearInterval(timer); VIEWS.delete(post); SHOWING.delete(post); ON_SCREEN.delete(post); WATCH?.setOpen(post, null) })
   }
 }
 

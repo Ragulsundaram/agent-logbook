@@ -2518,16 +2518,16 @@ function runnerStrip () {
   return strip
 }
 
-const isBusy = id => SESSIONS.find(x => x.id === id)?.live === 'busy'
+// a chat running in the logbook has its own status line under the reply: the
+// walking figure is for chats running somewhere else
+const isBusy = id => SESSIONS.find(x => x.id === id)?.live === 'busy' &&
+  !(typeof whereRunning === 'function' && whereRunning(id) === 'here')
 
 /** Show or hide the runner on the chat that is open, as its state changes. */
 function paintRunner () {
   const foot = $('#detail .foot')
   if (!foot || !CUR) return
-  // a chat running in the logbook has its own status line under the reply: the
-  // walking figure is for chats running somewhere else
-  const here = typeof whereRunning === 'function' && whereRunning(CUR.id) === 'here'
-  const busy = isBusy(CUR.id) && !here
+  const busy = isBusy(CUR.id)
   const strip = foot.querySelector('.runstrip')
   if (busy && !strip) foot.prepend(runnerStrip())
   if (!busy && strip) strip.remove()
@@ -2566,7 +2566,8 @@ function footer (t) {
   spark.onclick = () => send({ type: 'analytics', id: t.id })
   top.appendChild(spark)
   // a chat running here has Claude's own count; otherwise it is worked out from the transcript
-  const counted = typeof CHAT !== 'undefined' ? CHAT.state.get(t.id)?.context : null
+  const live = typeof CHAT !== 'undefined' ? CHAT.state.get(t.id) : null
+  const counted = live?.running ? live.context : null
   const pct = Number.isFinite(counted) ? counted : i.window ? Math.round(i.context / i.window * 100) : 0
   const facts = el('div', 'fnums')
   const row2 = SESSIONS.find(x => x.id === t.id)
