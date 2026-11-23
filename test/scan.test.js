@@ -86,3 +86,11 @@ test("a whole agent file in another script is not marked as cut short", () => {
     assert.match(out, /完了/)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('an attachment-shaped block from another client is left as written', () => {
+  const block = '<attached-file name="example.txt">\nhello\n</attached-file>'
+  const other = { type: 'user', entrypoint: 'cli', message: { role: 'user', content: [{ type: 'text', text: block }, { type: 'text', text: 'see above' }] } }
+  assert.equal(textOf(other), block + '\nsee above')
+  const here = { ...other, entrypoint: 'sdk-cli' }
+  assert.equal(textOf(here), '📎 example.txt\nsee above')
+})

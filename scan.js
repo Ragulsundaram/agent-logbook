@@ -103,10 +103,12 @@ const clean = t => {
 // opens, so the same words quoted in a message are left alone
 const SENT_IDE = /^<(ide_opened_file|ide_selection)>[\s\S]*This may or may not be related to the current task\.<\/\1>$/
 const SENT_FILE = /^<attached-file name="([^"\n]*)">\n[\s\S]*\n<\/attached-file>$/
-const sentBlock = t => {
-  // the whole block, exactly as the logbook writes it: a message that merely starts the same way is kept
+const sentBlock = (t, fromHere) => {
+  // the whole block, exactly as it is written: a message that merely starts the same way is kept.
+  // Editor context is the form Claude's own editor panel writes too, so it is hidden from any of them
   if (SENT_IDE.test(t)) return ''
-  const f = SENT_FILE.exec(t)
+  // an attached file is the logbook's own: only in a message the logbook sent
+  const f = fromHere && SENT_FILE.exec(t)
   return f ? `📎 ${f[1]}` : null
 }
 const textOf = m => {
@@ -117,7 +119,9 @@ const textOf = m => {
   // only a message you sent carries the logbook's blocks, and before your words: the last
   // block is always yours, whatever it looks like, and Claude's replies are left as written
   const mine = (m?.type || m?.message?.role) === 'user'
-  const texts = blocks.map((t, i) => { const k = mine && i < blocks.length - 1 ? sentBlock(t) : null; return k === null ? t : k }).filter(Boolean)
+  // the logbook runs Claude through its SDK mode, which records itself as sdk-cli
+  const fromHere = !m?.entrypoint || m.entrypoint === 'sdk-cli'
+  const texts = blocks.map((t, i) => { const k = mine && i < blocks.length - 1 ? sentBlock(t, fromHere) : null; return k === null ? t : k }).filter(Boolean)
   return clean(texts.join('\n'))
 }
 const blocksOf = m => {
