@@ -2109,7 +2109,10 @@ function activityOf (file) {
       const s = buf.toString('utf8')
       const i = s.indexOf('\n')
       raw = i < 0 ? '' : s.slice(i + 1)              // from the first whole line
-      if (/"type":"assistant"/.test(raw)) break
+      // start at a step Claude took, never at a result whose call was cut off: every
+      // result read then has its call, and a failure near the end shows as one
+      const a = raw.search(/^.*"type":"assistant"/m)
+      if (a >= 0) { raw = raw.slice(a); break }
       win *= 4
     }
   } catch { return null }

@@ -53,3 +53,21 @@ test("an agent's output shows its last step even when that step's result is huge
     assert.match(out, /boom/)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
+
+test("an agent's output keeps a recent failure whose call is far back", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lb-agent-'))
+  const file = path.join(dir, 'agent-test.jsonl')
+  const L = o => JSON.stringify(o)
+  // the call, then a long stretch of other records, then its failing result near the end
+  const filler = Array.from({ length: 300 }, (_, k) => L({ type: 'user', isMeta: true, message: { role: 'user', content: 'note ' + k + ' ' + 'y'.repeat(4000) } }))
+  fs.writeFileSync(file, [
+    L({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't9', name: 'Bash', input: { command: 'make build' } }] } }),
+    ...filler,
+    L({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't9', is_error: true, content: 'build broke' }] } }),
+  ].join('\n') + '\n')
+  try {
+    const out = activityOf(file)
+    assert.match(out, /› Bash: make build {2}\(failed\)/)
+    assert.match(out, /build broke/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
