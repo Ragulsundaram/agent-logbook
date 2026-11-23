@@ -38,7 +38,8 @@ const CHAT = {
   skipCtx: new Set(),    // chats whose next message goes without the editor's file
   files: new Map(),      // chat id -> attached PDFs and text files waiting to go
   thoughtOpen: new Set(), // chats whose live thinking you opened
-  stopping: new Set(),   // "chat id|task id": Stop pressed, until the task goes
+  stopping: new Set(),
+  limitsSaid: new Set(),  // usage-limit notices already shown, by limit, reset time and level   // "chat id|task id": Stop pressed, until the task goes
   todosFold: new Map(),  // chat id -> true/false: you folded or opened its to-do list (a finished one folds by itself)
 }
 let COMPOSER = null
@@ -89,6 +90,8 @@ const picksFor = id => {
 /** Running here, running somewhere else, or not running at all. */
 function whereRunning (id) {
   const st = CHAT.state.get(id)
+  // sent from this box a moment ago: Claude is starting here (or waiting for the last one to leave)
+  if (st?.sentHere && Date.now() - st.sentHere < 30000) return 'here'
   // not known yet, or just stopped here and still listed as running for a moment
   if (!st || Date.now() - (st.endedAt || 0) < 10000) return st?.running ? 'here' : ''
   if (st.running) return 'here'
@@ -719,7 +722,7 @@ function submit (c, only) {
   CHAT.done.delete(id)
   const st = CHAT.state.get(id) || { id, asks: [] }
   if (!st.busy) CHAT.busySince.set(id, Date.now())
-  CHAT.state.set(id, { ...st, busy: true })
+  CHAT.state.set(id, { ...st, busy: true, sentHere: Date.now() })
   if (!only) {
     CHAT.drafts.delete(id)
     CHAT.images.delete(id)
@@ -846,6 +849,9 @@ function paintComposer () {
       : 'Continue here… (/ for commands, ! for a shell command)'
   paintTip(c)
   paintCtx(c)
+  // a chat running here shows its status under the reply, not the walking figure:
+  // the room kept for that figure under the last message is not needed
+  $('#detail')?.classList.toggle('runhere', where === 'here' || CHAT.here.has(id))
   paintPickers(c)
   paintAsks(c)
   paintImages(c)
@@ -1571,6 +1577,10 @@ if (!BOARD_MODE) {
         note(id, m.text, false, m.action === 'terminal' ? { label: 'Open Claude in a terminal', msg: { type: 'chatTerminal' } } : undefined)
         break
       case 'chatLimit': {
+        // said once per limit and reset time: every reply carries it again, and a dismissed one stays dismissed
+        const said = `${m.kind}|${m.resetsAt}|${m.status}`
+        if (CHAT.limitsSaid.has(said)) return
+        CHAT.limitsSaid.add(said)
         const when = m.resetsAt ? new Date(m.resetsAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''
         const which = { five_hour: 'five-hour', seven_day: 'weekly', seven_day_opus: 'weekly' }[m.kind] || ''
         note(id, m.status === 'rejected'
@@ -1620,7 +1630,7 @@ if (!BOARD_MODE) {
         note(id, `Claude switched to ${m.model}${FALLBACK_WHY[m.trigger] ? ` because ${FALLBACK_WHY[m.trigger]}` : ' by itself'}. Pick another with /model.`, false)
         break
       case 'chatExit':
-        CHAT.state.set(id, { ...st, running: false, busy: false, asks: [], endedAt: Date.now() })
+        CHAT.state.set(id, { ...st, running: false, busy: false, asks: [], endedAt: Date.now(), sentHere: 0 })
         CHAT.partial.delete(id)
         if (m.error) note(id, m.error, true)
         break
@@ -1632,7 +1642,7 @@ if (!BOARD_MODE) {
         if (echoes.length > 1) CHAT.echo.set(id, echoes.slice(0, -1)); else CHAT.echo.delete(id)
         // and the commands it carried wait for the retry rather than counting as sent
         for (const sh of CHAT.shell.get(id) || []) if (last && sh.sentWith === last.text) { sh.sentWith = null; sh.sentAt = 0 }
-        CHAT.state.set(id, { ...st, busy: false })
+        CHAT.state.set(id, { ...st, busy: false, sentHere: 0 })
         if (last) giveBack(id, last)
         note(id, m.error, true)
         break

@@ -532,7 +532,12 @@ function dismissOn (menu, close) {
   }
   // scrolling the page under it closes it; scrolling inside it - a long agents
   // list - is just reading it
-  const onScroll = e => { if (!menu.contains(e.target)) kill() }
+  // the chat following Claude's new text is not you scrolling: the menu stays open for that
+  const onScroll = e => {
+    if (menu.contains(e.target)) return
+    if (Date.now() < AUTO_UNTIL && !(DRAGGING || Date.now() - HAND_AT < 400)) return
+    kill()
+  }
   // a click inside the menu is the action itself - those items close it themselves
   const onClick = e => { if (!menu.contains(e.target)) kill() }
   const onCtx = e => { if (!menu.contains(e.target)) kill() }
@@ -1519,11 +1524,13 @@ let DRAGGING = false                              // holding the scrollbar
 window.addEventListener('pointerup', () => { DRAGGING = false }, true)
 function stickToEnd (body) {
   if (!body || !FOLLOW) return
+  // you are scrolling right now (dragging the bar, or just moved it): Claude's text waits for you
+  if (DRAGGING || Date.now() - HAND_AT < 400) return
   AUTO_UNTIL = Date.now() + 200
   body.scrollTop = body.scrollHeight
   // and again once the browser has laid out what was just added
   requestAnimationFrame(() => {
-    if (!FOLLOW) return
+    if (!FOLLOW || DRAGGING || Date.now() - HAND_AT < 400) return
     AUTO_UNTIL = Date.now() + 200
     body.scrollTop = body.scrollHeight
   })
