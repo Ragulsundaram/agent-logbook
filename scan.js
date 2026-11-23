@@ -101,9 +101,12 @@ const clean = t => {
 // blocks the logbook sends beside your words, each as a text block of its own: what the
 // editor had open, and an attached file. Recognised only as a whole block, by how it
 // opens, so the same words quoted in a message are left alone
+const SENT_IDE = /^<(ide_opened_file|ide_selection)>[\s\S]*This may or may not be related to the current task\.<\/\1>$/
+const SENT_FILE = /^<attached-file name="([^"\n]*)">\n[\s\S]*\n<\/attached-file>$/
 const sentBlock = t => {
-  if (/^<ide_(opened_file|selection)>/.test(t)) return ''
-  const f = /^<attached-file name="([^"\n]*)">\n/.exec(t)
+  // the whole block, exactly as the logbook writes it: a message that merely starts the same way is kept
+  if (SENT_IDE.test(t)) return ''
+  const f = SENT_FILE.exec(t)
   return f ? `📎 ${f[1]}` : null
 }
 const textOf = m => {
@@ -3078,5 +3081,5 @@ try {
 } catch {}
 
 module.exports = {
-  writePrivate, mkdirPrivate, board, agentActivity, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
+  writePrivate, mkdirPrivate, board, agentActivity, textOf, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
   readOnlyCache, saveCacheNow, groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME }
