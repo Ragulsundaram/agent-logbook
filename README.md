@@ -33,6 +33,13 @@ settings, MCP servers and CLAUDE.md apply as usual, and it writes the same
 transcript a terminal would. A chat already running in a terminal or another
 app is never written to twice; it can be continued here as a copy instead.
 Turn **Chat here** off in Settings to keep the logbook read-only, as before.
+Chatting needs a folder the editor trusts: Claude runs without its own
+folder-trust prompt here, and would load the folder's settings, hooks and MCP
+servers, so in Restricted Mode the box stays off (reading chats still works).
+When a chat belongs to one of the window's folders, Claude may also work in the
+window's other folders, as with a multi-root workspace in the terminal; a chat
+from elsewhere gets only its own folder. The chat settings are yours alone: a
+folder's own settings file cannot change them.
 
 **See the sub-agents.** Background agents keep their own transcripts. Each one
 appears as a card where it was launched, with the brief it was given and what it

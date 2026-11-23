@@ -66,3 +66,15 @@ test('keeps a balanced pair of parentheses in Markdown link destinations', () =>
   const html = md('[Mercury](https://example.com/wiki/Mercury_(planet))')
   assert.equal(html, '<p><a href="https://example.com/wiki/Mercury_(planet)" title="https://example.com/wiki/Mercury_(planet)">Mercury</a></p>')
 })
+
+test('a URL inside a code span path cannot close its data-path attribute', () => {
+  const out = md('`~/a http://x/style=position:fixed;inset:0;`')
+  assert.ok(!/data-path="[^"]*</.test(out), out)
+  assert.ok(!out.includes('<a '), out)
+})
+
+test('a long run of [ renders quickly', () => {
+  const t = Date.now()
+  md('['.repeat(32000))
+  assert.ok(Date.now() - t < 200)
+})

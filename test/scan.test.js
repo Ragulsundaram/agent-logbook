@@ -4,14 +4,14 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { textOf, activityOf } = require('../scan.js')
+const { textOf, activityOf, summariseForTest } = require('../scan.js')
 const msg = (...texts) => ({ entrypoint: 'sdk-cli', message: { role: 'user', content: texts.map(text => ({ type: 'text', text })) } })
 
-test('hides the editor context and attachments the logbook sends beside a message', () => {
+test('shows the editor context and attachments sent beside a message as short chips', () => {
   const ctx = '<ide_selection>The user selected the lines 1 to 2 from /tmp/a.js:\nconst a = 1\n\nThis may or may not be related to the current task.</ide_selection>'
   const open = '<ide_opened_file>The user opened the file /tmp/a.js in the IDE. This may or may not be related to the current task.</ide_opened_file>'
   const file = '<attached-file name="notes.txt">\nline one\n</attached-file>'
-  assert.equal(textOf(msg(ctx, open, file, 'Please check this')), '📎 notes.txt\nPlease check this')
+  assert.equal(textOf(msg(ctx, open, file, 'Please check this')), '📄 a.js:1-2\n📄 a.js\n📎 notes.txt\nPlease check this')
 })
 
 test('an attachment ends at its own closing tag, not one inside the file', () => {
@@ -113,5 +113,21 @@ test("an agent's output keeps a recent failure even with another step between it
     const out = activityOf(file)
     assert.match(out, /› Bash: make build {2}\(failed\)/)
     assert.match(out, /build broke/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('a chat file with tool ids named like object properties does not break its summary', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lb-sum-'))
+  const file = path.join(dir, 'chat.jsonl')
+  const L = o => JSON.stringify(o)
+  fs.writeFileSync(file, [
+    L({ type: 'user', timestamp: '2026-01-01T00:00:00Z', message: { role: 'user', content: 'go' } }),
+    L({ type: 'assistant', timestamp: '2026-01-01T00:00:01Z', message: { id: 'm1', role: 'assistant', model: 'claude-sonnet-5', content: [{ type: 'tool_use', id: 'e1', name: 'Edit', input: { file_path: '/tmp/a.js', old_string: 'a', new_string: 'b' } }] } }),
+    L({ type: 'user', timestamp: '2026-01-01T00:00:02Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'constructor', content: 'x' }, { type: 'tool_result', tool_use_id: '__proto__', content: 'y' }] } }),
+  ].join('\n') + '\n')
+  try {
+    const s = summariseForTest(file)
+    assert.ok(s && s.messages >= 1)
+    assert.equal(s.edits, 1)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })

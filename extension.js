@@ -320,6 +320,15 @@ async function pidHost (pid) {
   return /\/Claude\.app\/|\/Application Support\/Claude\//.test(cmd) ? 'desktop' : ''
 }
 
+/** Whether a process is a Claude Code process, read from what it was started as. */
+async function isClaudeProcess (pid) {
+  const out = await new Promise(resolve => require('node:child_process').execFile('ps', ['-o', 'args=', '-p', String(pid)],
+    { encoding: 'utf8', timeout: 3000 }, (err, stdout) => resolve(err ? '' : String(stdout).trim())))
+  const prog = out.split(/\s+/)[0] || ''
+  return /(^|\/)claude$/.test(prog) || /\/claude-code\//.test(out) || /\/Claude\.app\//.test(prog) ||
+    /(^|\/)(node|bun)$/.test(prog) && /claude/i.test(out)
+}
+
 async function orphanPid (id) {
   if (!/^[\w-]+$/.test(String(id || '')) || runner.has(id)) return 0
   const pid = scan.livePid(id)
@@ -1628,6 +1637,7 @@ function chatSend (msg, post) {
   const ctxNow = msg.noContext ? null : editorContext(id)
   if (ctxNow) opts.context = ctxNow.blocks
   if (!runner.has(id)) {
+    if (!vscode.workspace.isTrusted) return fail(UNTRUSTED)
     const fresh = NEW_CHATS.get(id)
     if (fresh) {
       opts.cwd = fresh.cwd
@@ -1640,8 +1650,7 @@ function chatSend (msg, post) {
       if (live[id] && !runner.endedRecently(id)) return fail('This chat is running somewhere else. Reply there, or continue it here as a copy.')
       opts.cwd = s.cwd
     }
-    // the window's other folders, so Claude may work across them
-    opts.dirs = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath).filter(d => d !== opts.cwd).slice(0, 10)
+    opts.dirs = extraDirs(opts.cwd)
     if (!opts.cwd || !fs.existsSync(opts.cwd)) return fail(`This chat's folder no longer exists${opts.cwd ? `: ${opts.cwd}` : '.'}`)
   }
   try {
@@ -1703,7 +1712,8 @@ async function chatHook ({ id, callback, input }) {
   if (!file || !path.isAbsolute(file)) return {}
   if (callback === 'lb_save') {
     const doc = vscode.workspace.textDocuments.find(d => d.uri.scheme === 'file' && d.uri.fsPath === file)
-    if (doc?.isDirty) {
+    // only files in the chat's own folders are saved for it; anything else is left as you have it
+    if (doc?.isDirty && inChatFolders(id, file)) {
       // Claude must not read or edit an older copy than you see: if the save fails, it does not go ahead
       let saved = false
       try { saved = await doc.save() } catch {}
@@ -1762,6 +1772,25 @@ async function showProposed (ask) {
 
 /** Which chat each open view is showing, so a question is only announced when nobody can see it. */
 const SHOWING = new Map()            // view's post -> { id, visible }
+const FILE_SEARCH = new Map()        // view's post -> the @ search in progress
+
+// Claude in the logbook runs without its own "do you trust this folder?" prompt, and
+// would load the folder's settings, hooks and MCP servers: only in a folder the editor trusts
+const UNTRUSTED = 'Chatting here is off until you trust this folder (the editor\'s Restricted Mode). Claude would load this folder\'s settings, hooks and MCP servers.'
+
+/** The window's other folders, offered to Claude only when the chat itself belongs to one of them. */
+function extraDirs (cwd) {
+  const roots = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath)
+  const inside = d => cwd === d || String(cwd).startsWith(d + path.sep)
+  if (!cwd || !roots.some(inside)) return []
+  return roots.filter(d => d !== cwd && !inside(d)).slice(0, 10)
+}
+
+/** Files Claude may have saved for it: only inside the chat's own folder or the window's folders. */
+function inChatFolders (id, file) {
+  const roots = [runner.cwdOf(id), ...(vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath)].filter(Boolean)
+  return roots.some(d => file === d || file.startsWith(d + path.sep))
+}
 
 /**
  * Start Claude on a chat with nothing sent, for a command only it can answer (/mcp,
@@ -1773,6 +1802,7 @@ async function wakeChat (id, msg, post) {
   if (!/^[\w-]+$/.test(id) || !cfg('chatHere', true)) return false
   if (runner.has(id)) return true
   const fail = error => { post({ type: 'chatNotice', id, text: error }); return false }
+  if (!vscode.workspace.isTrusted) return fail(UNTRUSTED)
   // a new chat has nothing to resume yet: its first message starts it
   if (NEW_CHATS.has(id)) return fail('Send your first message to start this chat.')
   const s = scan.index().find(x => x.id === id)
@@ -1788,7 +1818,7 @@ async function wakeChat (id, msg, post) {
       model: pick(String(msg.model || ''), v => /^[\w.[\]-]{0,60}$/.test(v)),
       mode: pick(msg.mode, v => chatModes().includes(v)) || pick(cfg('chatPermissionMode', 'default'), v => CHAT_MODES.includes(v)),
       effort: pick(msg.effort, v => CHAT_EFFORTS.includes(v)),
-      dirs: (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath).filter(d => d !== cwd).slice(0, 10),
+      dirs: extraDirs(cwd),
       allowBypass: cfg('skipPermissions', false),
     })
   } catch (e) { return fail(e.message) }
@@ -2219,8 +2249,20 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               if (now?.[msg.id] === 'idle') pid = scan.livePid(msg.id)
               else if (now?.[msg.id]) post({ type: 'chatNotice', id: msg.id, text: 'Claude started working there, so it was left running. Try again once it is done.' })
             }
+            // only a Claude process is stopped, and anything it started there is named before it goes
+            if (pid && msg.idle && !(await isClaudeProcess(pid))) {
+              post({ type: 'chatNotice', id: msg.id, text: 'That process does not look like Claude, so it was left alone.' })
+              pid = 0
+            }
+            const tree = pid ? processTree(pid) : []
+            if (pid && msg.idle && tree.length > 1) {
+              const n = tree.length - 1
+              const ok = await vscode.window.showWarningMessage(
+                `Claude there has ${n} command${n === 1 ? '' : 's'} running that it started (a server, a watcher). Stop ${n === 1 ? 'it' : 'them'} too and continue here?`,
+                { modal: true }, 'Stop and continue here')
+              if (ok !== 'Stop and continue here') pid = 0
+            }
             if (pid) {
-              const tree = processTree(pid)
               for (const p of tree) { try { process.kill(p, 'SIGTERM') } catch {} }
               await new Promise(r => setTimeout(r, 2000))
               for (const p of tree) { try { process.kill(p, 0); process.kill(p, 'SIGKILL') } catch {} }
@@ -2338,9 +2380,15 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             // "@" in the box: files in the chat's folder whose path has these letters
             const id = String(msg.id || ''), q = String(msg.q || '').slice(0, 80)
             const base = runner.cwdOf(id) || scan.index().find(x => x.id === id)?.cwd || NEW_CHATS.get(id)?.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-            if (!base) break
+            // a whole home folder or disk is too much to search on every key
+            if (!base || base === require('node:os').homedir() || path.dirname(base) === base) { post({ type: 'chatFilesList', id, q, list: [] }); break }
+            // only the latest letters count: the search before them is called off
+            FILE_SEARCH.get(post)?.cancel()
+            const cts = new vscode.CancellationTokenSource()
+            FILE_SEARCH.set(post, cts)
             const glob = q.replace(/[[\]{}*?!]/g, '')
-            const found = await vscode.workspace.findFiles(new vscode.RelativePattern(base, `**/*${glob}*`), '**/{node_modules,.git,dist,out,build,.next}/**', 200)
+            const found = await vscode.workspace.findFiles(new vscode.RelativePattern(base, `**/*${glob}*`), '**/{node_modules,.git,dist,out,build,.next}/**', 200, cts.token)
+            if (cts.token.isCancellationRequested) break
             const low = glob.toLowerCase()
             const list = found.map(u => path.relative(base, u.fsPath)).filter(r => !r.startsWith('..'))
               .sort((a, b) => (path.basename(b).toLowerCase().startsWith(low) - path.basename(a).toLowerCase().startsWith(low)) || a.length - b.length)
@@ -2670,7 +2718,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
     }, 3000)
     pollResources(true)
     if (mode === 'sidebar') SIDEBAR = post
-    onDispose(() => { clearInterval(timer); VIEWS.delete(post); SHOWING.delete(post); ON_SCREEN.delete(post); WATCH?.setOpen(post, null) })
+    onDispose(() => { clearInterval(timer); VIEWS.delete(post); SHOWING.delete(post); FILE_SEARCH.get(post)?.cancel(); FILE_SEARCH.delete(post); ON_SCREEN.delete(post); WATCH?.setOpen(post, null) })
   }
 }
 

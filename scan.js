@@ -105,8 +105,13 @@ const SENT_IDE = /^<(ide_opened_file|ide_selection)>[\s\S]*This may or may not b
 const SENT_FILE = /^<attached-file name="([^"\n]*)">\n[\s\S]*\n<\/attached-file>$/
 const sentBlock = (t, fromHere) => {
   // the whole block, exactly as it is written: a message that merely starts the same way is kept.
-  // Editor context is the form Claude's own editor panel writes too, so it is hidden from any of them
-  if (SENT_IDE.test(t)) return ''
+  // Editor context is the form Claude's own editor panel writes too: shown as what was sent, briefly
+  if (SENT_IDE.test(t)) {
+    const sel = /^<ide_selection>The user selected the lines (\d+) to (\d+) from ([^\n]+?):\n/.exec(t)
+    if (sel) return `📄 ${path.basename(sel[3])}:${sel[1]}${sel[2] !== sel[1] ? '-' + sel[2] : ''}`
+    const open = /^<ide_opened_file>The user opened the file (.+?) in the IDE\./.exec(t)
+    return open ? `📄 ${path.basename(open[1])}` : ''
+  }
   // an attached file is the logbook's own: only in a message the logbook sent
   const f = fromHere && SENT_FILE.exec(t)
   return f ? `📎 ${f[1]}` : null
@@ -139,7 +144,11 @@ const blocksOf = m => {
  * append (the file shrank, or the previous summary predates the resume fields)
  * falls back to a full read.
  */
+/** One chat's summary; a file that cannot be read as one is left out, never the whole list. */
 function summarise (file, prev, agent) {
+  try { return summariseFile(file, prev, agent) } catch { return null }
+}
+function summariseFile (file, prev, agent) {
   let size
   try { size = fs.statSync(file).size } catch { return null }
   const resume = prev && prev._off > 0 && prev._off <= size && prev.file === file
@@ -240,13 +249,13 @@ function summarise (file, prev, agent) {
       s.modelTurns[mk] = (s.modelTurns[mk] || 0) + 1
     }
     for (const b of blocksOf(e)) {
-      if (b?.type === 'tool_result' && s._pend?.[b.tool_use_id]) {
+      if (b?.type === 'tool_result' && s._pend && Object.hasOwn(s._pend, String(b.tool_use_id))) {
         const [f, op, day] = s._pend[b.tool_use_id]
         delete s._pend[b.tool_use_id]
         if (b.is_error) {
           s.edits--; s.ops[op] = Math.max(0, (s.ops[op] || 0) - 1)
           if (day && s.days[day]) s.days[day].edits = Math.max(0, s.days[day].edits - 1)
-          if (f && s.files[f]) { if (--s.files[f] <= 0) delete s.files[f] }
+          if (f && Object.hasOwn(s.files, f)) { if (--s.files[f] <= 0) delete s.files[f] }
         }
         continue
       }
@@ -2103,9 +2112,11 @@ function activityOf (file) {
   // large. The window grows until it holds a whole step - the call and what it returned -
   // so one huge last result (a long failing command's output) is never all that is read
   let raw = '', win = 512 * 1024, cut = false
+  const MAX = 8 * 1024 * 1024                     // never more than this, however far a step's call is
   try {
     for (;;) {
       if (win >= st.size) { raw = fs.readFileSync(file, 'utf8'); cut = false; break }
+      win = Math.min(win, MAX)
       cut = true
       const fd = fs.openSync(file, 'r')
       const buf = Buffer.alloc(win)
@@ -2119,7 +2130,8 @@ function activityOf (file) {
       const calls = new Set([...raw.matchAll(/"id":"([\w-]+)"/g)].map(x => x[1]))
       const orphan = [...raw.matchAll(/"tool_use_id":"([\w-]+)"/g)].some(x => !calls.has(x[1]))
       const a = raw.search(/^.*"type":"assistant"/m)
-      if (a >= 0 && !orphan) { raw = raw.slice(a); break }
+      if (a >= 0 && (!orphan || win >= MAX)) { raw = raw.slice(a); break }
+      if (win >= MAX) break
       win *= 4
     }
   } catch { return null }
@@ -3117,5 +3129,5 @@ try {
 } catch {}
 
 module.exports = {
-  writePrivate, mkdirPrivate, board, agentActivity, activityOf, textOf, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
+  writePrivate, mkdirPrivate, board, agentActivity, activityOf, textOf, summariseForTest: summariseFile, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
   readOnlyCache, saveCacheNow, groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME }
