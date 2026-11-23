@@ -1977,8 +1977,10 @@ function showDetail (t, live) {
     return
   }
 
-  // a chat opens following its latest message, unless it opened on a match
+  // a chat opens following its latest message, unless it opened on a match; scrolling done in
+  // the chat before does not hold this one back from its end
   FOLLOW = !JUMP
+  HAND_AT = 0; DRAGGING = false
   if (JUMP) {
     const q = JUMP; JUMP = ''
     fi.value = q

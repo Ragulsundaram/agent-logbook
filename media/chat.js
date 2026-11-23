@@ -39,7 +39,7 @@ const CHAT = {
   files: new Map(),      // chat id -> attached PDFs and text files waiting to go
   thoughtOpen: new Set(), // chats whose live thinking you opened
   stopping: new Set(),
-  limitsSaid: new Set(),  // usage-limit notices already shown, by limit, reset time and level   // "chat id|task id": Stop pressed, until the task goes
+  limitsSaid: new Set(),  // usage-limit notices already shown, by chat, limit, reset time and level   // "chat id|task id": Stop pressed, until the task goes
   todosFold: new Map(),  // chat id -> true/false: you folded or opened its to-do list (a finished one folds by itself)
 }
 let COMPOSER = null
@@ -1488,7 +1488,8 @@ if (!BOARD_MODE) {
         for (const k of [...CHAT.taskOut.keys(), ...CHAT.stopping]) {
           if (k.startsWith(id + '|') && !(m.state.bg || []).some(t => k === id + '|' + t.id)) { CHAT.taskOut.delete(k); CHAT.stopping.delete(k) }
         }
-        CHAT.state.set(id, { ...m.state })
+        // the host's word wins, except the note that a message was just sent from here (kept until exit, at most 30s)
+        CHAT.state.set(id, { ...m.state, ...(st.sentHere ? { sentHere: st.sentHere } : {}) })
         if (m.state.commands?.length) CHAT.commands = m.state.commands
         if (m.state.models?.length) CHAT.models = m.state.models
         if (m.state.partial) CHAT.partial.set(id, m.state.partial)
@@ -1578,7 +1579,7 @@ if (!BOARD_MODE) {
         break
       case 'chatLimit': {
         // said once per limit and reset time: every reply carries it again, and a dismissed one stays dismissed
-        const said = `${m.kind}|${m.resetsAt}|${m.status}`
+        const said = `${id}|${m.kind}|${m.resetsAt}|${m.status}`
         if (CHAT.limitsSaid.has(said)) return
         CHAT.limitsSaid.add(said)
         const when = m.resetsAt ? new Date(m.resetsAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''
