@@ -1504,7 +1504,7 @@ if (!BOARD_MODE) {
               // only the reply's own text changes: the buttons and cards around it, and focus, stay put
               const text = CHAT.partial.get(id)?.text
               const b = COMPOSER?.id === id && COMPOSER.live.querySelector('.chatstream .bubble')
-              if (b && text) b.innerHTML = window.md(text)
+              if (b && text) { b.innerHTML = window.md(text); if (FOLLOW) stickToEnd(COMPOSER.live.parentNode) }
               else if (COMPOSER?.id === id) placeLive()
             }, 500)
             return

@@ -1783,7 +1783,19 @@ const FILE_SEARCH = new Map()        // view's post -> the @ search in progress
 const UNTRUSTED = 'Chatting here needs a trusted folder: trust this window (it is in Restricted Mode), or, for a chat from another folder, open that folder or run Claude there once in a terminal. Claude would load the folder\'s settings, hooks and MCP servers.'
 
 /** A path as it really is on disk: a shortcut (symlink) followed to where it points. */
-const real = p => { try { return fs.realpathSync.native(p) } catch { return path.resolve(p) } }
+// a path that does not exist yet (a file about to be written) has its nearest existing folder
+// resolved and the rest added back, so it is compared in the same form as its folder
+function real (p) {
+  let head = path.resolve(p)
+  const rest = []
+  for (;;) {
+    try { return path.join(fs.realpathSync.native(head), ...rest) } catch {}
+    const up = path.dirname(head)
+    if (up === head) return path.resolve(p)
+    rest.unshift(path.basename(head))
+    head = up
+  }
+}
 /**
  * Whether a path is a folder or inside it, compared where both really are on disk, so a
  * shortcut inside a folder that leads elsewhere does not count. Only a leading ".." step
