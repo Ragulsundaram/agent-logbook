@@ -251,7 +251,8 @@ document.addEventListener('contextmenu', e => {
   if (pre) item('Copy code', () => send({ type: 'copy', text: pre.textContent, label: 'Code copied' }))
   if (src) {
     item('Copy message', () => {
-      if (!copyRich(src, flatHtml(window.md(src)))) send({ type: 'copy', text: src, label: 'Message copied' })
+      // the browser could not copy: the editor's clipboard gets the same plain words instead
+      if (!copyMarkdown(src)) send({ type: 'copy', text: plainOfMarkdown(src), label: 'Message copied' })
     })
   }
   if (!menu.childElementCount) return
@@ -2145,9 +2146,8 @@ function turnChanges (edits, id) {
  * selecting the code never picks up the word "Copy".
  */
 /**
- * Copy a whole message, as the markdown it was written in rather than the
- * rendered text - blank lines and ** survive, so Slack and Linear format it
- * instead of showing a wall of text.
+ * Copy a whole message: formatted for Slack, Linear, Notion and email, and as
+ * plain words (no ** marks) for a plain text box.
  */
 function msgCopyButton (textOrFn) {
   const cp = el('button', 'msgcopy')
@@ -2157,8 +2157,8 @@ function msgCopyButton (textOrFn) {
     e.stopPropagation()
     const text = typeof textOrFn === 'function' ? textOrFn() : textOrFn
     // both flavours, so Slack keeps the bold and the paragraph gaps
-    if (!copyRich(text, flatHtml(window.md(text)))) {
-      send({ type: 'copy', text, label: 'Message copied' })
+    if (!copyMarkdown(text)) {
+      send({ type: 'copy', text: plainOfMarkdown(text), label: 'Message copied' })
     }
     cp.classList.add('done')
     setTimeout(() => cp.classList.remove('done'), 1200)
@@ -3437,93 +3437,99 @@ window.addEventListener('message', e => {
 // a wider or taller panel should fill itself too
 new ResizeObserver(() => { if ($('#detail').hidden) fillViewport() }).observe($('#rows'))
 
-/**
- * Slack and most composers turn a <p> into a single line break, so blocks paste
- * with no gap. Flatten to one block with explicit <br><br> between, which every
- * target renders as a real blank line while keeping bold and links.
- */
-const BLOCKS = new Set(['p', 'ul', 'ol', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'table', 'div', 'hr'])
-function flatHtml (html) {
-  const host = document.createElement('div')
-  host.innerHTML = html
-  // Paragraphs are flattened to text joined by blank lines, because Slack drops
-  // the gap between <p> blocks and runs them together. Lists are kept as real
-  // lists: turned into "•" characters they pasted as plain text rather than as
-  // bullets Slack can edit, and numbered lists lost their numbering. Text that
-  // sits outside any block - part of a line, a bold phrase - keeps its own tags,
-  // so bold, italics and links survive a partial selection.
-  const pieces = []
-  let run = ''
-  const flush = () => { if (run.trim()) pieces.push({ html: run, list: false }); run = '' }
-  for (const node of host.childNodes) {
-    if (node.nodeType === 3) { run += esc(node.nodeValue); continue }
-    if (node.nodeType !== 1) continue
-    const tag = node.nodeName.toLowerCase()
-    if (!BLOCKS.has(tag)) { run += cleanInline(node); continue }
-    flush()
-    const isList = tag === 'ul' || tag === 'ol'
-    let piece
-    if (isList) piece = plainList(node).outerHTML
-    else if (tag === 'pre') piece = `<pre>${esc(node.textContent).replace(/\n/g, '<br>')}</pre>`
-    else piece = cleanInline(node, true)
-    if (piece && piece.trim()) pieces.push({ html: piece, list: isList })
-  }
-  flush()
-  let out = ''
-  pieces.forEach((p, i) => {
-    // a list is a block of its own, so one break either side is a blank line
-    if (i) out += (p.list || pieces[i - 1].list) ? '<br>' : '<br><br>'
-    out += p.html
-  })
-  return out
-}
-
-/** An element's html without the reader's classes, styles and buttons; inner only for a block. */
 // a memory's type comes from its frontmatter and becomes a class name: one plain word or none
 const memClass = t => /^[a-z]{1,20}$/.test(t) ? 'memtype ' + t : 'memtype'
 
 /**
- * What goes on the clipboard as html: formatting tags only, and of attributes
- * only a link's web address, so nothing from a transcript rides along into
- * the app it is pasted into.
+ * A copy carries two versions, the way a browser's own copy does (and Claude's app):
+ * plain words, with no Markdown marks, for a plain text box; and the formatted
+ * HTML, which Slack, Notion, Docs and email paste with bold, links and lists. The
+ * HTML opens with the charset line a browser writes - without it Slack ignored the
+ * formatting and pasted the plain words.
  */
-const KEEP_TAGS = new Set(['b', 'strong', 'i', 'em', 'del', 'code', 'a', 'ul', 'ol', 'li', 'br', 'pre', 'p', 'span',
-  'table', 'thead', 'tbody', 'tr', 'th', 'td', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'div'])
-function scrub (root) {
-  for (const n of [root, ...root.querySelectorAll('*')]) {
-    if (n !== root && !KEEP_TAGS.has(n.nodeName.toLowerCase())) { n.replaceWith(document.createTextNode(n.textContent)); continue }
-    for (const a of [...n.attributes]) {
-      if (!(a.name === 'href' && /^https?:/i.test(a.value))) n.removeAttribute(a.name)
+function richHtml (html) {
+  // built the way a browser's copy is (Claude's app too): paragraphs and lists as
+  // real blocks, only plain formatting tags, nothing from the page's own markup.
+  // Slack skipped a flattened version and pasted the plain words instead
+  const src = new DOMParser().parseFromString(html, 'text/html').body
+  const KEEP = { p: 'p', div: 'p', h1: 'p', h2: 'p', h3: 'p', h4: 'p', h5: 'p', h6: 'p', blockquote: 'blockquote', pre: 'pre',
+    ul: 'ul', ol: 'ol', li: 'li', strong: 'strong', b: 'strong', em: 'em', i: 'em', del: 's', s: 's', code: 'code', br: 'br', a: 'a',
+    table: 'table', thead: 'thead', tbody: 'tbody', tr: 'tr', td: 'td', th: 'th' }
+  const BLOCK = new Set(['p', 'ul', 'ol', 'blockquote', 'pre', 'table'])
+  const out = node => {
+    if (node.nodeType === 3) return esc(node.nodeValue)
+    if (node.nodeType !== 1) return ''
+    const tag = node.nodeName.toLowerCase()
+    if (tag === 'button' || node.classList?.contains('msgcopy')) return ''
+    const inner = [...node.childNodes].map(out).join('')
+    const to = KEEP[tag]
+    if (!to) return inner
+    if (to === 'br') return '<br>'
+    if (to === 'a') {
+      const href = node.getAttribute('href') || ''
+      return /^https?:\/\//i.test(href) ? `<a href="${esc(href)}">${inner}</a>` : inner
     }
+    // headings read as a bold line, the way chat apps show them
+    if (/^h[1-6]$/.test(tag)) return `<p dir="ltr"><strong>${inner}</strong></p>`
+    if (to === 'ol') return `<ol dir="ltr" start="${Number(node.getAttribute('start')) || 1}">${inner}</ol>`
+    return BLOCK.has(to) ? `<${to} dir="ltr">${inner}</${to}>` : `<${to}>${inner}</${to}>`
   }
+  // text sitting outside any block (part of one line) is wrapped in a paragraph of its own
+  let body = '', run = ''
+  for (const n of src.childNodes) {
+    const tag = n.nodeType === 1 ? n.nodeName.toLowerCase() : ''
+    if (BLOCK.has(KEEP[tag]) || /^h[1-6]$/.test(tag)) { if (run.trim()) body += `<p dir="ltr">${run}</p>`; run = ''; body += out(n) } else run += out(n)
+  }
+  if (run.trim()) body += `<p dir="ltr">${run}</p>`
+  return `<meta charset='utf-8'>${body}`
 }
 
-function cleanInline (node, innerOnly) {
-  const copy = node.cloneNode(true)
-  for (const b of copy.querySelectorAll('button')) b.remove()
-  scrub(copy)
-  return innerOnly ? copy.innerHTML : copy.outerHTML
+/** A rendered message as plain words: no ** or _ marks, links as their text, one line per list item. */
+function plainText (host) {
+  // a code block is copied exactly as it is - its indentation and blank lines are the point -
+  // so it is set aside while the prose around it is tidied, and put back after
+  const code = []
+  const walk = node => {
+    if (node.nodeType === 3) return node.nodeValue
+    const tag = node.nodeName.toLowerCase()
+    if (tag === 'button' || node.classList?.contains('msgcopy')) return ''
+    const inner = [...node.childNodes].map(walk).join('')
+    // a list item is its own line, without a "1." or "-" in front: plain words that look
+    // like a Markdown list made Slack paste them as text and drop the bold and links
+    // from the formatted copy, as a browser's own copy (and Claude's app) leaves them out
+    if (tag === 'li') return inner.trim() + '\n'
+    if (tag === 'br') return '\n'
+    if (tag === 'pre') { code.push(node.textContent); return `\n\n\u0000${code.length - 1}\u0000\n\n` }
+    if (['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'ul', 'ol', 'table', 'tr'].includes(tag)) {
+      return inner.trim() + '\n\n'
+    }
+    if (tag === 'td' || tag === 'th') return inner.trim() + '\t'
+    return inner
+  }
+  return walk(host).replace(/\t\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+    .replace(/\u0000(\d+)\u0000/g, (_, i) => code[+i])
 }
 
-/** A list without the reader's styling hooks, so it pastes as a plain list. */
-function plainList (list) {
-  const copy = list.cloneNode(true)
-  for (const b of copy.querySelectorAll('button')) b.remove()
-  scrub(copy)
-  return copy
+/** The copy button's text, from the Markdown Claude wrote: the same two versions as a selection. */
+// parsed in a detached document: nothing runs, and nothing is put into the page
+const markdownBody = markdown => new DOMParser().parseFromString(window.md(markdown), 'text/html').body
+function copyMarkdown (markdown) {
+  const host = markdownBody(markdown)
+  return copyRich(plainText(host), richHtml(host.innerHTML))
 }
+/** The plain words of some Markdown, for when only plain text can be copied. */
+const plainOfMarkdown = markdown => plainText(markdownBody(markdown))
 
-/** Put both flavours on the clipboard: markdown for plain targets, html for rich. */
-function copyRich (markdown, html) {
+function copyRich (plain, html) {
   const onCopy = e => {
-    e.clipboardData.setData('text/plain', markdown)
+    e.clipboardData.setData('text/plain', plain)
     e.clipboardData.setData('text/html', html)
     e.preventDefault()
   }
   document.addEventListener('copy', onCopy, { once: true, capture: true })
   // a selection is required before the browser will run a copy command
   const holder = el('div')
-  holder.textContent = markdown
+  holder.textContent = plain
   holder.style.cssText = 'position:fixed;left:-9999px;white-space:pre-wrap'
   document.body.appendChild(holder)
   const range = document.createRange()
@@ -3570,67 +3576,14 @@ document.addEventListener('copy', e => {
     const kind = (anc.nodeType === 3 ? anc.parentElement : anc).closest('ol, ul')?.nodeName.toLowerCase() || 'ul'
     const list = document.createElement(kind)
     for (const n of [...host.childNodes]) list.appendChild(n)
+    // part of a numbered list starts at the number its first item had on the page
+    const first = list.querySelector(':scope > li')?.dataset.copyN
+    if (kind === 'ol' && Number(first) > 1) list.setAttribute('start', first)
     host.appendChild(list)
   }
 
-  // The plain text is written as Markdown, the same as the copy button's. Slack
-  // builds a paste from the plain text and turns its Markdown into formatting,
-  // so a selection copied as bare words lost every link and bold on the way.
-  // `label` is set inside a link's text: plain text there has its brackets and
-  // backslashes escaped so "a]b" cannot close the label early, while code
-  // inside the link is left as it is - Markdown reads a code span literally.
-  const walk = (node, label = false) => {
-    if (node.nodeType === 3) return label ? node.nodeValue.replace(/[\\[\]]/g, '\\$&') : node.nodeValue
-    const tag = node.nodeName.toLowerCase()
-    if (tag === 'button' || node.classList?.contains('msgcopy')) return ''
-    const inside = tag === 'a' ? true : tag === 'code' ? false : label
-    const inner = [...node.childNodes].map(n => walk(n, inside)).join('')
-    if (tag === 'a') {
-      const href = node.getAttribute('href') || ''
-      const plain = node.textContent.trim()
-      if (!/^https?:\/\//i.test(href)) return [...node.childNodes].map(n => walk(n, label)).join('')
-      if (plain === href) return href
-      // Parentheses that pair up stay as they are, as in .../Mercury_(planet):
-      // Markdown reads a balanced pair as part of the address, and some servers
-      // treat %28 and "(" as different pages. An unpaired one, or one a
-      // backslash could escape, would end the link early, so then they are
-      // encoded. Angle brackets and spaces always are.
-      let depth = 0
-      const paired = !href.includes('\\') &&
-        [...href].every(c => {
-          depth += c === '(' ? 1 : c === ')' ? -1 : 0
-          return depth >= 0 && depth <= 1
-        }) && depth === 0
-      const dest = href.replace(paired ? /[<>\s]/g : /[()<>\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
-      return `[${inner}](${dest})`
-    }
-    if ((tag === 'strong' || tag === 'b') && inner.trim()) return `**${inner}**`
-    if ((tag === 'em' || tag === 'i') && inner.trim()) return `_${inner}_`
-    if (tag === 'code' && node.parentElement?.nodeName !== 'PRE') {
-      // a fence longer than any run of backticks inside, padded where the code
-      // starts or ends with one, so it stays a single code span
-      const longest = Math.max(0, ...(inner.match(/`+/g) || []).map(r => r.length))
-      const fence = '`'.repeat(longest + 1)
-      const pad = /^`|`$/.test(inner) ? ' ' : ''
-      return fence + pad + inner + pad + fence
-    }
-    if (tag === 'li') {
-      // numbered items keep the number they had on the page
-      const list = node.parentElement
-      const n = list?.nodeName === 'OL' || node.dataset.copyN
-        ? (node.dataset.copyN || (Number(list?.getAttribute('start')) || 1) + [...(list?.children || [])].indexOf(node)) + '. '
-        : '- '
-      return n + inner.trim() + '\n'
-    }
-    if (tag === 'br') return '\n'
-    if (['p', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'ul', 'ol', 'table'].includes(tag)) {
-      return inner.trim() + '\n\n'
-    }
-    return inner
-  }
-  const text = walk(host).replace(/\n{3,}/g, '\n\n').trim()
-  e.clipboardData.setData('text/plain', text)
-  e.clipboardData.setData('text/html', flatHtml(host.innerHTML))
+  e.clipboardData.setData('text/plain', plainText(host))
+  e.clipboardData.setData('text/html', richHtml(host.innerHTML))
   e.preventDefault()
 })
 
