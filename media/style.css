@@ -1193,6 +1193,7 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 /* room under the last message, always, so the runner never covers it - kept
    whether or not it is running, so nothing moves when it comes and goes */
 .msgs { padding-bottom: 34px }
+#detail.runhere .msgs { padding-bottom: 8px }
 .runtrack { position: relative; flex: 1; height: 22px; overflow: hidden;
   border-bottom: 1px dashed var(--vscode-panel-border) }
 .runner { position: absolute; bottom: 1px; left: 0; width: 21px; height: 21px;

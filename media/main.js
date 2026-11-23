@@ -532,7 +532,12 @@ function dismissOn (menu, close) {
   }
   // scrolling the page under it closes it; scrolling inside it - a long agents
   // list - is just reading it
-  const onScroll = e => { if (!menu.contains(e.target)) kill() }
+  // the chat following Claude's new text is not you scrolling: the menu stays open for that
+  const onScroll = e => {
+    if (menu.contains(e.target)) return
+    if (Date.now() < AUTO_UNTIL && !(DRAGGING || TOUCHING || Date.now() - HAND_AT < 400)) return
+    kill()
+  }
   // a click inside the menu is the action itself - those items close it themselves
   const onClick = e => { if (!menu.contains(e.target)) kill() }
   const onCtx = e => { if (!menu.contains(e.target)) kill() }
@@ -1516,14 +1521,28 @@ let AUTO_UNTIL = 0
 // the end came faster than the 200ms they mute, so yours were never heard
 let HAND_AT = 0
 let DRAGGING = false                              // holding the scrollbar
-window.addEventListener('pointerup', () => { DRAGGING = false }, true)
+// letting go (or a gesture the system called off) ends the drag, and the chat catches up
+// with what Claude wrote meanwhile - if you let go at the end
+// A finger on the list is tracked on its own: a touch pan can raise pointercancel while
+// the finger is still down, so only the last finger lifting ends it
+let TOUCHING = false
+const catchUp = () => {
+  const body = document.querySelector('#detail .msgs')
+  if (body) requestAnimationFrame(() => stickToEnd(body))
+}
+const dragEnd = () => { if (!DRAGGING) return; DRAGGING = false; catchUp() }
+for (const ev of ['pointerup', 'pointercancel']) window.addEventListener(ev, dragEnd, true)
+const touchEnd = e => { if (!TOUCHING || e.touches?.length) return; TOUCHING = false; catchUp() }
+for (const ev of ['touchend', 'touchcancel']) window.addEventListener(ev, touchEnd, true)
 function stickToEnd (body) {
   if (!body || !FOLLOW) return
+  // you are holding the scrollbar (or a finger on the list): Claude's text waits until you let go
+  if (DRAGGING || TOUCHING) return
   AUTO_UNTIL = Date.now() + 200
   body.scrollTop = body.scrollHeight
   // and again once the browser has laid out what was just added
   requestAnimationFrame(() => {
-    if (!FOLLOW) return
+    if (!FOLLOW || DRAGGING || TOUCHING) return
     AUTO_UNTIL = Date.now() + 200
     body.scrollTop = body.scrollHeight
   })
@@ -1914,7 +1933,7 @@ function showDetail (t, live) {
     jump.hidden = fromEnd < 120
     // our own scrolls, and the header settling, say nothing about what you did -
     // unless you are scrolling right now
-    const byHand = DRAGGING || Date.now() - HAND_AT < 400
+    const byHand = DRAGGING || TOUCHING || Date.now() - HAND_AT < 400
     if (!byHand && (Date.now() < settling || Date.now() < AUTO_UNTIL)) { lastY = y; return }
     FOLLOW = fromEnd < 80
     // while you are pointing at the header it stays open, whatever the
@@ -1932,6 +1951,7 @@ function showDetail (t, live) {
   const hand = up => { HAND_AT = Date.now(); if (up) FOLLOW = false }
   body.addEventListener('wheel', e => hand(e.deltaY < 0), { passive: true })
   body.addEventListener('touchmove', () => hand(false), { passive: true })
+  body.addEventListener('touchstart', () => { TOUCHING = true }, { passive: true })
   body.addEventListener('pointerdown', e => { if (e.target === body) { DRAGGING = true; hand(false) } })   // the scrollbar
   body.addEventListener('keydown', e => { if (/^(PageUp|ArrowUp|Home)$/.test(e.key)) hand(true); else if (/^(PageDown|ArrowDown|End|Space| )$/.test(e.key)) hand(false) })
   // reaching for the header brings it back and it stays - only scrolling
@@ -1970,8 +1990,10 @@ function showDetail (t, live) {
     return
   }
 
-  // a chat opens following its latest message, unless it opened on a match
+  // a chat opens following its latest message, unless it opened on a match; scrolling done in
+  // the chat before does not hold this one back from its end
   FOLLOW = !JUMP
+  HAND_AT = 0; DRAGGING = false
   if (JUMP) {
     const q = JUMP; JUMP = ''
     fi.value = q
