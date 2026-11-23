@@ -879,10 +879,18 @@ function setThinking (id, on) {
 }
 
 /** Start Claude on a chat without sending anything, for a command only it can answer (/mcp, /btw). */
+const WAKES = new Map()              // chat id -> a start still waiting for the last Claude to leave
 function wake (id, opts) {
   return new Promise(resolve => {
     if (RUNS.has(id)) return resolve(true)
-    const go = () => { try { if (!RUNS.has(id)) start(id, opts); resolve(true) } catch { resolve(false) } }
+    const token = {}
+    WAKES.set(id, token)
+    // a stop meanwhile (the chat stopped, chatting turned off, the editor closing) cancels it
+    const go = () => {
+      if (WAKES.get(id) !== token) return resolve(false)
+      WAKES.delete(id)
+      try { if (!RUNS.has(id)) start(id, opts); resolve(true) } catch { resolve(false) }
+    }
     // the last Claude on this chat is still leaving: two on one chat would tangle it
     const old = STOPPING.get(id)
     if (old && old.exitCode === null && old.signalCode === null) {
@@ -901,6 +909,7 @@ function mcpStatus (id, done) {
 
 function stop (id, now) {
   DEFERRED.delete(id)                 // a send still waiting to start is cancelled too
+  WAKES.delete(id)                    // and so is a start for /mcp or /btw
   const r = RUNS.get(id)
   if (!r) return
   r.stopping = true
@@ -935,6 +944,7 @@ function restartAll () {
 
 function stopAll (now) {
   DEFERRED.clear()
+  WAKES.clear()
   for (const id of [...RUNS.keys()]) stop(id, now)
 }
 
