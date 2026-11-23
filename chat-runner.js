@@ -414,6 +414,7 @@ function onLine (r, m) {
       } else if (m.subtype === 'session_state_changed') {
         // Claude's own word on whether it is working: idle is the end of everything you sent
         r.sse = true
+        r.cliState = String(m.state || '')
         if (m.state === 'idle') turnOver(r)
         else if (!r.busy) { r.busy = true; emit(r.id, { type: 'chatState', state: state(r.id) }); OPTS.onChange(r.id) }
       } else if (m.subtype === 'api_retry') {
@@ -445,8 +446,10 @@ function onLine (r, m) {
         OPTS.onChange(r.id)
         if (!r.bg.length && !r.busy && r.restart) { r.restart = false; stop(r.id) }
       } else if (m.subtype === 'task_notification') {
-        // Claude takes the result up in a turn of its own: working until it starts.
-        // If it never does, do not stay "working" for ever
+        // Claude says for itself whether it takes the result up in a turn: a
+        // stopped task, for one, starts none, and must not show "working"
+        if (r.sse) return
+        // an older Claude does not say: working until its turn starts, or for 30s at most
         r.busy = true
         clearTimeout(r.expectTurn)
         r.expectTurn = setTimeout(() => {
@@ -748,10 +751,17 @@ function answer (id, requestId, reply) {
 function interrupt (id) {
   const r = RUNS.get(id)
   if (!r) return
-  control(r, { subtype: 'interrupt' })
   r.interruptedAt = Date.now()
-  // a Claude mid-reply ends it at once; one with nothing running says nothing,
-  // and the chat must not keep saying "working" because of it
+  // like Esc in Claude's terminal: the reply stops, and so do the turns queued
+  // behind it (a finished background task's, or messages you typed ahead) -
+  // one press, not one per turn. Messages taken back go back in the box.
+  control(r, { subtype: 'interrupt', cancel_queued: true }, res => {
+    for (const u of Array.isArray(res?.cancelled) ? res.cancelled : []) emit(r.id, { type: 'chatQueue', uuid: String(u), state: 'cancelled' })
+    // Claude was idle all along: nothing will end, so the chat is done now
+    if (r.sse && r.cliState === 'idle') settle(r, true)
+  }, 5000)
+  // a view that thought it was working when nothing was hears otherwise at once
+  if (!r.busy) emit(r.id, { type: 'chatDone', ms: 0, error: '', stopped: true })
   clearTimeout(r.stopCheck)
   r.stopCheck = setTimeout(() => settle(r, true), 3000)
 }
