@@ -2212,8 +2212,13 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           case 'chatTakeover': {
             // an orphan of this window, or - asked for by name - a Claude sitting idle elsewhere.
             // Checked again now: one that started working since is not stopped
-            const pid = await orphanPid(msg.id) ||
-              (msg.idle && /^[\w-]+$/.test(String(msg.id || '')) && !runner.has(msg.id) && live[msg.id] === 'idle' ? scan.livePid(msg.id) : 0)
+            let pid = await orphanPid(msg.id)
+            if (!pid && msg.idle && /^[\w-]+$/.test(String(msg.id || '')) && !runner.has(msg.id)) {
+              // asked fresh, not from the last check: only a Claude still idle right now is stopped
+              const now = await scan.liveSessionsAsync()
+              if (now?.[msg.id] === 'idle') pid = scan.livePid(msg.id)
+              else if (now?.[msg.id]) post({ type: 'chatNotice', id: msg.id, text: 'Claude started working there, so it was left running. Try again once it is done.' })
+            }
             if (pid) {
               const tree = processTree(pid)
               for (const p of tree) { try { process.kill(p, 'SIGTERM') } catch {} }
@@ -2222,7 +2227,8 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               runner.markEnded(msg.id)
               liveSig = ''; pollLive().catch(() => {})
             }
-            post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), endedAt: Date.now() } })
+            // marked as ended only when something was: otherwise it still shows where it runs
+            post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), ...(pid ? { endedAt: Date.now() } : {}) } })
             break
           }
           case 'chatSend':
@@ -2990,10 +2996,17 @@ function activate (ctx) {
   // chats running here: Claude only reads them when it starts. The file also holds counters
   // Claude rewrites all the time, so only a change to the servers themselves counts
   const claudeJson = path.join(require('node:os').homedir(), '.claude.json')
+  // the servers alone, in a fixed order: projects with none, and the order keys were written in, do not count
+  const sorted = v => Array.isArray(v) ? v.map(sorted)
+    : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sorted(v[k])])) : v
   const mcpSig = () => {
     try {
       const j = JSON.parse(fs.readFileSync(claudeJson, 'utf8'))
-      return JSON.stringify([j.mcpServers || {}, Object.entries(j.projects || {}).map(([p, v]) => [p, v?.mcpServers || {}])])
+      const projects = Object.entries(j.projects || {})
+        .filter(([, v]) => v?.mcpServers && Object.keys(v.mcpServers).length)
+        .map(([p, v]) => [p, v.mcpServers])
+        .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      return JSON.stringify(sorted([j.mcpServers || {}, projects]))
     } catch { return null }
   }
   let mcpWas = mcpSig()
