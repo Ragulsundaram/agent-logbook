@@ -58,7 +58,9 @@ reviews:
         4. No shell strings: execFile with an argument array; sendText only from validated values. Exception: chatShell runs text the user typed after "!" in the message box, and nothing else.
         5. Webview text escaped with esc() or textContent; CSP and nonce in extension.js unchanged.
         6. Any new write location must be added to README.md "What it reads and writes".
-        Also flag changes outside the linked issue's scope and edits to CHANGELOG.md or the package.json version.
+        Also flag changes outside the linked issue's scope, for every author.
+        Flag edits to CHANGELOG.md or the package.json version too, unless the PR author is
+        Ragulsundaram (the maintainer makes those two edits at release time).
     - path: '{scan.js,mcp-server.js,mcp-setup.js,extension.js}'
       instructions: |
         Sensitive file. Trace where every new file path, process argument, URL and
@@ -75,7 +77,8 @@ reviews:
     - path: 'package.json'
       instructions: |
         Flag any dependencies, devDependencies, install/prepare scripts, version change,
-        or setting outside the claudeHistory. prefix.
+        or setting outside the claudeHistory. prefix. A version change is expected when the PR
+        author is Ragulsundaram (a release PR); do not flag it then.
   tools:
     gitleaks:
       enabled: true
