@@ -1129,7 +1129,7 @@ const LAUNCHED = new Map()   // terminal -> the session id we started it with
  * then open it in the view that asked. Gives up when the terminal closes, or
  * after an hour of nobody typing.
  */
-function followNewChat (sid, post, term) {
+function followNewChat (sid, post, term, maxMs = 3600e3) {
   const projects = path.join(require('node:os').homedir(), '.claude', 'projects')
   const started = Date.now()
   // a chat started in the logbook has no terminal: it ends when Claude does
@@ -1137,8 +1137,11 @@ function followNewChat (sid, post, term) {
   // the view may have closed in the meantime
   const tell = m => { try { post(m) } catch {} }
   const tick = setInterval(async () => {
-    if (ended() || Date.now() - started > 3600e3) {
-      clearInterval(tick); NEW_CHATS.delete(sid); tell({ type: 'pendingGone', id: sid }); return
+    if (ended() || Date.now() - started > maxMs) {
+      clearInterval(tick); NEW_CHATS.delete(sid)
+      // a chat /clear moved stays open as it is; only a new chat that never started goes
+      if (maxMs >= 3600e3) tell({ type: 'pendingGone', id: sid })
+      return
     }
     // a logbook chat has no file until its first message: nothing to look for yet
     if (!term && NEW_CHATS.has(sid)) return
@@ -1598,7 +1601,9 @@ function chatSend (msg, post) {
     data: typeof f?.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(f.data) && f.data.length < 2.5e7 ? f.data : '',
     text: typeof f?.text === 'string' ? f.text.slice(0, 400000) : '',
   })).filter(f => f.mediaType === 'application/pdf' ? f.data : f.text)
-  if (!text.trim() && !images.length && !files.length) return
+  // a file that could not go is said, not dropped quietly
+  if (Array.isArray(msg.files) && files.length < Math.min(8, msg.files.length)) return fail('A file was too big or could not be read, so nothing was sent. Remove it and send again.')
+  if (!text.trim() && !images.length && !files.length) return fail('There was nothing to send.')
   const pick = (v, ok) => ok(v) ? v : ''
   const shell = shellContext(id)
   const opts = {
@@ -1629,8 +1634,8 @@ function chatSend (msg, post) {
     if (!opts.cwd || !fs.existsSync(opts.cwd)) return fail(`This chat's folder no longer exists${opts.cwd ? `: ${opts.cwd}` : '.'}`)
   }
   try {
-    // not taken (Claude had stopped): keep everything for the retry
-    if (!runner.send(id, opts)) return
+    // not taken (Claude had stopped): keep everything for the retry, editor context too
+    if (!runner.send(id, opts)) { SENT_CTX.delete(id); return }
     dropShell(id, shell.n)
     NEW_CHATS.delete(id)
     clearCutoff(id)
@@ -1644,25 +1649,27 @@ function chatSend (msg, post) {
 let LAST_EDITOR = null
 let EDITOR_SOON = null
 const SENT_CTX = new Map()        // chat id -> the editor context last sent with it, so it is not repeated
-function editorNow () {
-  const ed = vscode.window.activeTextEditor || LAST_EDITOR
-  if (!ed || ed.document.isClosed || ed.document.uri.scheme !== 'file') return null
+const isFileEditor = ed => !!ed && !ed.document.isClosed && ed.document.uri.scheme === 'file'
+function editorNow (withText) {
+  const act = vscode.window.activeTextEditor
+  const ed = isFileEditor(act) ? act : LAST_EDITOR
+  if (!isFileEditor(ed)) return null
   const sel = ed.selection
   const file = ed.document.uri.fsPath
   if (!sel || sel.isEmpty) return { file, label: path.basename(file) }
-  const text = ed.document.getText(sel).slice(0, 20000)
   const a = sel.start.line + 1, b = sel.end.line + (sel.end.character === 0 && sel.end.line > sel.start.line ? 0 : 1)
-  return { file, a, b, text, label: `${path.basename(file)}:${a}${b > a ? '-' + b : ''}` }
+  // the selected text is read only when it is about to be sent, not on every cursor move
+  return { file, a, b, text: withText ? ed.document.getText(sel).slice(0, 20000) : '', label: `${path.basename(file)}:${a}${b > a ? '-' + b : ''}`, sel: true }
 }
 /** What you have open and selected, in the words Claude's own panel uses; only when it changed. */
 function editorContext (id) {
   if (!cfg('chatEditorContext', true)) return []
-  const e = editorNow()
+  const e = editorNow(true)
   if (!e) return []
   const key = `${e.file}|${e.a || ''}|${e.b || ''}|${(e.text || '').length}`
   if (SENT_CTX.get(id) === key) return []
   SENT_CTX.set(id, key)
-  return [e.text
+  return [e.sel && e.text
     ? `<ide_selection>The user selected the lines ${e.a} to ${e.b} from ${e.file}:\n${e.text}\n\nThis may or may not be related to the current task.</ide_selection>`
     : `<ide_opened_file>The user opened the file ${e.file} in the IDE. This may or may not be related to the current task.</ide_opened_file>`]
 }
@@ -1676,21 +1683,32 @@ const PROBLEMS_BEFORE = new Map()     // file -> problems it had before Claude's
 const problemsOf = file => vscode.languages.getDiagnostics(vscode.Uri.file(file))
   .filter(d => d.severity === vscode.DiagnosticSeverity.Error)
   .map(d => `line ${d.range.start.line + 1}: ${d.message.split('\n')[0].slice(0, 200)}`)
-async function chatHook ({ callback, input }) {
+async function chatHook ({ id, callback, input }) {
   const ti = input.tool_input || {}
   const file = String(ti.file_path || ti.notebook_path || '')
   if (!file || !path.isAbsolute(file)) return {}
   if (callback === 'lb_save') {
     const doc = vscode.workspace.textDocuments.find(d => d.uri.scheme === 'file' && d.uri.fsPath === file)
     if (doc?.isDirty) { try { await doc.save() } catch {} }
-    if (input.tool_name !== 'Read') PROBLEMS_BEFORE.set(file, new Set(problemsOf(file)))
+    // only a file the editor has open has a language server looking at it
+    if (input.tool_name !== 'Read' && doc) {
+      PROBLEMS_BEFORE.set(`${id}|${file}`, new Set(problemsOf(file)))
+      if (PROBLEMS_BEFORE.size > 200) PROBLEMS_BEFORE.delete(PROBLEMS_BEFORE.keys().next().value)
+    }
     return {}
   }
   if (callback === 'lb_problems') {
-    // the language server needs a moment to look at the new text
-    await new Promise(r => setTimeout(r, 1500))
-    const before = PROBLEMS_BEFORE.get(file) || new Set()
-    PROBLEMS_BEFORE.delete(file)
+    const key = `${id}|${file}`
+    if (!PROBLEMS_BEFORE.has(key)) return {}
+    // the language server needs a moment to look at the new text: as long as it takes, up to 1.5s
+    const uri = vscode.Uri.file(file).toString()
+    await new Promise(r => {
+      const t = setTimeout(done, 1500)
+      const sub = vscode.languages.onDidChangeDiagnostics(e => { if (e.uris.some(u => u.toString() === uri)) setTimeout(done, 150) })
+      function done () { clearTimeout(t); sub.dispose(); r() }
+    })
+    const before = PROBLEMS_BEFORE.get(key) || new Set()
+    PROBLEMS_BEFORE.delete(key)
     const fresh = problemsOf(file).filter(p => !before.has(p)).slice(0, 12)
     if (!fresh.length) return {}
     return { hookSpecificOutput: { hookEventName: 'PostToolUse',
@@ -2194,6 +2212,8 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
                 .filter(([k]) => asked.has(String(k)))
                 .map(([k, v]) => [String(k), String(v) + pastedNote(msg.id, msg.images?.[k])])) : null,
               message: msg.message ? String(msg.message) : '',
+              stop: !!msg.stop,
+              choice: msg.choice === 'continue' ? 'continue' : 'interrupt',
             })
             break
           }
@@ -2225,7 +2245,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           }
           case 'chatFollow':
             // /clear moved a chat to a new id: open that one as soon as its file is written
-            if (/^[\w-]+$/.test(String(msg.id || ''))) followNewChat(String(msg.id), post, null)
+            if (/^[\w-]+$/.test(String(msg.id || ''))) followNewChat(String(msg.id), post, null, 120e3)
             break
           case 'chatFiles': {
             // "@" in the box: files in the chat's folder whose path has these letters
@@ -2887,9 +2907,11 @@ function activate (ctx) {
   runner.seedKnown(ctx.globalState.get('chatKnown'))
   // what you have open, for the line above the box that says what goes with your message
   ctx.subscriptions.push(
-    vscode.window.onDidChangeActiveTextEditor(ed => { if (ed) LAST_EDITOR = ed; postEditor() }),
-    vscode.window.onDidChangeTextEditorSelection(e => { LAST_EDITOR = e.textEditor; clearTimeout(EDITOR_SOON); EDITOR_SOON = setTimeout(postEditor, 250) }))
-  LAST_EDITOR = vscode.window.activeTextEditor || null
+    vscode.window.onDidChangeActiveTextEditor(ed => { if (isFileEditor(ed)) LAST_EDITOR = ed; postEditor() }),
+    vscode.window.onDidChangeTextEditorSelection(e => { if (!isFileEditor(e.textEditor)) return; LAST_EDITOR = e.textEditor; clearTimeout(EDITOR_SOON); EDITOR_SOON = setTimeout(postEditor, 250) }),
+    // a proposed edit's diff is let go of once its tab closes
+    vscode.workspace.onDidCloseTextDocument(d => { if (d.uri.scheme === DIFF_SCHEME && d.uri.path.startsWith('/proposed/')) DIFFS.delete(d.uri.toString()) }))
+  LAST_EDITOR = isFileEditor(vscode.window.activeTextEditor) ? vscode.window.activeTextEditor : null
   // and asked afresh once per window, in case skills or plugins changed since
   setTimeout(() => {
     if (DEACTIVATED || !cfg('chatHere', true)) return

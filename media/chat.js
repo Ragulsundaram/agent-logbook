@@ -38,6 +38,7 @@ const CHAT = {
   skipCtx: new Set(),    // chats whose next message goes without the editor's file
   files: new Map(),      // chat id -> attached PDFs and text files waiting to go
   thoughtOpen: new Set(), // chats whose live thinking you opened
+  stopping: new Set(),   // "chat id|task id": Stop pressed, until the task goes
   todosFold: new Map(),  // chat id -> true/false: you folded or opened its to-do list (a finished one folds by itself)
 }
 let COMPOSER = null
@@ -135,7 +136,8 @@ function setMode (c, value) {
   picksFor(c.id).mode = value
   c.mode.value = value
   send({ type: 'chatMode', id: c.id, value })
-  setCfg('chatPermissionMode', value)          // and every new chat after it
+  // and every new chat after it - except bypass, which is picked chat by chat
+  if (value !== 'bypassPermissions') setCfg('chatPermissionMode', value)
 }
 /** Shift+Tab in the box steps through the modes, as it does in Claude Code's terminal. */
 function cycleMode (c) {
@@ -391,9 +393,11 @@ function bgTask (id, t) {
     send({ type: 'chatTaskOutput', id, taskId: t.id })
     paintLive()
   }
-  const stop = el('button', 'btn', 'Stop')
+  const stopping = CHAT.stopping.has(key)
+  const stop = el('button', 'btn', stopping ? 'Stopping…' : 'Stop')
+  stop.disabled = stopping
   stop.title = 'Stops just this one. The reply and anything else running carry on'
-  stop.onclick = () => { stop.disabled = true; stop.textContent = 'Stopping…'; send({ type: 'chatTaskStop', id, taskId: t.id }) }
+  stop.onclick = () => { CHAT.stopping.add(key); send({ type: 'chatTaskStop', id, taskId: t.id }); paintLive() }
   head.append(look, stop)
   w.appendChild(head)
   // what an agent is on right now, and how far it has got
@@ -415,6 +419,17 @@ setInterval(() => {
   const bg = CHAT.state.get(COMPOSER.id)?.bg || []
   for (const t of bg) if (CHAT.taskOut.has(COMPOSER.id + '|' + t.id)) send({ type: 'chatTaskOutput', id: COMPOSER.id, taskId: t.id })
 }, 2000)
+
+/** A message that did not go (taken back, or refused): its words, pictures and files back in the box. */
+function giveBack (id, e) {
+  if (e.text) {
+    const now = CHAT.drafts.get(id) || ''
+    CHAT.drafts.set(id, now.trim() ? `${e.text}\n${now}` : e.text)
+  }
+  if (e.pics?.length) CHAT.images.set(id, [...e.pics, ...(CHAT.images.get(id) || [])].slice(0, 8))
+  if (e.docs?.length) CHAT.files.set(id, [...e.docs, ...(CHAT.files.get(id) || [])].slice(0, 8))
+  if (COMPOSER?.id === id) { COMPOSER.ta.value = CHAT.drafts.get(id) || ''; COMPOSER.fit(); paintImages(COMPOSER); paintGo(COMPOSER) }
+}
 
 const FALLBACK_WHY = {
   model_not_found: 'the model you picked is not available',
@@ -507,7 +522,7 @@ function buildComposer (id) {
   }
   go.onclick = () => {
     const st = CHAT.state.get(id)
-    if (st?.busy && !ta.value.trim() && !(CHAT.images.get(id) || []).length) send({ type: 'chatStop', id })
+    if (st?.busy && !ta.value.trim() && !(CHAT.images.get(id) || []).length && !(CHAT.files.get(id) || []).length) send({ type: 'chatStop', id })
     else submit(c)
   }
   mode.onchange = () => setMode(c, mode.value)
@@ -517,8 +532,8 @@ function buildComposer (id) {
 
 // text files Claude can read as they are, by extension when the type is not given
 const TEXT_EXT = 'txt md csv tsv json yaml yml xml html css js ts jsx tsx py rb go rs java kt swift c h cpp cs php sh sql log diff patch toml ini env conf'.split(' ')
-const MAX_PDF = 20 * 1024 * 1024
-const MAX_TEXT = 400 * 1024
+const MAX_PDF = 18 * 1024 * 1024        // the host takes up to 25 MB of base64, about 18.7 MB
+const MAX_TEXT = 390 * 1024
 /** A picture goes as a picture; a PDF or a text file is attached by name. */
 function addAny (c, file) {
   if (file.type.startsWith('image/')) return addImage(c, file)
@@ -526,7 +541,7 @@ function addAny (c, file) {
   const pdf = file.type === 'application/pdf' || ext === 'pdf'
   const text = !pdf && (file.type.startsWith('text/') || /json|xml|yaml|javascript|sql/.test(file.type) || TEXT_EXT.includes(ext))
   if (!pdf && !text) { note(c.id, `${file.name} can't be attached: only pictures, PDFs and text files can.`, true); return }
-  if (file.size > (pdf ? MAX_PDF : MAX_TEXT)) { note(c.id, `${file.name} is too big to attach (${pdf ? '20 MB' : '400 KB'} at most).`, true); return }
+  if (file.size > (pdf ? MAX_PDF : MAX_TEXT)) { note(c.id, `${file.name} is too big to attach (${pdf ? '18 MB' : '390 KB'} at most).`, true); return }
   const id = c.id
   const r = new FileReader()
   CHAT.reading.set(id, (CHAT.reading.get(id) || 0) + 1)
@@ -685,7 +700,7 @@ function submit (c, only) {
   const noContext = CHAT.skipCtx.delete(id)
   send({ type: 'chatSend', id, uuid, text, images: images.map(im => ({ mediaType: im.mediaType, data: im.data })), files, noContext, model: p.model, mode: p.mode, effort: p.effort })
   const queued = !!CHAT.state.get(id)?.busy
-  CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, uuid, images: images.length, files: files.length, pics: images, at: Date.now(), queued }])
+  CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, uuid, images: images.length, files: files.length, pics: images, docs: files, at: Date.now(), queued }])
   CHAT.notes.delete(id)
   CHAT.done.delete(id)
   const st = CHAT.state.get(id) || { id, asks: [] }
@@ -1428,6 +1443,10 @@ if (!BOARD_MODE) {
     switch (m.type) {
       case 'chatState':
         if (m.state.busy && !st.busy) CHAT.busySince.set(id, Date.now())
+        // a task that has gone takes its open output and its "Stopping…" with it
+        for (const k of [...CHAT.taskOut.keys(), ...CHAT.stopping]) {
+          if (k.startsWith(id + '|') && !(m.state.bg || []).some(t => k === id + '|' + t.id)) { CHAT.taskOut.delete(k); CHAT.stopping.delete(k) }
+        }
         CHAT.state.set(id, { ...m.state })
         if (m.state.commands?.length) CHAT.commands = m.state.commands
         if (m.state.models?.length) CHAT.models = m.state.models
@@ -1443,6 +1462,19 @@ if (!BOARD_MODE) {
           bubble.innerHTML = window.md(m.partial.text)
           word.textContent = 'Writing…'
           if (FOLLOW) stickToEnd(COMPOSER.live.parentNode)
+          return
+        }
+        // no text yet (thinking, a tool starting, an agent's step): the words change in place,
+        // and the cards, buttons and thinking you may be scrolled in are left alone
+        const p = m.partial
+        const live = COMPOSER?.id === id && COMPOSER.live
+        const w = live && !p?.text && live.querySelector('.chatworking:not(.wait) > span:nth-child(2)')
+        const agentLine = live && live.querySelector('.chatagent')
+        const thought = live && live.querySelector('.chatthinktext')
+        if (w && !live.querySelector('.chatstream') && !!agentLine === !!p?.agent && !!thought === !!p?.thought) {
+          w.textContent = busyWord(CHAT.state.get(id), p)
+          if (agentLine) agentLine.textContent = `Agent · ${p.agent}`
+          if (thought && thought.textContent !== p.thought) thought.textContent = p.thought
           return
         }
         break
@@ -1476,12 +1508,9 @@ if (!BOARD_MODE) {
         if (!e) return
         if (m.state === 'started') { e.queued = false; break }
         if (!['cancelled', 'discarded', 'refused'].includes(m.state)) return
-        // taken back: it leaves the chat and its words come back to the box
+        // taken back: it leaves the chat, and its words and attachments come back to the box
         CHAT.echo.set(id, echoes.filter(x => x !== e))
-        if (m.state === 'cancelled' && e.text && !CHAT.drafts.get(id)) {
-          CHAT.drafts.set(id, e.text)
-          if (COMPOSER?.id === id) { COMPOSER.ta.value = e.text; COMPOSER.fit(); paintGo(COMPOSER) }
-        }
+        if (m.state === 'cancelled') giveBack(id, e)
         break
       }
       case 'chatNotice':
@@ -1502,7 +1531,7 @@ if (!BOARD_MODE) {
       }
       case 'chatMoved': {
         // /clear: the chat goes on under a new id; the view follows it there
-        for (const k of ['state', 'echo', 'partial', 'notes', 'picks', 'side', 'mcp']) {
+        for (const k of ['state', 'echo', 'partial', 'notes', 'picks', 'side', 'mcp', 'drafts', 'images', 'files', 'sentLog', 'shell', 'todosFold']) {
           if (CHAT[k].has(id)) { CHAT[k].set(m.to, CHAT[k].get(id)); CHAT[k].delete(id) }
         }
         CHAT.echo.delete(m.to)
@@ -1542,23 +1571,17 @@ if (!BOARD_MODE) {
         // only the newest: earlier ones may have gone through and just not landed yet
         const echoes = CHAT.echo.get(id) || []
         const last = echoes[echoes.length - 1]
-        const lost = last?.text || ''
         if (echoes.length > 1) CHAT.echo.set(id, echoes.slice(0, -1)); else CHAT.echo.delete(id)
-        // its pictures come back too, unless a newer draft already has some
-        if (last?.pics?.length && !(CHAT.images.get(id) || []).length) CHAT.images.set(id, last.pics)
         // and the commands it carried wait for the retry rather than counting as sent
         for (const sh of CHAT.shell.get(id) || []) if (last && sh.sentWith === last.text) { sh.sentWith = null; sh.sentAt = 0 }
         CHAT.state.set(id, { ...st, busy: false })
-        if (lost && !CHAT.drafts.get(id)) {
-          CHAT.drafts.set(id, lost)
-          if (COMPOSER?.id === id) { COMPOSER.ta.value = lost; COMPOSER.fit() }
-        }
+        if (last) giveBack(id, last)
         note(id, m.error, true)
         break
       }
       default:
         return
     }
-    if (COMPOSER?.id === id) { placeLive(); paintComposer(); paintRunner?.() }
+    if (COMPOSER?.id === id) { placeLive(); paintComposer(); if (typeof paintRunner === 'function') paintRunner() }
   })
 }

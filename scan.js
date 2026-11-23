@@ -2057,6 +2057,10 @@ function agentActivity (id, agentId) {
       }
     } catch {}
   }
+  let st; try { st = fs.statSync(file) } catch { return null }
+  // asked every 2s while its Output is open: read again only once the agent has written more
+  const seen = ACTIVITY.get(file)
+  if (seen && seen.size === st.size && seen.mtime === st.mtimeMs) return seen.text
   let raw; try { raw = fs.readFileSync(file, 'utf8') } catch { return null }
   const { turns } = parseTranscript(raw, true)
   const out = []
@@ -2069,8 +2073,12 @@ function agentActivity (id, agentId) {
       if (t.text) out.push(t.text.trim(), '')
     } else if (t.role === 'user' && t.text && !out.length) out.push('Asked to: ' + t.text.replace(/\s+/g, ' ').slice(0, 200) + (t.text.length > 200 ? '…' : ''), '')
   }
-  return out.join('\n').slice(-60000)
+  const text = out.join('\n').slice(-60000)
+  ACTIVITY.set(file, { size: st.size, mtime: st.mtimeMs, text })
+  if (ACTIVITY.size > 20) ACTIVITY.delete(ACTIVITY.keys().next().value)
+  return text
 }
+const ACTIVITY = new Map()
 
 /**
  * Messages Claude Code writes into the conversation itself, under the user's
@@ -2319,7 +2327,7 @@ function parseMore (st, raw) {
         }
       }
       // file reads and listings are long and say little; commands, searches and errors are kept
-      const keep = tool.err ? 1200 : OUTPUT_TOOLS.test(tool.name) ? 2000 : 0
+      const keep = tool.err ? 800 : OUTPUT_TOOLS.test(tool.name) ? 1200 : 0
       if (keep && out) tool.out = out.length > keep ? out.slice(0, keep) + '\n…' : out
     }
 

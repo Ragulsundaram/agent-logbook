@@ -236,7 +236,7 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort, dirs, allowBypass
       let m
       try { m = JSON.parse(line) } catch { continue }
       // a Claude being let go after a newer one took the chat over is not listened to
-      if (r.stopping && RUNS.has(id) && RUNS.get(id) !== r) continue
+      if (r.stopping && RUNS.has(r.id) && RUNS.get(r.id) !== r) continue
       try { onLine(r, m) } catch {}
     }
   })
@@ -261,6 +261,8 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort, dirs, allowBypass
     clearTimeout(r.idle); clearTimeout(r.partialTimer); clearTimeout(r.expectTurn); clearTimeout(r.nextTurn); clearTimeout(r.stopCheck)
     for (const cb of r.waits.values()) { try { cb(null) } catch {} }
     r.waits.clear()
+    // the chat's id now, which /clear may have changed since it started
+    const id = r.id
     if (RUNS.get(id) === r) RUNS.delete(id)
     ENDED.set(id, Date.now())
     // a newer Claude already took this chat over (a message sent while this one
@@ -413,8 +415,14 @@ function onLine (r, m) {
         // Claude's own word on whether it is working: idle is the end of everything you sent
         r.sse = true
         r.cliState = String(m.state || '')
-        if (m.state === 'idle') turnOver(r)
-        else if (!r.busy) { r.busy = true; emit(r.id, { type: 'chatState', state: state(r.id) }); OPTS.onChange(r.id) }
+        if (m.state === 'idle') {
+          // a message written a moment ago has not been read yet: Claude is about to start on it
+          if (!r.lastResult && Date.now() - (r.sentAt || 0) < 1500) return
+          turnOver(r)
+        } else {
+          if (m.state === 'running' && !r.busy) r.lastResult = null
+          if (!r.busy) { r.busy = true; emit(r.id, { type: 'chatState', state: state(r.id) }); OPTS.onChange(r.id) }
+        }
       } else if (m.subtype === 'api_retry') {
         r.retry = { attempt: Number(m.attempt) || 0, max: Number(m.max_retries) || 0, at: Date.now() + (Number(m.retry_delay_ms) || 0), why: String(m.error || m.error_status || '').slice(0, 200) }
         emit(r.id, { type: 'chatState', state: state(r.id) })
@@ -717,6 +725,7 @@ function send (id, args) {
   })
   r.pending++
   r.busy = true
+  r.sentAt = Date.now()
   // a reply that just ended was waiting to see whether more was coming: this is
   // more, and its own turn will settle it, so the wait must not end it first
   clearTimeout(r.nextTurn); r.nextTurn = null
@@ -771,7 +780,8 @@ function interrupt (id) {
   // a view that thought it was working when nothing was hears otherwise at once
   if (!r.busy) emit(r.id, { type: 'chatDone', ms: 0, error: '', stopped: true })
   clearTimeout(r.stopCheck)
-  r.stopCheck = setTimeout(() => settle(r, true), 3000)
+  // an older Claude that does not report its state: assume it stopped after 3s
+  if (!r.sse) r.stopCheck = setTimeout(() => settle(r, true), 3000)
 }
 
 /** Stop one background agent or command; the reply and the others carry on. */
@@ -808,9 +818,13 @@ function setModel (id, model) {
 function setMode (id, mode) {
   const r = RUNS.get(id)
   if (!r) return
-  r.mode = mode
-  control(r, { subtype: 'set_permission_mode', mode: mode || 'default' })
-  emit(id, { type: 'chatState', state: state(id) })
+  // shown only once Claude has taken it: a mode it refuses must not look switched on
+  control(r, { subtype: 'set_permission_mode', mode: mode || 'default' }, res => {
+    if (RUNS.get(r.id) !== r) return
+    if (res) r.mode = mode
+    else emit(r.id, { type: 'chatNotice', text: `Claude did not switch to that mode${mode === 'bypassPermissions' ? ': a chat started before "Skip permission prompts" was on cannot bypass them. Start a new chat for it' : ''}.` })
+    emit(r.id, { type: 'chatState', state: state(r.id) })
+  })
 }
 
 /**
