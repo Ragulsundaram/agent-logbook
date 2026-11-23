@@ -2251,7 +2251,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               // taken back before Claude read it: its editor context goes with the next message instead
               const c = CTX_OF.get(uuid)
               if (ok && c && SENT_CTX.get(c.id) === c.key) SENT_CTX.delete(c.id)
-              CTX_OF.delete(uuid)
+              if (ok) CTX_OF.delete(uuid)
               post({ type: 'chatQueue', id, uuid, state: ok ? 'cancelled' : 'notcancelled' })
             })
             break
