@@ -1640,7 +1640,8 @@ function chatSend (msg, post) {
     // not taken (Claude had stopped): keep everything for the retry, editor context too
     if (!runner.send(id, opts)) return
     // sent: the same file and selection are not sent again until they change
-    if (ctxNow) SENT_CTX.set(id, ctxNow.key)
+    if (ctxNow) { SENT_CTX.set(id, ctxNow.key); CTX_OF.set(opts.uuid, { id, key: ctxNow.key }) }
+    if (CTX_OF.size > 200) CTX_OF.delete(CTX_OF.keys().next().value)
     dropShell(id, shell.n)
     NEW_CHATS.delete(id)
     clearCutoff(id)
@@ -1654,6 +1655,7 @@ function chatSend (msg, post) {
 let LAST_EDITOR = null
 let EDITOR_SOON = null
 const SENT_CTX = new Map()        // chat id -> the editor context last sent with it, so it is not repeated
+const CTX_OF = new Map()          // message id -> the context it carried, forgotten if the message is taken back
 const isFileEditor = ed => !!ed && !ed.document.isClosed && ed.document.uri.scheme === 'file'
 function editorNow (withText) {
   const act = vscode.window.activeTextEditor
@@ -1960,6 +1962,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           }
           case 'closed':
             WATCH?.setOpen(post, null)
+            SHOWING.delete(post)          // back to the list: no chat is on screen in this view
             break
           case 'stats':
             {
@@ -2244,7 +2247,13 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           }
           case 'chatCancelQueued': {
             const id = String(msg.id || ''), uuid = String(msg.uuid || '')
-            runner.cancelQueued(id, uuid, ok => post({ type: 'chatQueue', id, uuid, state: ok ? 'cancelled' : 'notcancelled' }))
+            runner.cancelQueued(id, uuid, ok => {
+              // taken back before Claude read it: its editor context goes with the next message instead
+              const c = CTX_OF.get(uuid)
+              if (ok && c && SENT_CTX.get(c.id) === c.key) SENT_CTX.delete(c.id)
+              CTX_OF.delete(uuid)
+              post({ type: 'chatQueue', id, uuid, state: ok ? 'cancelled' : 'notcancelled' })
+            })
             break
           }
           case 'chatSide': {
