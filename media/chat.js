@@ -416,23 +416,6 @@ setInterval(() => {
   for (const t of bg) if (CHAT.taskOut.has(COMPOSER.id + '|' + t.id)) send({ type: 'chatTaskOutput', id: COMPOSER.id, taskId: t.id })
 }, 2000)
 
-/**
- * Under a message you sent: undo the file edits Claude made after it. Asked
- * first what it would change, and done only once you say so.
- */
-window.chatRewindButton = (id, uuid) => {
-  if (!chatOn() || CUR?.provider === 'codex') return null
-  const b = el('button', 'msgact')
-  b.appendChild(icon('undo'))
-  b.title = 'Undo the file edits Claude made after this message'
-  b.onclick = e => {
-    e.stopPropagation()
-    note(id, 'Checking what would change…', false)
-    send({ type: 'chatRewind', id, uuid, dry: true })
-  }
-  return b
-}
-
 const FALLBACK_WHY = {
   model_not_found: 'the model you picked is not available',
   permission_denied: 'your account cannot use the model you picked',
@@ -1542,16 +1525,6 @@ if (!BOARD_MODE) {
       case 'chatMcpList':
         CHAT.mcp.set(id, m.list || [])
         break
-      case 'chatRewound': {
-        const r = m.res
-        if (!r || r.error || r.ok === false) { note(id, r?.error ? `Couldn't undo: ${r.error}` : 'Couldn\'t undo the edits after that message.', true); break }
-        if (m.dry) {
-          if (!r.files) { note(id, r.missing ? 'Claude no longer has copies of the files it edited after that message, so they can\'t be put back.' : 'Nothing was edited after that message.', false); break }
-          note(id, `Undo the edits made after that message? ${r.files} file${r.files === 1 ? '' : 's'}${r.adds || r.dels ? ` (+${r.adds} −${r.dels})` : ''} go back to how they were. The chat itself stays as it is.`, false,
-            { label: 'Undo them', msg: { type: 'chatRewind', uuid: m.uuid, dry: false } })
-        } else note(id, `Undone: ${r.files || 'the'} file${r.files === 1 ? '' : 's'} are back to how they were before that message.`, false)
-        break
-      }
       case 'chatAuth':
         note(id, 'Claude is signed out, or its sign-in has expired. Sign in again, then send your message again.', true,
           { label: 'Sign in again', msg: { type: 'chatLogin' } })

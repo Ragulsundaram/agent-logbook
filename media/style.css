@@ -1706,8 +1706,4 @@ body[data-chat] .dback, body[data-chat] .newinchat { display: none !important }
 .mcprow.bad .mcpdot { background: var(--vscode-errorForeground) }
 /* a question's choice with a preview */
 .caskpreview { margin-top: 6px; font-size: 12px; text-align: left }
-/* small actions beside "You · 9:33" */
-.msgact { border: 0; background: none; padding: 2px; cursor: pointer; color: var(--vscode-descriptionForeground); opacity: 0; display: inline-grid; place-items: center }
-.msg:hover .msgact, .msgact:focus-visible { opacity: .8 }
-.msgact svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round }
 .bgtask .bgnow { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }

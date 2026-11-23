@@ -200,8 +200,6 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort, dirs, allowBypass
   env.MCP_CONNECTION_NONBLOCKING = 'true'
   // a Claude that cannot start says why, as a result, rather than just quitting
   env.CLAUDE_CODE_STARTUP_FAILURE_RESULTS = '1'
-  // checkpoints of edited files, so a turn's edits can be undone
-  env.CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING = '1'
   // a question's choices can carry a preview, drawn as markdown
   env.CLAUDE_CODE_QUESTION_PREVIEW_FORMAT = 'markdown'
   delete env.CLAUDE_CODE_CHILD_SESSION
@@ -855,21 +853,6 @@ function setThinking (id, on) {
   return true
 }
 
-/** Start Claude on a chat without sending anything, for something only it can do (undo). */
-function wake (id, opts) {
-  if (RUNS.has(id)) return true
-  if (STOPPING.has(id)) return false
-  start(id, opts)
-  return true
-}
-
-/** Undo the file edits made since a message. dry: only say what would change. */
-function rewind (id, messageId, dry, done) {
-  const r = RUNS.get(id)
-  if (!r) return done(null)
-  control(r, { subtype: 'rewind_files', user_message_id: messageId, dry_run: !!dry }, res => done(res), 30000)
-}
-
 /** The MCP servers this chat has, and whether each is connected. */
 function mcpStatus (id, done) {
   const r = RUNS.get(id)
@@ -913,4 +896,4 @@ const askOf = (id, requestId) => RUNS.get(id)?.asks.get(requestId) || null
 /** The folder Claude runs in for this chat, when it runs here. */
 const cwdOf = id => RUNS.get(id)?.cwd || ''
 
-module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, rewind, wake, mcpStatus, setModel, setMode, setEffort, stop, stopAll, markEnded }
+module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, mcpStatus, setModel, setMode, setEffort, stop, stopAll, markEnded }

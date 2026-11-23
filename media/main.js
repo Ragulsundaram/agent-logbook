@@ -106,7 +106,6 @@ const ICONS = {
   reload: ['M20 12a8 8 0 1 1-2.4-5.7', 'M20 4v4.5h-4.5'],
   export: ['M12 15V4', 'M8.2 7.8 12 4l3.8 3.8', 'M4.5 14.5v4A1.5 1.5 0 0 0 6 20h12a1.5 1.5 0 0 0 1.5-1.5v-4'],
   history: ['M3.6 12a8.4 8.4 0 1 0 2.6-6', 'M3.6 4.5V9H8', 'M12 7.6V12l3 1.9'],
-  undo: ['M9 14 4 9l5-5', 'M4 9h10.5a5.5 5.5 0 0 1 0 11H11'],
   compact: ['M4 8.5 12 4l8 4.5', 'M4 15.5 12 20l8-4.5', 'M8.5 12h7'],
   layout: ['M4 5h16v14H4z', 'M14 5v14', 'M14 12h6'],
   gear: ['M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z',
@@ -115,7 +114,7 @@ const ICONS = {
     'M12 5.5v3', 'M12 3.2a1.2 1.2 0 1 0 0 .1', 'M9.5 12.5v1.5', 'M14.5 12.5v1.5',
     'M2.5 12.5V15', 'M21.5 12.5V15'],
 }
-const OUTLINE = new Set(['undo', 'shield', 'info', 'find', 'eye', 'scan', 'diff', 'bell', 'pulse', 'folder', 'chevron', 'terminal', 'desktop', 'vscode',
+const OUTLINE = new Set(['shield', 'info', 'find', 'eye', 'scan', 'diff', 'bell', 'pulse', 'folder', 'chevron', 'terminal', 'desktop', 'vscode',
   'pencil', 'split', 'open', 'copy', 'fork', 'chart', 'reload', 'export',
   'history', 'compact', 'dots', 'message', 'card', 'calendar', 'book', 'plus', 'list', 'brief',
   'agent', 'gear', 'layout', 'close', 'check'])
@@ -1166,9 +1165,7 @@ function collapse (turns) {
       continue
     }
     out.push({ role: t.role, text: t.text, tools: [...t.tools],
-      images: [...(t.images || [])], edits: [...(t.edits || [])], ts: t.ts,
-      // a message you sent keeps its id: the undo under it needs it
-      ...(t.uuid ? { uuid: t.uuid } : {}) })
+      images: [...(t.images || [])], edits: [...(t.edits || [])], ts: t.ts })
   }
   return out.filter(t => t.text || t.tools.length || t.images.length || t.edits.length)
 }
@@ -1452,11 +1449,6 @@ function renderBlocks (t, blocks, from, body, to = blocks.length, before = null)
       const who = el('span', 'whot', (turn.role === 'user' ? 'You' : 'Claude') + (turn.ts ? ' · ' + msgClock(turn.ts) : ''))
       if (turn.ts) who.title = clock(turn.ts)
       when.appendChild(who)
-      // a message you sent: the file edits Claude made after it can be undone
-      if (turn.role === 'user' && turn.uuid && window.chatRewindButton) {
-        const rb = window.chatRewindButton(t.id, turn.uuid)
-        if (rb) when.appendChild(rb)
-      }
       w.appendChild(when)
       run = []
     }
