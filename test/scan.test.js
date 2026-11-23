@@ -5,7 +5,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { textOf, activityOf } = require('../scan.js')
-const msg = (...texts) => ({ message: { role: 'user', content: texts.map(text => ({ type: 'text', text })) } })
+const msg = (...texts) => ({ entrypoint: 'sdk-cli', message: { role: 'user', content: texts.map(text => ({ type: 'text', text })) } })
 
 test('hides the editor context and attachments the logbook sends beside a message', () => {
   const ctx = '<ide_selection>The user selected the lines 1 to 2 from /tmp/a.js:\nconst a = 1\n\nThis may or may not be related to the current task.</ide_selection>'
@@ -93,4 +93,25 @@ test('an attachment-shaped block from another client is left as written', () => 
   assert.equal(textOf(other), block + '\nsee above')
   const here = { ...other, entrypoint: 'sdk-cli' }
   assert.equal(textOf(here), '📎 example.txt\nsee above')
+  const unknown = { type: 'user', message: other.message }
+  assert.equal(textOf(unknown), block + '\nsee above')
+})
+
+test("an agent's output keeps a recent failure even with another step between it and its far-back call", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lb-agent-'))
+  const file = path.join(dir, 'agent-test.jsonl')
+  const L = o => JSON.stringify(o)
+  const filler = n => Array.from({ length: n }, (_, k) => L({ type: 'user', isMeta: true, message: { role: 'user', content: 'note ' + k + ' ' + 'y'.repeat(4000) } }))
+  fs.writeFileSync(file, [
+    L({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_far', name: 'Bash', input: { command: 'make build' } }] } }),
+    ...filler(300),
+    L({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'still waiting on the build' }] } }),
+    ...filler(20),
+    L({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_far', is_error: true, content: 'build broke' }] } }),
+  ].join('\n') + '\n')
+  try {
+    const out = activityOf(file)
+    assert.match(out, /› Bash: make build {2}\(failed\)/)
+    assert.match(out, /build broke/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })

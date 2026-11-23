@@ -120,7 +120,7 @@ const textOf = m => {
   // block is always yours, whatever it looks like, and Claude's replies are left as written
   const mine = (m?.type || m?.message?.role) === 'user'
   // the logbook runs Claude through its SDK mode, which records itself as sdk-cli
-  const fromHere = !m?.entrypoint || m.entrypoint === 'sdk-cli'
+  const fromHere = m?.entrypoint === 'sdk-cli'
   const texts = blocks.map((t, i) => { const k = mine && i < blocks.length - 1 ? sentBlock(t, fromHere) : null; return k === null ? t : k }).filter(Boolean)
   return clean(texts.join('\n'))
 }
@@ -2114,10 +2114,12 @@ function activityOf (file) {
       const s = buf.toString('utf8')
       const i = s.indexOf('\n')
       raw = i < 0 ? '' : s.slice(i + 1)              // from the first whole line
-      // start at a step Claude took, never at a result whose call was cut off: every
-      // result read then has its call, and a failure near the end shows as one
+      // every result read must have its call in the window too, or a failure near the end
+      // could not be shown as one: read further back until none is missing its call
+      const calls = new Set([...raw.matchAll(/"id":"([\w-]+)"/g)].map(x => x[1]))
+      const orphan = [...raw.matchAll(/"tool_use_id":"([\w-]+)"/g)].some(x => !calls.has(x[1]))
       const a = raw.search(/^.*"type":"assistant"/m)
-      if (a >= 0) { raw = raw.slice(a); break }
+      if (a >= 0 && !orphan) { raw = raw.slice(a); break }
       win *= 4
     }
   } catch { return null }
