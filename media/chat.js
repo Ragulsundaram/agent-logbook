@@ -396,8 +396,12 @@ function bgTask (id, t) {
   stop.onclick = () => { stop.disabled = true; stop.textContent = 'Stopping…'; send({ type: 'chatTaskStop', id, taskId: t.id }) }
   head.append(look, stop)
   w.appendChild(head)
+  // what an agent is on right now, and how far it has got
+  if (t.now || t.steps) w.appendChild(el('div', 'chatmeta bgnow', [t.now, t.steps ? `${t.steps} step${t.steps === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')))
   if (out) {
-    const text = out.loading && !out.output ? 'Loading…' : out.output || (out.failed ? 'Its output could not be read.' : 'Nothing printed yet.')
+    const agent = /agent/i.test(t.kind)
+    const text = out.loading && !out.output ? 'Loading…' : out.output ||
+      (out.failed ? (agent ? 'Nothing recorded yet: the agent is just starting.' : 'Its output could not be read.') : agent ? 'No steps yet.' : 'Nothing printed yet.')
     const pre = el('pre', 'shout', (out.truncated ? '…' : '') + (text.length > 20000 ? '…' + text.slice(-20000) : text))
     w.appendChild(pre)
     pre.onscroll = () => { out.top = pre.scrollHeight - pre.scrollTop - pre.clientHeight > 8 ? pre.scrollTop : null }

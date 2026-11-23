@@ -131,7 +131,7 @@ function state (id) {
     hooks: !!r?.hooksRunning,
     context: r?.context ?? null,
     thinking: r ? r.thinkingOn !== false : true,
-    bg: r ? r.bg.map(t => ({ id: t.id, what: t.what, kind: t.kind })) : [],
+    bg: r ? r.bg.map(t => ({ id: t.id, what: t.what, kind: t.kind, now: t.now || '', steps: t.steps || 0 })) : [],
     status: r?.status || '',
     todos: r?.todos || [],
     partial: r ? partialOf(r) : null,
@@ -439,12 +439,22 @@ function onLine (r, m) {
         emit(r.id, { type: 'chatState', state: state(r.id), actualModel: r.actualModel })
       } else if (m.subtype === 'background_tasks_changed') {
         // the reply can end while agents or commands it started keep going
+        const was = new Map(r.bg.map(t => [t.id, t]))
         r.bg = (Array.isArray(m.tasks) ? m.tasks : []).map(t => ({
           id: String(t.task_id || ''), what: String(t.description || '').slice(0, 120), kind: String(t.task_type || ''),
+          // what an agent is doing now carries over until its next progress report
+          now: was.get(String(t.task_id || ''))?.now || '', steps: was.get(String(t.task_id || ''))?.steps || 0,
         }))
         emit(r.id, { type: 'chatState', state: state(r.id) })
         OPTS.onChange(r.id)
         if (!r.bg.length && !r.busy && r.restart) { r.restart = false; stop(r.id) }
+      } else if (m.subtype === 'task_progress') {
+        // an agent at work: the step it is on, so its card is never a silent box
+        const t = r.bg.find(x => x.id === String(m.task_id || ''))
+        if (!t) return
+        t.now = String(m.description || '').slice(0, 160)
+        t.steps = Number(m.usage?.tool_uses) || t.steps
+        emit(r.id, { type: 'chatState', state: state(r.id) })
       } else if (m.subtype === 'task_notification') {
         // Claude says for itself whether it takes the result up in a turn: a
         // stopped task, for one, starts none, and must not show "working"
@@ -777,7 +787,13 @@ function stopTask (id, taskId) {
 /** What a background agent or command has printed so far. */
 function taskOutput (id, taskId, done) {
   const r = RUNS.get(id)
-  if (!r || !r.bg.some(t => t.id === taskId)) return done(null)
+  const t = r?.bg.find(x => x.id === taskId)
+  if (!t) return done(null)
+  // an agent has no output stream: its work is read from its own record
+  if (/agent/i.test(t.kind)) {
+    if (!OPTS.agentOutput) return done(null)
+    return OPTS.agentOutput(r.id, taskId).then(text => done(text == null ? null : { output: text, truncated: false }), () => done(null))
+  }
   control(r, { subtype: 'get_task_output', task_id: taskId }, res => done(res && {
     output: String(res.output || ''), truncated: !!res.truncated,
   }))

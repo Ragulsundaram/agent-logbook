@@ -2037,6 +2037,42 @@ function agentTranscript (id, agentId) {
 }
 
 /**
+ * A background agent's work so far, as plain lines: each step it took, a few
+ * lines of what that step printed, and what it wrote. What the Output button
+ * on an agent's card shows while it runs; its own record is the only place
+ * this lives, as Claude has no output stream for an agent.
+ */
+function agentActivity (id, agentId) {
+  if (!/^[\w-]+$/.test(String(id)) || !/^[\w-]+$/.test(String(agentId))) return null
+  let file = null
+  const rec = index().find(s => s.id === id)
+  if (rec) file = path.join(agentDir(rec.file), `agent-${agentId}.jsonl`)
+  else {
+    // a chat started a moment ago may not be listed yet: its folder is named after it
+    const root = path.join(HOME, '.claude', 'projects')
+    try {
+      for (const d of fs.readdirSync(root)) {
+        const f = path.join(root, d, id, 'subagents', `agent-${agentId}.jsonl`)
+        if (fs.existsSync(f)) { file = f; break }
+      }
+    } catch {}
+  }
+  let raw; try { raw = fs.readFileSync(file, 'utf8') } catch { return null }
+  const { turns } = parseTranscript(raw, true)
+  const out = []
+  for (const t of turns) {
+    if (t.role === 'assistant') {
+      for (const x of t.tools) {
+        out.push(`› ${x.name}${x.detail ? ': ' + String(x.detail).split('\n')[0].slice(0, 160) : ''}${x.err ? '  (failed)' : ''}`)
+        if (x.out) out.push(...x.out.split('\n').slice(0, 6).map(l => '    ' + l.slice(0, 200)))
+      }
+      if (t.text) out.push(t.text.trim(), '')
+    } else if (t.role === 'user' && t.text && !out.length) out.push('Asked to: ' + t.text.replace(/\s+/g, ' ').slice(0, 200) + (t.text.length > 200 ? '…' : ''), '')
+  }
+  return out.join('\n').slice(-60000)
+}
+
+/**
  * Messages Claude Code writes into the conversation itself, under the user's
  * name: a background agent reporting that it finished, or another Claude
  * session passing something on. They are recorded as user turns but were never
@@ -2997,5 +3033,5 @@ try {
 } catch {}
 
 module.exports = {
-  writePrivate, mkdirPrivate, board, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
+  writePrivate, mkdirPrivate, board, agentActivity, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
   readOnlyCache, saveCacheNow, groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME }

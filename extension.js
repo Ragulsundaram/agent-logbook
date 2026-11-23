@@ -2882,6 +2882,8 @@ function activate (ctx) {
       if (m.type === 'chatAsk') askAlert(m)
     },
     onHook: chatHook,
+    // a background agent's Output: its steps so far, from its own record
+    agentOutput: (id, agentId) => chatCall('agentActivity', id, agentId),
     onWrite: id => WATCH?.poke(id),
     // started, finished or waiting on you: the list and the board show it now
     // what the logbook's own Claude is doing is known here: no need to ask the CLI

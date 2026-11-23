@@ -12,7 +12,7 @@ scan.readOnlyCache()          // the extension keeps the chat-list cache; this t
 // read the chat list once at start, so the first chat opened does not wait for it
 try { scan.index() } catch {}
 
-const CALLS = new Set(['transcript', 'transcriptQuick', 'agentTranscript', 'imageAt', 'editAt'])
+const CALLS = new Set(['transcript', 'transcriptQuick', 'agentTranscript', 'agentActivity', 'imageAt', 'editAt'])
 
 parentPort.on('message', msg => {
   if (!msg || !CALLS.has(msg.fn)) return
