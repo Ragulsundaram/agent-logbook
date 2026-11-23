@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.11.0
+
+- A chat that is idle in a terminal or another app can be continued here, not only as a copy. Its Claude is stopped first, and only once it is checked to be idle.
+- Running chats pick up changes to your MCP servers, and /mcp, /btw and /thinking work on an older chat before you send it anything.
+- Chatting from the logbook needs a trusted folder. In Restricted Mode the message box stays off and reading chats still works, and a chat's folder must be one of the window's folders or one you already trusted in Claude.
+- The chat settings are yours alone: a folder's own settings file cannot change them. Claude asks before saving a file outside the chat's folders.
+- Menus stay open while Claude is replying, and scrolling up no longer gets pulled back down. Chats running here no longer show the walking figure or a gap.
+- The usage notice shows once per chat.
+- Improved security.
+
 ## 1.10.0
 
 - Background commands and agents each get a card while they run, working or not: Output shows what a command printed or the steps an agent has taken so far, and Stop ends just that one. An agent's card says what it is doing now. An agent's report shows as one line with the report folded under it.
