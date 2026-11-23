@@ -71,3 +71,18 @@ test("an agent's output keeps a recent failure whose call is far back", () => {
     assert.match(out, /build broke/)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
+
+test("a whole agent file in another script is not marked as cut short", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lb-agent-'))
+  const file = path.join(dir, 'agent-test.jsonl')
+  const L = o => JSON.stringify(o)
+  fs.writeFileSync(file, [
+    L({ type: 'user', message: { role: 'user', content: 'Résumé der Änderungen 日本語' } }),
+    L({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Fertig: 完了' }] } }),
+  ].join('\n') + '\n')
+  try {
+    const out = activityOf(file)
+    assert.doesNotMatch(out, /earlier steps left out/)
+    assert.match(out, /完了/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})

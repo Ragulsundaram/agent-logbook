@@ -2098,10 +2098,11 @@ function activityOf (file) {
   // only the end is shown, so only the end is read: a long-running agent's record can be
   // large. The window grows until it holds a whole step - the call and what it returned -
   // so one huge last result (a long failing command's output) is never all that is read
-  let raw = '', win = 512 * 1024
+  let raw = '', win = 512 * 1024, cut = false
   try {
     for (;;) {
-      if (win >= st.size) { raw = fs.readFileSync(file, 'utf8'); break }
+      if (win >= st.size) { raw = fs.readFileSync(file, 'utf8'); cut = false; break }
+      cut = true
       const fd = fs.openSync(file, 'r')
       const buf = Buffer.alloc(win)
       fs.readSync(fd, buf, 0, win, st.size - win)
@@ -2116,7 +2117,6 @@ function activityOf (file) {
       win *= 4
     }
   } catch { return null }
-  const cut = raw.length < st.size
   const { turns } = parseTranscript(raw, true)
   const out = cut ? ['… earlier steps left out', ''] : []
   for (const t of turns) {
