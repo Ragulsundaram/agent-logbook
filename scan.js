@@ -2177,6 +2177,7 @@ function parseStart (keepSidechain) {
   return {
     keepSidechain, turns: [], byFile: new Map(), cacheRead: 0, readable: 0, model: '',
     toolIdx: new Map(),        // tool_use id -> its tool, so the result that follows can be pinned on it
+    editIdx: new Map(),        // tool_use id -> the edit it made, taken back if the edit was refused or failed
     // the footer numbers: context used, cache efficiency, turns, and files touched
     info: { series: [], context: 0, window: 2e5, cachePct: 0, turns: 0, files: [] },
   }
@@ -2306,6 +2307,17 @@ function parseMore (st, raw) {
       st.toolIdx.delete(b.tool_use_id)
       const out = toolOutput(b.content)
       tool.err = !!b.is_error
+      // an edit that was refused or failed changed nothing: it leaves the changes lists
+      const ed = st.editIdx?.get(b.tool_use_id)
+      st.editIdx?.delete(b.tool_use_id)
+      if (ed && b.is_error) {
+        ed.turn.edits = ed.turn.edits.filter(x => x !== ed.edit)
+        const f = byFile.get(ed.file)
+        if (f) {
+          f.edits--; f.adds -= ed.d.adds; f.dels -= ed.d.dels
+          if (f.edits <= 0) byFile.delete(ed.file)
+        }
+      }
       // file reads and listings are long and say little; commands, searches and errors are kept
       const keep = tool.err ? 1200 : OUTPUT_TOOLS.test(tool.name) ? 2000 : 0
       if (keep && out) tool.out = out.length > keep ? out.slice(0, keep) + '\n…' : out
@@ -2338,9 +2350,14 @@ function parseMore (st, raw) {
       .map(b => ({ src: `data:${b.source.media_type || 'image/png'};base64,${b.source.data}` }))
       .concat(shots)
     if ((!text || JUNK.test(text)) && !tools.length && !images.length) continue
-    turns.push({ role: e.type, text: JUNK.test(text) ? '' : text, tools, images, edits, ts: e.timestamp || '',
+    const turn = { role: e.type, text: JUNK.test(text) ? '' : text, tools, images, edits, ts: e.timestamp || '',
       // a message you sent keeps its id: edits made since it can be undone
-      ...(e.type === 'user' && e.uuid ? { uuid: e.uuid } : {}) })
+      ...(e.type === 'user' && e.uuid ? { uuid: e.uuid } : {}) }
+    turns.push(turn)
+    // each edit remembers its call, so a refusal that comes back later can take it off again
+    blocksOf(e).filter(b => b?.type === 'tool_use' && EDITS.includes(b.name) && (b.input?.file_path || b.input?.notebook_path))
+      .forEach((b, k) => { if (b.id && edits[k]) st.editIdx?.set(b.id, { turn, edit: edits[k], file: edits[k].path, d: { adds: edits[k].adds, dels: edits[k].dels } }) })
+    if (st.editIdx?.size > 400) for (const k of [...st.editIdx.keys()].slice(0, 200)) st.editIdx.delete(k)
   }
   st.cacheRead = cacheRead; st.readable = readable
 }

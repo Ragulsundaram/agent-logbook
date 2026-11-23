@@ -1165,7 +1165,9 @@ function collapse (turns) {
       continue
     }
     out.push({ role: t.role, text: t.text, tools: [...t.tools],
-      images: [...(t.images || [])], edits: [...(t.edits || [])], ts: t.ts })
+      images: [...(t.images || [])], edits: [...(t.edits || [])], ts: t.ts,
+      // a message you sent keeps its id: the undo under it needs it
+      ...(t.uuid ? { uuid: t.uuid } : {}) })
   }
   return out.filter(t => t.text || t.tools.length || t.images.length || t.edits.length)
 }
@@ -2529,7 +2531,10 @@ const isBusy = id => SESSIONS.find(x => x.id === id)?.live === 'busy'
 function paintRunner () {
   const foot = $('#detail .foot')
   if (!foot || !CUR) return
-  const busy = isBusy(CUR.id)
+  // a chat running in the logbook has its own status line under the reply: the
+  // walking figure is for chats running somewhere else
+  const here = typeof whereRunning === 'function' && whereRunning(CUR.id) === 'here'
+  const busy = isBusy(CUR.id) && !here
   const strip = foot.querySelector('.runstrip')
   if (busy && !strip) foot.prepend(runnerStrip())
   if (!busy && strip) strip.remove()

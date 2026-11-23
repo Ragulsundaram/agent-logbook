@@ -1587,6 +1587,6 @@ if (!BOARD_MODE) {
       default:
         return
     }
-    if (COMPOSER?.id === id) { placeLive(); paintComposer() }
+    if (COMPOSER?.id === id) { placeLive(); paintComposer(); paintRunner?.() }
   })
 }
