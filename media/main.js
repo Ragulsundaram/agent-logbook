@@ -3436,6 +3436,9 @@ window.addEventListener('message', e => {
 // a wider or taller panel should fill itself too
 new ResizeObserver(() => { if ($('#detail').hidden) fillViewport() }).observe($('#rows'))
 
+// a memory's type comes from its frontmatter and becomes a class name: one plain word or none
+const memClass = t => /^[a-z]{1,20}$/.test(t) ? 'memtype ' + t : 'memtype'
+
 /**
  * A copy carries two versions, the way a browser's own copy does (and Claude's app):
  * plain words, with no Markdown marks, for a plain text box; and the formatted
@@ -3482,6 +3485,9 @@ function richHtml (html) {
 
 /** A rendered message as plain words: no ** or _ marks, links as their text, one line per list item. */
 function plainText (host) {
+  // a code block is copied exactly as it is - its indentation and blank lines are the point -
+  // so it is set aside while the prose around it is tidied, and put back after
+  const code = []
   const walk = node => {
     if (node.nodeType === 3) return node.nodeValue
     const tag = node.nodeName.toLowerCase()
@@ -3492,13 +3498,15 @@ function plainText (host) {
     // from the formatted copy, as a browser's own copy (and Claude's app) leaves them out
     if (tag === 'li') return inner.trim() + '\n'
     if (tag === 'br') return '\n'
-    if (['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'ul', 'ol', 'table', 'tr'].includes(tag)) {
+    if (tag === 'pre') { code.push(node.textContent.replace(/\n$/, '')); return `\n\n\u0000${code.length - 1}\u0000\n\n` }
+    if (['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'ul', 'ol', 'table', 'tr'].includes(tag)) {
       return inner.trim() + '\n\n'
     }
     if (tag === 'td' || tag === 'th') return inner.trim() + '\t'
     return inner
   }
   return walk(host).replace(/\t\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+    .replace(/\u0000(\d+)\u0000/g, (_, i) => code[+i])
 }
 
 /** The copy button's text, from the Markdown Claude wrote: the same two versions as a selection. */
@@ -3564,6 +3572,9 @@ document.addEventListener('copy', e => {
     const kind = (anc.nodeType === 3 ? anc.parentElement : anc).closest('ol, ul')?.nodeName.toLowerCase() || 'ul'
     const list = document.createElement(kind)
     for (const n of [...host.childNodes]) list.appendChild(n)
+    // part of a numbered list starts at the number its first item had on the page
+    const first = list.querySelector(':scope > li')?.dataset.copyN
+    if (kind === 'ol' && Number(first) > 1) list.setAttribute('start', first)
     host.appendChild(list)
   }
 
