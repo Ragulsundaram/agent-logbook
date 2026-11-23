@@ -114,9 +114,10 @@ const textOf = m => {
   if (typeof c === 'string') return clean(c)
   if (!Array.isArray(c)) return ''
   const blocks = c.filter(b => b?.type === 'text').map(b => String(b.text || ''))
-  // the logbook sends its blocks before your words, so the last block is always yours,
-  // whatever it looks like; only blocks before it can be the logbook's
-  const texts = blocks.map((t, i) => { const k = i < blocks.length - 1 ? sentBlock(t) : null; return k === null ? t : k }).filter(Boolean)
+  // only a message you sent carries the logbook's blocks, and before your words: the last
+  // block is always yours, whatever it looks like, and Claude's replies are left as written
+  const mine = (m?.type || m?.message?.role) === 'user'
+  const texts = blocks.map((t, i) => { const k = mine && i < blocks.length - 1 ? sentBlock(t) : null; return k === null ? t : k }).filter(Boolean)
   return clean(texts.join('\n'))
 }
 const blocksOf = m => {
@@ -2085,26 +2086,36 @@ function agentActivity (id, agentId) {
       }
     } catch {}
   }
+  return file ? activityOf(file) : null
+}
+
+/** The activity lines for one agent file. */
+function activityOf (file) {
   let st; try { st = fs.statSync(file) } catch { return null }
   // asked every 2s while its Output is open: read again only once the agent has written more
   const seen = ACTIVITY.get(file)
   if (seen && seen.size === st.size && seen.mtime === st.mtimeMs) return seen.text
-  // only the end is shown, so only the end is read: a long-running agent's record can be large
-  const TAIL = 512 * 1024
-  let raw
+  // only the end is shown, so only the end is read: a long-running agent's record can be
+  // large. The window grows until it holds a whole step - the call and what it returned -
+  // so one huge last result (a long failing command's output) is never all that is read
+  let raw = '', win = 512 * 1024
   try {
-    if (st.size <= TAIL) raw = fs.readFileSync(file, 'utf8')
-    else {
+    for (;;) {
+      if (win >= st.size) { raw = fs.readFileSync(file, 'utf8'); break }
       const fd = fs.openSync(file, 'r')
-      const buf = Buffer.alloc(TAIL)
-      fs.readSync(fd, buf, 0, TAIL, st.size - TAIL)
+      const buf = Buffer.alloc(win)
+      fs.readSync(fd, buf, 0, win, st.size - win)
       fs.closeSync(fd)
       const s = buf.toString('utf8')
-      raw = s.slice(s.indexOf('\n') + 1)            // from the first whole line
+      const i = s.indexOf('\n')
+      raw = i < 0 ? '' : s.slice(i + 1)              // from the first whole line
+      if (/"type":"assistant"/.test(raw)) break
+      win *= 4
     }
   } catch { return null }
+  const cut = raw.length < st.size
   const { turns } = parseTranscript(raw, true)
-  const out = st.size > TAIL ? ['… earlier steps left out', ''] : []
+  const out = cut ? ['… earlier steps left out', ''] : []
   for (const t of turns) {
     if (t.role === 'assistant') {
       for (const x of t.tools) {
@@ -2112,7 +2123,7 @@ function agentActivity (id, agentId) {
         if (x.out) out.push(...x.out.split('\n').slice(0, 6).map(l => '    ' + l.slice(0, 200)))
       }
       if (t.text) out.push(t.text.trim(), '')
-    } else if (t.role === 'user' && t.text && !out.length && st.size <= TAIL) out.push('Asked to: ' + t.text.replace(/\s+/g, ' ').slice(0, 200) + (t.text.length > 200 ? '…' : ''), '')
+    } else if (t.role === 'user' && t.text && !out.length && !cut) out.push('Asked to: ' + t.text.replace(/\s+/g, ' ').slice(0, 200) + (t.text.length > 200 ? '…' : ''), '')
   }
   const text = out.join('\n').slice(-60000)
   ACTIVITY.set(file, { size: st.size, mtime: st.mtimeMs, text })
@@ -3097,5 +3108,5 @@ try {
 } catch {}
 
 module.exports = {
-  writePrivate, mkdirPrivate, board, agentActivity, textOf, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
+  writePrivate, mkdirPrivate, board, agentActivity, activityOf, textOf, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
   readOnlyCache, saveCacheNow, groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME }
