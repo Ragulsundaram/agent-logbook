@@ -1666,4 +1666,48 @@ body[data-chat] .dback, body[data-chat] .newinchat { display: none !important }
 .ctip { display: flex; align-items: center; flex-wrap: wrap; gap: 0 4px; font-size: 12px; margin-bottom: 6px;
   color: var(--vscode-descriptionForeground) }
 .ctip .iconbtn { margin-left: auto }
-.ctip .linkbtn { background: none; border: 0; padding: 0; color: var(--vscode-textLink-foreground); cursor: pointer; font: inherit }
+.ctip .linkbtn, .cctx .linkbtn, .chatmeta .linkbtn { background: none; border: 0; padding: 0; color: var(--vscode-textLink-foreground); cursor: pointer; font: inherit }
+
+/* what a tool printed, and a step that failed */
+.tfail { margin-left: 8px; font-size: 11px; color: var(--vscode-errorForeground) }
+.tcard.failed { border-color: color-mix(in srgb, var(--vscode-errorForeground) 45%, transparent) }
+.tout { margin: 6px 0 0; max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: var(--vscode-editor-font-family); font-size: 11px; color: var(--vscode-descriptionForeground) }
+.tout.err { color: var(--vscode-errorForeground) }
+
+/* the attach button beside send */
+.cattach { flex: none; width: 20px; height: 20px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none;
+  color: var(--vscode-descriptionForeground); cursor: pointer; align-self: flex-end }
+.cattach:hover { background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent); color: var(--vscode-foreground) }
+.cattach svg { width: 14px; height: 14px; fill: currentColor }
+/* an attached PDF or text file */
+.cfile { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 4px 22px 4px 6px;
+  border: 1px solid var(--vscode-panel-border); border-radius: 6px; font-size: 11px; margin: 4px 6px 0 0 }
+.cfileext { font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px; background: var(--clay); color: #fff }
+.cfilename { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.cfile .cimgx { top: 2px; right: 2px }
+/* which file goes with the message */
+.cctx { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--vscode-descriptionForeground); margin: 0 2px 4px }
+.cctxname { font-family: var(--vscode-editor-font-family); color: var(--vscode-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0 }
+.cctxname.off { text-decoration: line-through; opacity: .6 }
+/* a sub-agent at work, and the thinking as it happens */
+.chatagent { font-size: 11px; color: var(--vscode-descriptionForeground); padding: 0 4px 2px 30px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.chatthought { margin: 2px 4px 6px 30px; font-size: 12px; color: var(--vscode-descriptionForeground) }
+.chatthought summary { cursor: pointer; font-size: 11px }
+.chatthinktext { white-space: pre-wrap; max-height: 180px; overflow: auto; font-style: italic; padding: 4px 0 0 }
+/* a side question, or the MCP list: beside the chat, not in it */
+.chatside { margin: 8px 0; border: 1px dashed var(--vscode-panel-border); border-radius: 6px; padding: 6px 8px; font-size: 12px }
+.chatside .shhead { display: flex; align-items: center; gap: 8px }
+.chatside .shcmd { flex: 1 1 auto; min-width: 0 }
+.chatside .bgkind { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; opacity: .7 }
+.chatside .bubble { margin-top: 4px }
+.mcprow { display: flex; align-items: center; gap: 8px; padding: 2px 0 }
+.mcpdot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-descriptionForeground) }
+.mcprow.ok .mcpdot { background: #4caf50 }
+.mcprow.bad .mcpdot { background: var(--vscode-errorForeground) }
+/* a question's choice with a preview */
+.caskpreview { margin-top: 6px; font-size: 12px; text-align: left }
+/* small actions beside "You · 9:33" */
+.msgact { border: 0; background: none; padding: 2px; cursor: pointer; color: var(--vscode-descriptionForeground); opacity: 0; display: inline-grid; place-items: center }
+.msg:hover .msgact, .msgact:focus-visible { opacity: .8 }
+.msgact svg { width: 13px; height: 13px; fill: currentColor }

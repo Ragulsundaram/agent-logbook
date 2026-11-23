@@ -32,6 +32,12 @@ const CHAT = {
   models: [],
   busySince: new Map(),  // chat id -> when it last started working
   taskOut: new Map(),    // "chat id|task id" -> { output, truncated } of a background task you opened
+  side: new Map(),       // chat id -> side questions (/btw) and their answers
+  mcp: new Map(),        // chat id -> its MCP servers, once asked with /mcp
+  editor: { label: '', file: '' },   // what the editor has open, which goes with your message
+  skipCtx: new Set(),    // chats whose next message goes without the editor's file
+  files: new Map(),      // chat id -> attached PDFs and text files waiting to go
+  thoughtOpen: new Set(), // chats whose live thinking you opened
   todosFold: new Map(),  // chat id -> true/false: you folded or opened its to-do list (a finished one folds by itself)
 }
 let COMPOSER = null
@@ -42,6 +48,9 @@ const MODES = [
   ['plan', 'Plan first', 'Claude plans and asks you to approve before changing anything'],
   ['auto', 'Auto mode', 'Claude decides what is safe to run without asking'],
 ]
+// asks nothing at all: offered only once "Skip permission prompts" is on in Settings
+const BYPASS = ['bypassPermissions', 'Bypass permissions', 'Claude runs everything without asking']
+const modes = () => CFG.skipPermissions ? [...MODES, BYPASS] : MODES
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 const FALLBACK_MODELS = [
   { value: 'opus', label: 'Opus' }, { value: 'sonnet', label: 'Sonnet' }, { value: 'haiku', label: 'Haiku' },
@@ -105,6 +114,7 @@ function chatMount () {
   if (fresh) {
     COMPOSER = buildComposer(t.id)
     send({ type: 'chatState', id: t.id })
+    send({ type: 'chatEditorAsk' })
   }
   const focused = document.activeElement === COMPOSER.ta
   // right under the conversation, at the top of the footer: the chat's numbers
@@ -129,8 +139,9 @@ function setMode (c, value) {
 }
 /** Shift+Tab in the box steps through the modes, as it does in Claude Code's terminal. */
 function cycleMode (c) {
-  const i = MODES.findIndex(m => m[0] === picksFor(c.id).mode)
-  setMode(c, MODES[(i + 1) % MODES.length][0])
+  const list = modes()
+  const i = list.findIndex(m => m[0] === picksFor(c.id).mode)
+  setMode(c, list[(i + 1) % list.length][0])
 }
 
 /** The mode and status join the "Claude" numbers under the box; a new chat has none yet, so they get their own line. */
@@ -174,8 +185,12 @@ function placeLive () {
 
 /** "12s · Esc to stop" while a reply runs; the clock starts when the chat turned busy. */
 function elapsed (id) {
+  const st = CHAT.state.get(id)
   const at = CHAT.busySince.get(id)
-  return at ? `${secs(Date.now() - at)} · Esc to stop` : 'Esc to stop'
+  const tool = CHAT.partial.get(id)?.toolSecs
+  const r = st?.retry
+  const wait = r && r.at > Date.now() ? ` · next try in ${Math.ceil((r.at - Date.now()) / 1000)}s` : ''
+  return (at ? `${secs(Date.now() - at)}` : '') + wait + (tool ? ` · this step ${tool}s` : '') + ' · Esc to stop'
 }
 setInterval(() => {
   const e = COMPOSER && document.querySelector('.chatworking .chatel')
@@ -197,8 +212,19 @@ function paintLive () {
     const w = el('div', 'msg user chatecho' + (queued ? ' queued' : ''))
     if (echo.text) w.appendChild(el('div', 'bubble', echo.text))
     const meta = [queued ? 'Queued: Claude reads this when it finishes' : '',
-      echo.images ? `${echo.images} image${echo.images === 1 ? '' : 's'} attached` : ''].filter(Boolean).join(' · ')
-    if (meta) w.appendChild(el('div', 'chatmeta', meta))
+      echo.images ? `${echo.images} image${echo.images === 1 ? '' : 's'} attached` : '',
+      echo.files ? `${echo.files} file${echo.files === 1 ? '' : 's'} attached` : ''].filter(Boolean).join(' · ')
+    if (meta || (queued && echo.uuid)) {
+      const m = el('div', 'chatmeta', meta)
+      // a queued message can still be taken back, and comes back into the box
+      if (queued && echo.uuid) {
+        const x = el('button', 'linkbtn', 'Take back')
+        x.title = 'Claude will not read it; the text goes back in the box'
+        x.onclick = () => { x.disabled = true; send({ type: 'chatCancelQueued', id, uuid: echo.uuid }) }
+        m.append(' · ', x)
+      }
+      w.appendChild(m)
+    }
     live.appendChild(w)
   }
   // "!" commands: what ran, its output, and whether Claude has seen it yet
@@ -243,10 +269,20 @@ function paintLive () {
   } else if (st?.busy) {
     const line = el('div', 'chatworking')
     line.append(el('span', 'chatdots'), el('span', '',
-      st.status === 'compacting' ? 'Compacting the conversation…'
-        : p?.tool && !p.text ? `Running ${toolWord(p.tool)}…` : p?.thinking ? 'Thinking…' : p?.text ? 'Writing…' : 'Working…'),
+      busyWord(st, p)),
     el('span', 'chatel', elapsed(id)))
     live.appendChild(line)
+    // what a sub-agent is doing, so its work does not look frozen
+    if (p?.agent) live.appendChild(el('div', 'chatagent', `Agent · ${p.agent}`))
+    // the thinking as it happens, folded unless you open it
+    if (p?.thought) {
+      const d = document.createElement('details')
+      d.className = 'chatthought'
+      d.open = CHAT.thoughtOpen.has(id)
+      d.ontoggle = () => { if (d.open) CHAT.thoughtOpen.add(id); else CHAT.thoughtOpen.delete(id) }
+      d.append(el('summary', '', 'Thinking'), el('div', 'chatthinktext', p.thought))
+      live.appendChild(d)
+    }
   } else if (st?.status === 'compacting') {
     const line = el('div', 'chatworking')
     line.append(el('span', 'chatdots'), el('span', '', 'Compacting the conversation…'))
@@ -263,6 +299,41 @@ function paintLive () {
   // agents and commands running in the background, working or not: each can be looked at or stopped
   for (const t of st?.bg || []) live.appendChild(bgTask(id, t))
   echoes.filter(isQueued).forEach(drawEcho)
+  // side questions: answered beside the chat, never part of it
+  for (const q of CHAT.side.get(id) || []) {
+    const w = el('div', 'chatside')
+    const head = el('div', 'shhead')
+    head.append(el('span', 'bgkind', 'Side question'), el('span', 'shcmd', q.q))
+    const x = el('button', 'iconbtn', '×')
+    x.title = 'Dismiss'
+    x.onclick = () => { CHAT.side.set(id, (CHAT.side.get(id) || []).filter(o => o !== q)); paintLive() }
+    head.appendChild(x)
+    w.appendChild(head)
+    const a = el('div', 'bubble')
+    if (q.a === null) a.textContent = 'Thinking…'
+    else if (q.a === false) a.textContent = 'No answer came back.'
+    else a.innerHTML = window.md(q.a)
+    w.appendChild(a)
+    live.appendChild(w)
+  }
+  const servers = CHAT.mcp.get(id)
+  if (servers) {
+    const w = el('div', 'chatside')
+    const head = el('div', 'shhead')
+    head.append(el('span', 'bgkind', 'MCP servers'), el('span', 'shcmd', ''))
+    const x = el('button', 'iconbtn', '×')
+    x.onclick = () => { CHAT.mcp.delete(id); paintLive() }
+    head.appendChild(x)
+    w.appendChild(head)
+    if (servers === 'loading') w.appendChild(el('div', 'chatmeta', 'Asking Claude…'))
+    else if (!servers.length) w.appendChild(el('div', 'chatmeta', 'This chat has no MCP servers.'))
+    else for (const v of servers) {
+      const row = el('div', 'mcprow ' + (v.status === 'connected' ? 'ok' : v.status === 'failed' ? 'bad' : ''))
+      row.append(el('span', 'mcpdot'), el('b', '', v.name), el('span', 'chatmeta', v.status))
+      w.appendChild(row)
+    }
+    live.appendChild(w)
+  }
   const note = CHAT.notes.get(id)
   if (note) {
     const n = el('div', 'chatnote' + (note.err ? ' err' : ''))
@@ -341,10 +412,38 @@ setInterval(() => {
   for (const t of bg) if (CHAT.taskOut.has(COMPOSER.id + '|' + t.id)) send({ type: 'chatTaskOutput', id: COMPOSER.id, taskId: t.id })
 }, 2000)
 
+/**
+ * Under a message you sent: undo the file edits Claude made after it. Asked
+ * first what it would change, and done only once you say so.
+ */
+window.chatRewindButton = (id, uuid) => {
+  if (!chatOn() || CUR?.provider === 'codex') return null
+  const b = el('button', 'msgact')
+  b.appendChild(icon('history'))
+  b.title = 'Undo the file edits Claude made after this message'
+  b.onclick = e => {
+    e.stopPropagation()
+    if (whereRunning(id) !== 'here') { note(id, 'Edits can be undone while the chat runs here, for edits made since it started here. Send a message first.', false); return }
+    note(id, 'Checking what would change…', false)
+    send({ type: 'chatRewind', id, uuid, dry: true })
+  }
+  return b
+}
+
 const FALLBACK_WHY = {
   model_not_found: 'the model you picked is not available',
   permission_denied: 'your account cannot use the model you picked',
   overloaded: 'the model you picked is busy right now',
+}
+
+/** The status line's words: what Claude is doing right now, as exactly as it says. */
+function busyWord (st, p) {
+  if (st?.status === 'compacting') return 'Compacting the conversation…'
+  if (st?.retry) return `Retrying after an error${st.retry.why ? ` (${st.retry.why})` : ''}, try ${st.retry.attempt}${st.retry.max ? ` of ${st.retry.max}` : ''}…`
+  if (st?.hooks) return 'Running your hooks…'
+  if (p?.tool && !p.text) return `Running ${toolWord(p.tool)}${p.detail ? `: ${p.detail}` : ''}…`
+  if (p?.thinking) return p.thinkTokens ? `Thinking · ${p.thinkTokens >= 1000 ? (p.thinkTokens / 1000).toFixed(1) + 'k' : p.thinkTokens} tokens…` : 'Thinking…'
+  return p?.text ? 'Writing…' : 'Working…'
 }
 
 const toolWord = t => ({ Bash: 'a command', Read: 'a file read', Edit: 'an edit', Write: 'a write', Grep: 'a search', Glob: 'a file search', Task: 'an agent', Agent: 'an agent', WebFetch: 'a web fetch', WebSearch: 'a web search' }[t] || t)
@@ -369,7 +468,17 @@ function buildComposer (id) {
   mode.title = 'What Claude may do without asking (Shift+Tab in the box to switch). New chats start on the last one you picked'
   const status = el('span', 'cstatus')
   const go = el('button', 'cgo')
-  bar.append(go)
+  // attach a picture, a PDF or a text file
+  const clip = el('button', 'cattach')
+  clip.appendChild(icon('plus'))
+  clip.title = 'Attach a picture, PDF or text file (or paste or drop one in)'
+  const pickFile = document.createElement('input')
+  pickFile.type = 'file'; pickFile.multiple = true; pickFile.hidden = true
+  pickFile.accept = 'image/png,image/jpeg,image/gif,image/webp,application/pdf,text/*,' + TEXT_EXT.map(x => '.' + x).join(',')
+  clip.onclick = () => pickFile.click()
+  bar.append(clip, pickFile, go)
+  // what the editor has open goes with the message: said here, and can be left out
+  const ctxLine = el('div', 'cctx')
   const live = el('div', 'chatlive')
   // the text and its pickers share one box, the way a chat app's input reads
   const box = el('div', 'cbox')
@@ -377,12 +486,13 @@ function buildComposer (id) {
   box.onclick = e => { if (e.target === box || e.target === bar) ta.focus() }
   // once, the first time anyone sees the box: what it is and where to turn it off
   const tip = el('div', 'ctip')
-  root.append(asks, block, tip, box, slash)
-  const c = { id, root, asks, imgs, block, tip, ta, slash, bar, mode, status, go, live, slashAt: 0 }
+  root.append(asks, block, tip, ctxLine, box, slash)
+  const c = { id, root, asks, imgs, block, tip, ta, slash, bar, mode, status, go, live, slashAt: 0, ctxLine, mention: null }
+  pickFile.onchange = () => { for (const f of pickFile.files) addAny(c, f); pickFile.value = '' }
 
   const fit = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 220) + 'px' }
   c.fit = fit
-  ta.oninput = () => { CHAT.drafts.set(id, ta.value); fit(); paintSlash(c); paintGo(c) }
+  ta.oninput = () => { CHAT.drafts.set(id, ta.value); fit(); askMention(c); paintSlash(c); paintGo(c) }
   ta.onkeydown = e => {
     if (!c.slash.hidden && slashKey(c, e)) return
     if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); cycleMode(c); return }
@@ -397,17 +507,17 @@ function buildComposer (id) {
   }
   ta.onblur = () => setTimeout(() => { c.slash.hidden = true }, 150)
   ta.onpaste = e => {
-    const files = [...(e.clipboardData?.items || [])].filter(i => i.type.startsWith('image/')).map(i => i.getAsFile()).filter(Boolean)
+    const files = [...(e.clipboardData?.items || [])].filter(i => i.kind === 'file').map(i => i.getAsFile()).filter(Boolean)
     if (!files.length) return
     e.preventDefault()
-    files.forEach(f => addImage(c, f))
+    files.forEach(f => addAny(c, f))
   }
-  root.ondragover = e => { if ([...(e.dataTransfer?.items || [])].some(i => i.type.startsWith('image/'))) e.preventDefault() }
+  root.ondragover = e => { if ([...(e.dataTransfer?.items || [])].some(i => i.kind === 'file')) e.preventDefault() }
   root.ondrop = e => {
-    const files = [...(e.dataTransfer?.files || [])].filter(f => f.type.startsWith('image/'))
+    const files = [...(e.dataTransfer?.files || [])]
     if (!files.length) return
     e.preventDefault()
-    files.forEach(f => addImage(c, f))
+    files.forEach(f => addAny(c, f))
   }
   go.onclick = () => {
     const st = CHAT.state.get(id)
@@ -417,6 +527,38 @@ function buildComposer (id) {
   mode.onchange = () => setMode(c, mode.value)
   requestAnimationFrame(fit)
   return c
+}
+
+// text files Claude can read as they are, by extension when the type is not given
+const TEXT_EXT = ['txt', 'md', 'csv', 'tsv', 'json', 'yaml', 'yml', 'xml', 'html', 'css', 'js', 'ts', 'jsx', 'tsx', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'cs', 'php', 'sh', 'sql', 'log', 'diff', 'patch', 'toml', 'ini', 'env', 'conf']
+const MAX_PDF = 20 * 1024 * 1024
+const MAX_TEXT = 400 * 1024
+/** A picture goes as a picture; a PDF or a text file is attached by name. */
+function addAny (c, file) {
+  if (file.type.startsWith('image/')) return addImage(c, file)
+  const ext = (/\.([\w]+)$/.exec(file.name) || [])[1]?.toLowerCase() || ''
+  const pdf = file.type === 'application/pdf' || ext === 'pdf'
+  const text = !pdf && (file.type.startsWith('text/') || /json|xml|yaml|javascript|sql/.test(file.type) || TEXT_EXT.includes(ext))
+  if (!pdf && !text) { note(c.id, `${file.name} can't be attached: only pictures, PDFs and text files can.`, true); return }
+  if (file.size > (pdf ? MAX_PDF : MAX_TEXT)) { note(c.id, `${file.name} is too big to attach (${pdf ? '20 MB' : '400 KB'} at most).`, true); return }
+  const id = c.id
+  const r = new FileReader()
+  CHAT.reading.set(id, (CHAT.reading.get(id) || 0) + 1)
+  const done = () => {
+    const left = (CHAT.reading.get(id) || 1) - 1
+    if (left) CHAT.reading.set(id, left); else CHAT.reading.delete(id)
+    if (!left && CHAT.sendWhenRead.delete(id) && COMPOSER?.id === id) submit(COMPOSER)
+  }
+  r.onerror = () => { note(id, `${file.name} could not be read.`, true); done() }
+  r.onload = () => {
+    const item = { name: file.name, mediaType: pdf ? 'application/pdf' : 'text/plain' }
+    if (pdf) item.data = String(r.result).replace(/^data:[^,]*,/, '')
+    else item.text = String(r.result)
+    CHAT.files.set(id, [...(CHAT.files.get(id) || []), item].slice(0, 8))
+    if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
+    done()
+  }
+  if (pdf) r.readAsDataURL(file); else r.readAsText(file)
 }
 
 function addImage (c, file) {
@@ -459,7 +601,62 @@ function paintImages (c) {
     chip.append(img, x)
     c.imgs.appendChild(chip)
   })
-  c.imgs.hidden = !list.length
+  const files = CHAT.files.get(c.id) || []
+  files.forEach((f, i) => {
+    const chip = el('div', 'cfile')
+    chip.append(el('span', 'cfileext', f.mediaType === 'application/pdf' ? 'PDF' : 'TXT'), el('span', 'cfilename', f.name))
+    chip.title = f.name
+    const x = el('button', 'cimgx', '×')
+    x.title = 'Remove'
+    x.onclick = () => { files.splice(i, 1); paintImages(c); paintGo(c) }
+    chip.appendChild(x)
+    c.imgs.appendChild(chip)
+  })
+  c.imgs.hidden = !list.length && !files.length
+}
+
+/** The line above the box: which file goes with the message, and a way to leave it out. */
+function paintCtx (c) {
+  const e = CHAT.editor
+  c.ctxLine.replaceChildren()
+  const show = CFG.chatEditorContext !== false && !!e.label && whereRunning(c.id) !== 'elsewhere'
+  c.ctxLine.hidden = !show
+  if (!show) return
+  const skip = CHAT.skipCtx.has(c.id)
+  const name = el('span', 'cctxname' + (skip ? ' off' : ''), e.label)
+  name.title = e.file
+  c.ctxLine.append(el('span', '', skip ? 'Not sending' : 'Claude sees'), name)
+  const t = el('button', 'linkbtn', skip ? 'Send it' : 'Leave out')
+  t.title = skip ? 'Send what you have open with your next message' : 'Send your next message without it'
+  t.onclick = () => { if (!CHAT.skipCtx.delete(c.id)) CHAT.skipCtx.add(c.id); paintCtx(c) }
+  c.ctxLine.appendChild(t)
+}
+
+// ------------------------------------------------------------ @ mentions
+
+/** "@" then a few letters: files in the chat's folder to pick from. */
+let MENTION_SOON = null
+function askMention (c) {
+  const before = c.ta.value.slice(0, c.ta.selectionStart)
+  const m = /(?:^|\s)@([\w./-]*)$/.exec(before)
+  if (!m) { c.mention = null; return }
+  const q = m[1]
+  if (c.mention?.q === q) return
+  c.mention = { q, list: c.mention?.list || [], at: before.length - q.length - 1 }
+  clearTimeout(MENTION_SOON)
+  MENTION_SOON = setTimeout(() => send({ type: 'chatFiles', id: c.id, q }), 120)
+}
+function pickMention (c, x) {
+  const at = c.mention.at
+  const end = c.ta.selectionStart
+  c.ta.value = c.ta.value.slice(0, at) + '@' + x.name + ' ' + c.ta.value.slice(end)
+  const pos = at + x.name.length + 2
+  c.ta.setSelectionRange(pos, pos)
+  c.mention = null
+  CHAT.drafts.set(c.id, c.ta.value)
+  c.slash.hidden = true
+  c.ta.focus()
+  paintGo(c)
 }
 
 function submit (c, only) {
@@ -469,8 +666,9 @@ function submit (c, only) {
   if (!only && CHAT.reading.get(id)) { CHAT.sendWhenRead.add(id); return }
   const text = only ? only.text : c.ta.value
   const images = only ? [] : CHAT.images.get(id) || []
-  if (!text.trim() && !images.length) return
-  if (!images.length && localCommand(c, text)) return
+  const files = only ? [] : CHAT.files.get(id) || []
+  if (!text.trim() && !images.length && !files.length) return
+  if (!images.length && !files.length && localCommand(c, text)) return
   if (whereRunning(id) === 'elsewhere') return
   // "!" runs a command in the chat's folder, as in Claude Code's terminal: Claude
   // does not answer it, but gets the command and its output with your next message
@@ -496,9 +694,12 @@ function submit (c, only) {
   c.hist = null
   // finished commands go to Claude with this message; they leave the view once it lands
   for (const sh of CHAT.shell.get(id) || []) if (!sh.running && !sh.sentWith) { sh.sentWith = text; sh.sentAt = Date.now() }
-  send({ type: 'chatSend', id, text, images: images.map(im => ({ mediaType: im.mediaType, data: im.data })), model: p.model, mode: p.mode, effort: p.effort })
+  // the message's own id: a queued one can be taken back by it
+  const uuid = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx'.replace(/x/g, () => (Math.random() * 16 | 0).toString(16))
+  const noContext = CHAT.skipCtx.delete(id)
+  send({ type: 'chatSend', id, uuid, text, images: images.map(im => ({ mediaType: im.mediaType, data: im.data })), files, noContext, model: p.model, mode: p.mode, effort: p.effort })
   const queued = !!CHAT.state.get(id)?.busy
-  CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, images: images.length, pics: images, at: Date.now(), queued }])
+  CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, uuid, images: images.length, files: files.length, pics: images, at: Date.now(), queued }])
   CHAT.notes.delete(id)
   CHAT.done.delete(id)
   const st = CHAT.state.get(id) || { id, asks: [] }
@@ -507,6 +708,7 @@ function submit (c, only) {
   if (!only) {
     CHAT.drafts.delete(id)
     CHAT.images.delete(id)
+    CHAT.files.delete(id)
     c.ta.value = ''
     c.fit()
     c.slash.hidden = true
@@ -620,6 +822,7 @@ function paintComposer () {
     : where === 'here' || CHAT.here.has(id) ? 'Message Claude… (/ for commands, ! for a shell command)'
       : 'Continue here… (/ for commands, ! for a shell command)'
   paintTip(c)
+  paintCtx(c)
   paintPickers(c)
   paintAsks(c)
   paintImages(c)
@@ -649,7 +852,7 @@ function tipDone () {
 
 function paintGo (c) {
   const st = CHAT.state.get(c.id)
-  const empty = !c.ta.value.trim() && !(CHAT.images.get(c.id) || []).length
+  const empty = !c.ta.value.trim() && !(CHAT.images.get(c.id) || []).length && !(CHAT.files.get(c.id) || []).length
   // "!" switches the box to a shell command, as Claude Code's terminal does: it looks it
   const shell = /^\s*!/.test(c.ta.value) && !(CHAT.images.get(c.id) || []).length
   c.ta.parentNode.classList.toggle('shell', shell)
@@ -681,7 +884,7 @@ function paintPickers (c) {
   const p = picksFor(c.id)
   const st = CHAT.state.get(c.id)
   // once Claude is running, what it reports wins: plan approval switches the mode
-  if (st?.running && st.mode && MODES.some(m => m[0] === st.mode)) p.mode = st.mode
+  if (st?.running && st.mode && modes().some(m => m[0] === st.mode)) p.mode = st.mode
   const opts = (sel, list, value) => {
     // rebuilt only when the choices change: rebuilding shut a list you had open
     const sig = JSON.stringify(list) + '|' + value
@@ -696,7 +899,7 @@ function paintPickers (c) {
     }
     sel.value = list.some(x => x[0] === value) ? value : list[0][0]
   }
-  opts(c.mode, MODES, p.mode)
+  opts(c.mode, modes(), p.mode)
 }
 
 // ------------------------------------------------------------ /model and /effort
@@ -711,7 +914,12 @@ function effortLevels (id) {
 const LOCAL = [
   { name: 'model', hint: '<model>', description: 'Change the model for this chat' },
   { name: 'effort', hint: '<level>', description: 'How hard Claude thinks; new chats start on the last one picked' },
+  { name: 'btw', hint: '<question>', description: 'Ask a quick side question without interrupting the chat' },
+  { name: 'thinking', hint: 'on|off', description: 'Turn Claude\'s thinking on or off for this chat' },
+  { name: 'mcp', hint: '', description: 'The MCP servers this chat has, and whether each is connected' },
 ]
+/** Commands the box handles itself, with whatever follows them. */
+const OWN = /^\/(btw|thinking|mcp)\b\s*([\s\S]*)$/
 
 /** The choices after "/model " or "/effort ", as slash rows. */
 function localChoices (c) {
@@ -727,10 +935,35 @@ function localChoices (c) {
 
 /** "/model opus" or "/effort high": handled here, never sent to Claude. */
 function localCommand (c, text) {
+  const own = OWN.exec(text.trim())
+  if (own) return ownCommand(c, own[1], own[2].trim())
   const m = /^\/(model|effort)(?:\s+(\S+))?\s*$/.exec(text.trim())
   if (!m) return false
   if (!m[2]) { c.ta.value = '/' + m[1] + ' '; paintSlash(c); return true }
   return applyLocal(c, m[1], m[2])
+}
+
+/** /btw, /thinking and /mcp: answered here, beside the chat rather than in it. */
+function ownCommand (c, kind, arg) {
+  const id = c.id
+  const clear = () => { c.ta.value = ''; CHAT.drafts.delete(id); c.slash.hidden = true; c.fit?.(); paintGo(c) }
+  if (whereRunning(id) !== 'here') { note(id, `/${kind} works once Claude is running here: send a message first.`, false); clear(); return true }
+  if (kind === 'btw') {
+    if (!arg) { c.ta.value = '/btw '; return true }
+    const key = Date.now().toString(36)
+    CHAT.side.set(id, [...(CHAT.side.get(id) || []), { key, q: arg, a: null }])
+    send({ type: 'chatSide', id, key, question: arg })
+  } else if (kind === 'thinking') {
+    const on = arg ? !/^(off|no|0|false)$/i.test(arg) : !(CHAT.state.get(id)?.thinking ?? true)
+    send({ type: 'chatThinking', id, on })
+    note(id, on ? 'Thinking is on for this chat.' : 'Thinking is off for this chat: replies come faster, with less reasoning.', false)
+  } else if (kind === 'mcp') {
+    CHAT.mcp.set(id, 'loading')
+    send({ type: 'chatMcp', id })
+  }
+  clear()
+  placeLive()
+  return true
 }
 
 function applyLocal (c, kind, arg) {
@@ -758,6 +991,7 @@ function applyLocal (c, kind, arg) {
 // ------------------------------------------------------------ slash commands
 
 function slashMatches (c) {
+  if (c.mention) return c.mention.list.slice(0, 8).map(f => ({ name: f, description: '', kind: 'mention' }))
   const choices = localChoices(c)
   if (choices) return choices.slice(0, 8)
   const m = /^\/([\w:-]*)$/.exec(c.ta.value)
@@ -777,20 +1011,21 @@ function paintSlash (c) {
   c.slashAt = Math.min(c.slashAt, list.length - 1)
   list.forEach((x, i) => {
     const row = el('button', 'cslashrow' + (i === c.slashAt ? ' on' : ''))
-    row.append(el('b', '', '/' + x.name), el('span', '', x.hint ? `${x.hint}  ${x.description}` : x.description))
+    row.append(el('b', '', (x.kind === 'mention' ? '@' : '/') + x.name), el('span', '', x.hint ? `${x.hint}  ${x.description}` : x.description))
     row.onmousedown = e => { e.preventDefault(); pickSlash(c, x) }
     c.slash.appendChild(row)
   })
 }
 
 function pickSlash (c, x) {
+  if (x.kind === 'mention') { pickMention(c, x); return }
   if (x.kind) { applyLocal(c, x.kind, x.arg); c.ta.focus(); return }
   c.ta.value = '/' + x.name + ' '
   CHAT.drafts.set(c.id, c.ta.value)
   c.slash.hidden = true
   c.ta.focus()
   paintGo(c)
-  if (LOCAL.some(l => l.name === x.name)) paintSlash(c)      // straight on to its choices
+  if (x.name === 'model' || x.name === 'effort') paintSlash(c)      // straight on to its choices
 }
 
 function slashKey (c, e) {
@@ -802,12 +1037,12 @@ function slashKey (c, e) {
     paintSlash(c)
     return true
   }
-  if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !list.some(x => '/' + x.name === c.ta.value.trim()))) {
+  if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && (c.mention || !list.some(x => '/' + x.name === c.ta.value.trim())))) {
     e.preventDefault()
     pickSlash(c, list[c.slashAt] || list[0])
     return true
   }
-  if (e.key === 'Escape') { e.preventDefault(); c.slash.hidden = true; return true }
+  if (e.key === 'Escape') { e.preventDefault(); c.slash.hidden = true; c.mention = null; return true }
   return false
 }
 
@@ -843,6 +1078,12 @@ const fileName = p => String(p || '').split('/').pop()
 /** What Claude wants to do, as a sentence. */
 function askTitle (a) {
   const i = a.input || {}
+  // Claude's own sentence for it, when it gives one
+  if (a.title) return a.title
+  const who = a.agent ? 'An agent' : 'Claude'
+  return askTitleFor(a, i).replace(/^Claude/, who)
+}
+function askTitleFor (a, i) {
   switch (a.tool) {
     case 'Bash': return 'Claude wants to run a command'
     case 'Write': return `Claude wants to write ${fileName(i.file_path) || 'a file'}`
@@ -851,7 +1092,7 @@ function askTitle (a) {
     case 'WebFetch': return 'Claude wants to fetch a web page'
     case 'WebSearch': return 'Claude wants to search the web'
     case 'Read': return `Claude wants to read ${fileName(i.file_path) || 'a file'}`
-    default: return `Claude wants to use ${a.tool.replace(/^mcp__([^_]+)__/, '$1: ')}`
+    default: return `Claude wants to use ${a.name || a.tool.replace(/^mcp__([^_]+)__/, '$1: ')}${a.server ? ` (${a.server})` : ''}`
   }
 }
 
@@ -915,28 +1156,57 @@ function alwaysTip (a) {
 }
 
 function permissionCard (c, a) {
+  if (a.kind === 'dialog') return dialogCard(c, a)
   const card = el('div', 'cask')
   card.appendChild(el('div', 'caskhead', askTitle(a)))
   card.appendChild(askBody(a))
   const acts = el('div', 'caskacts')
-  const allow = el('button', 'btn pri', 'Allow')
+  // a risky one leads with No, as Claude's terminal does
+  const allow = el('button', a.defaultNo ? 'btn' : 'btn pri', 'Allow')
   allow.onclick = () => answer(c, a, { allow: true })
   acts.appendChild(allow)
-  if (a.suggestions.length) {
+  if (['Edit', 'Write', 'MultiEdit'].includes(a.tool)) {
+    const diff = el('button', 'btn', 'Open diff')
+    diff.title = 'See the change beside the file as it is now, in the editor'
+    diff.onclick = () => send({ type: 'chatAskDiff', id: c.id, requestId: a.requestId })
+    acts.appendChild(diff)
+  }
+  if (a.suggestions.length && !a.noAlways) {
     const always = el('button', 'btn', 'Always allow')
     always.title = alwaysTip(a)
     always.onclick = () => answer(c, a, { allow: true, always: true })
     acts.appendChild(always)
   }
-  const deny = el('button', 'btn', 'Deny')
+  const deny = el('button', a.defaultNo ? 'btn pri' : 'btn', 'Deny')
+  deny.title = 'Claude is told no, and tries another way'
   deny.onclick = () => answer(c, a, { allow: false })
-  acts.appendChild(deny)
+  const halt = el('button', 'btn', 'Deny and stop')
+  halt.title = 'Claude is told no, and the reply ends here'
+  halt.onclick = () => answer(c, a, { allow: false, stop: true })
+  acts.append(deny, halt)
   const instead = el('input', 'caskinput')
   instead.placeholder = 'Or tell Claude what to do instead, then Enter'
   instead.onkeydown = e => {
     if (e.key === 'Enter' && instead.value.trim()) answer(c, a, { allow: false, message: instead.value.trim() })
   }
   card.append(acts, instead)
+  return card
+}
+
+/** Auto mode stopped to ask whether to keep going. */
+function dialogCard (c, a) {
+  const card = el('div', 'cask')
+  card.appendChild(el('div', 'caskhead', a.title || 'Auto mode needs you'))
+  const body = el('div', 'caskbody')
+  for (const t of a.paragraphs?.length ? a.paragraphs : ['Auto mode is waiting for you to choose: keep going, or stop this reply.']) body.appendChild(el('div', 'caskwhy', t))
+  card.appendChild(body)
+  const acts = el('div', 'caskacts')
+  const go = el('button', 'btn pri', 'Continue')
+  go.onclick = () => answer(c, a, { choice: 'continue' })
+  const halt = el('button', 'btn', 'Stop')
+  halt.onclick = () => answer(c, a, { choice: 'interrupt' })
+  acts.append(go, halt)
+  card.appendChild(acts)
   return card
 }
 
@@ -961,6 +1231,8 @@ function questionCard (c, a) {
       const b = el('button', 'caskopt')
       b.appendChild(el('b', '', o.label || ''))
       if (o.description) b.appendChild(el('span', '', o.description))
+      // a choice can come with a preview of what it would look like
+      if (o.preview) { const pv = el('div', 'caskpreview bubble'); pv.innerHTML = window.md(String(o.preview)); b.appendChild(pv) }
       b.onclick = () => {
         if (!q.multiSelect) { chosen[i].clear(); for (const x of opts.children) x.classList.remove('on') }
         if (chosen[i].has(o.label)) { chosen[i].delete(o.label); b.classList.remove('on') } else { chosen[i].add(o.label); b.classList.add('on') }
@@ -1150,6 +1422,19 @@ if (!BOARD_MODE) {
       if (COMPOSER?.id === m.id) placeLive()
       return
     }
+    if (m.type === 'chatEditor') {
+      CHAT.editor = { label: m.label || '', file: m.file || '' }
+      if (COMPOSER) paintCtx(COMPOSER)
+      return
+    }
+    if (m.type === 'chatFilesList') {
+      if (COMPOSER?.id === m.id && COMPOSER.mention && COMPOSER.mention.q === m.q) {
+        COMPOSER.mention.list = m.list || []
+        COMPOSER.slashAt = 0
+        paintSlash(COMPOSER)
+      }
+      return
+    }
     if (m.type === 'chatCutoff') { CHAT.cutoff = new Set(m.ids || []); paintComposer(); return }
     if (!m.type.startsWith('chat') || !m.id) return
     const id = m.id
@@ -1196,7 +1481,74 @@ if (!BOARD_MODE) {
         if (CHAT.notes.get(id)?.action) break
         if (m.error && !m.stopped) note(id, m.error, true)
         else if (m.stopped) note(id, 'Stopped. Type to carry on.', false)
+        // tools you said no to, so it is clear why Claude went another way
+        else if (m.denied) note(id, `Claude wasn't allowed to use: ${m.denied}.`, false)
         break
+      case 'chatQueue': {
+        const echoes = CHAT.echo.get(id) || []
+        const e = echoes.find(x => x.uuid === m.uuid)
+        if (!e) return
+        if (m.state === 'started') { e.queued = false; break }
+        if (!['cancelled', 'discarded', 'refused'].includes(m.state)) return
+        // taken back: it leaves the chat and its words come back to the box
+        CHAT.echo.set(id, echoes.filter(x => x !== e))
+        if (m.state === 'cancelled' && e.text && !CHAT.drafts.get(id)) {
+          CHAT.drafts.set(id, e.text)
+          if (COMPOSER?.id === id) { COMPOSER.ta.value = e.text; COMPOSER.fit(); paintGo(COMPOSER) }
+        }
+        break
+      }
+      case 'chatNotice':
+        note(id, m.text, false, m.action === 'terminal' ? { label: 'Open Claude in a terminal', msg: { type: 'chatTerminal' } } : undefined)
+        break
+      case 'chatLimit': {
+        const when = m.resetsAt ? new Date(m.resetsAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''
+        const which = { five_hour: 'five-hour', seven_day: 'weekly', seven_day_opus: 'weekly' }[m.kind] || ''
+        note(id, m.status === 'rejected'
+          ? `You've hit your ${which ? which + ' ' : ''}usage limit.${when ? ` It resets at ${when}.` : ''}`
+          : `You're close to your ${which ? which + ' ' : ''}usage limit.${when ? ` It resets at ${when}.` : ''}`, m.status === 'rejected')
+        break
+      }
+      case 'chatTitle': {
+        const h2 = COMPOSER?.id === id && document.querySelector('#detail .dtop h2')
+        if (h2) h2.textContent = m.title
+        break
+      }
+      case 'chatMoved': {
+        // /clear: the chat goes on under a new id; the view follows it there
+        for (const k of ['state', 'echo', 'partial', 'notes', 'picks', 'side', 'mcp']) {
+          if (CHAT[k].has(id)) { CHAT[k].set(m.to, CHAT[k].get(id)); CHAT[k].delete(id) }
+        }
+        CHAT.echo.delete(m.to)
+        CHAT.here.set(m.to, { folder: '' })
+        if (COMPOSER?.id === id) {
+          COMPOSER = null
+          // shown as a new chat until its file appears, then as itself (a one-chat tab moves with it)
+          showPending(m.to)
+          send({ type: 'chatFollow', id: m.to })
+          note(m.to, 'Cleared. This is a fresh chat; the earlier one is still in the list.', false)
+          chatMount()
+        }
+        return
+      }
+      case 'chatSideAnswer': {
+        const q = (CHAT.side.get(id) || []).find(x => x.key === m.key)
+        if (q) q.a = m.answer === null ? false : m.answer
+        break
+      }
+      case 'chatMcpList':
+        CHAT.mcp.set(id, m.list || [])
+        break
+      case 'chatRewound': {
+        const r = m.res
+        if (!r || r.error || r.ok === false) { note(id, r?.error ? `Couldn't undo: ${r.error}` : 'There is nothing to undo since that message, or those edits were made before the chat ran here.', false); break }
+        if (m.dry) {
+          if (!r.files) { note(id, 'Nothing was edited after that message.', false); break }
+          note(id, `Undo the edits made after that message? ${r.files} file${r.files === 1 ? '' : 's'}${r.adds || r.dels ? ` (+${r.adds} −${r.dels})` : ''} go back to how they were. The chat itself stays as it is.`, false,
+            { label: 'Undo them', msg: { type: 'chatRewind', uuid: m.uuid, dry: false } })
+        } else note(id, `Undone: ${r.files || 'the'} file${r.files === 1 ? '' : 's'} are back to how they were before that message.`, false)
+        break
+      }
       case 'chatAuth':
         note(id, 'Claude is signed out, or its sign-in has expired. Sign in again, then send your message again.', true,
           { label: 'Sign in again', msg: { type: 'chatLogin' } })

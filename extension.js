@@ -11,7 +11,7 @@ const cfg = (k, dflt) => vscode.workspace.getConfiguration('claudeHistory').get(
 const SETTINGS = ['topBars', 'sort', 'showLiveFirst', 'pageSize', 'dateFormat',
   'resumeTarget', 'skipPermissions', 'exportSourceCopy', 'chatLayout',
   'limitAlerts', 'resetSoonWeeklyHours', 'resetSoonSessionMinutes', 'unusedPercent', 'boardAllWindows',
-  'finishAlerts', 'chatHere', 'chatPermissionMode', 'chatEffort']
+  'finishAlerts', 'chatHere', 'chatPermissionMode', 'chatEffort', 'chatEditorContext']
 // Shown in the Settings tab but changed only through a folder dialog, never by a
 // value the webview sends: it decides where files get written.
 const SHOWN = ['exportDirectory']
@@ -1418,6 +1418,8 @@ async function resumeInClaudeExtension (s) {
 
 // ------------------------------------------------------------------ chat here
 const CHAT_MODES = ['default', 'acceptEdits', 'plan', 'auto']
+// asks nothing at all: offered only once "Skip permission prompts" is on in Settings
+const chatModes = () => cfg('skipPermissions', false) ? [...CHAT_MODES, 'bypassPermissions'] : CHAT_MODES
 const CHAT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 // new chats waiting for their first message: where to start them, and what from
 const NEW_CHATS = new Map()
@@ -1589,14 +1591,25 @@ function chatSend (msg, post) {
   const images = (Array.isArray(msg.images) ? msg.images : []).slice(0, 8)
     .filter(im => im && /^image\/(png|jpeg|gif|webp)$/.test(im.mediaType) &&
       typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < 7e6)
-  if (!text.trim() && !images.length) return
+  // attached files: PDFs as they are, text files as text; nothing else goes through
+  const files = (Array.isArray(msg.files) ? msg.files : []).slice(0, 8).map(f => ({
+    name: String(f?.name || 'file').replace(/[\r\n<>"]/g, '').slice(0, 120),
+    mediaType: f?.mediaType === 'application/pdf' ? 'application/pdf' : 'text/plain',
+    data: typeof f?.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(f.data) && f.data.length < 2.5e7 ? f.data : '',
+    text: typeof f?.text === 'string' ? f.text.slice(0, 400000) : '',
+  })).filter(f => f.mediaType === 'application/pdf' ? f.data : f.text)
+  if (!text.trim() && !images.length && !files.length) return
   const pick = (v, ok) => ok(v) ? v : ''
   const shell = shellContext(id)
   const opts = {
-    text: shell.text + text, images,
+    text: shell.text + text, images, files,
+    uuid: String(msg.uuid || ''),
     model: pick(String(msg.model || ''), v => /^[\w.[\]-]{0,60}$/.test(v)),
-    mode: pick(msg.mode, v => CHAT_MODES.includes(v)) || pick(cfg('chatPermissionMode', 'default'), v => CHAT_MODES.includes(v)),
+    mode: pick(msg.mode, v => chatModes().includes(v)) || pick(cfg('chatPermissionMode', 'default'), v => CHAT_MODES.includes(v)),
     effort: pick(msg.effort, v => CHAT_EFFORTS.includes(v)),
+    allowBypass: cfg('skipPermissions', false),
+    // what you have open in the editor goes with the message, unless you turned it off for this one
+    context: msg.noContext ? [] : editorContext(id),
   }
   if (!runner.has(id)) {
     const fresh = NEW_CHATS.get(id)
@@ -1611,6 +1624,8 @@ function chatSend (msg, post) {
       if (live[id] && !runner.endedRecently(id)) return fail('This chat is running somewhere else. Reply there, or continue it here as a copy.')
       opts.cwd = s.cwd
     }
+    // the window's other folders, so Claude may work across them
+    opts.dirs = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath).filter(d => d !== opts.cwd).slice(0, 10)
     if (!opts.cwd || !fs.existsSync(opts.cwd)) return fail(`This chat's folder no longer exists${opts.cwd ? `: ${opts.cwd}` : '.'}`)
   }
   try {
@@ -1621,6 +1636,99 @@ function chatSend (msg, post) {
     clearCutoff(id)
   } catch (e) { return fail(e.message) }
   seenChat(id)
+}
+
+// ------------------------------------------------------------ the editor's part
+
+/** The last text editor you were in: focusing the logbook takes the "active" one away. */
+let LAST_EDITOR = null
+let EDITOR_SOON = null
+const SENT_CTX = new Map()        // chat id -> the editor context last sent with it, so it is not repeated
+function editorNow () {
+  const ed = vscode.window.activeTextEditor || LAST_EDITOR
+  if (!ed || ed.document.isClosed || ed.document.uri.scheme !== 'file') return null
+  const sel = ed.selection
+  const file = ed.document.uri.fsPath
+  if (!sel || sel.isEmpty) return { file, label: path.basename(file) }
+  const text = ed.document.getText(sel).slice(0, 20000)
+  const a = sel.start.line + 1, b = sel.end.line + (sel.end.character === 0 && sel.end.line > sel.start.line ? 0 : 1)
+  return { file, a, b, text, label: `${path.basename(file)}:${a}${b > a ? '-' + b : ''}` }
+}
+/** What you have open and selected, in the words Claude's own panel uses; only when it changed. */
+function editorContext (id) {
+  if (!cfg('chatEditorContext', true)) return []
+  const e = editorNow()
+  if (!e) return []
+  const key = `${e.file}|${e.a || ''}|${e.b || ''}|${(e.text || '').length}`
+  if (SENT_CTX.get(id) === key) return []
+  SENT_CTX.set(id, key)
+  return [e.text
+    ? `<ide_selection>The user selected the lines ${e.a} to ${e.b} from ${e.file}:\n${e.text}\n\nThis may or may not be related to the current task.</ide_selection>`
+    : `<ide_opened_file>The user opened the file ${e.file} in the IDE. This may or may not be related to the current task.</ide_opened_file>`]
+}
+function postEditor () {
+  const e = cfg('chatEditorContext', true) ? editorNow() : null
+  broadcast({ type: 'chatEditor', label: e?.label || '', file: e?.file || '' })
+}
+
+/** Files Claude is about to touch: open with unsaved changes means save first, and note the problems they had. */
+const PROBLEMS_BEFORE = new Map()     // file -> problems it had before Claude's edit
+const problemsOf = file => vscode.languages.getDiagnostics(vscode.Uri.file(file))
+  .filter(d => d.severity === vscode.DiagnosticSeverity.Error)
+  .map(d => `line ${d.range.start.line + 1}: ${d.message.split('\n')[0].slice(0, 200)}`)
+async function chatHook ({ callback, input }) {
+  const ti = input.tool_input || {}
+  const file = String(ti.file_path || ti.notebook_path || '')
+  if (!file || !path.isAbsolute(file)) return {}
+  if (callback === 'lb_save') {
+    const doc = vscode.workspace.textDocuments.find(d => d.uri.scheme === 'file' && d.uri.fsPath === file)
+    if (doc?.isDirty) { try { await doc.save() } catch {} }
+    if (input.tool_name !== 'Read') PROBLEMS_BEFORE.set(file, new Set(problemsOf(file)))
+    return {}
+  }
+  if (callback === 'lb_problems') {
+    // the language server needs a moment to look at the new text
+    await new Promise(r => setTimeout(r, 1500))
+    const before = PROBLEMS_BEFORE.get(file) || new Set()
+    PROBLEMS_BEFORE.delete(file)
+    const fresh = problemsOf(file).filter(p => !before.has(p)).slice(0, 12)
+    if (!fresh.length) return {}
+    return { hookSpecificOutput: { hookEventName: 'PostToolUse',
+      additionalContext: `New problems the editor reports in ${file} after this edit:\n${fresh.map(p => '- ' + p).join('\n')}` } }
+  }
+  return {}
+}
+
+/** Claude's proposed edit, side by side with the file as it is now, in the editor's own diff view. */
+async function showProposed (ask) {
+  const i = ask.input || {}
+  const file = String(i.file_path || '')
+  if (!file) return
+  let now = ''
+  try { now = fs.readFileSync(file, 'utf8') } catch {}
+  let next = now
+  const apply = (s, o, n, all) => !o ? s : all ? s.split(o).join(n) : s.replace(o, () => n)
+  if (ask.tool === 'Write') next = String(i.content ?? '')
+  else if (ask.tool === 'Edit') next = apply(now, String(i.old_string || ''), String(i.new_string || ''), i.replace_all)
+  else if (ask.tool === 'MultiEdit') for (const e of i.edits || []) next = apply(next, String(e.old_string || ''), String(e.new_string || ''), e.replace_all)
+  else return
+  const name = path.basename(file)
+  const stamp = Date.now().toString(36)
+  const right = vscode.Uri.parse(`${DIFF_SCHEME}:/proposed/${stamp}/${name}`)
+  DIFFS.set(right.toString(), next)
+  const left = fs.existsSync(file) ? vscode.Uri.file(file) : vscode.Uri.parse(`${DIFF_SCHEME}:/new/${stamp}/${name}`)
+  await vscode.commands.executeCommand('vscode.diff', left, right, `${name} · proposed by Claude`, { preview: true })
+}
+
+/** Claude stopped to ask you something and you are not looking: say so, once per question. */
+function askAlert (m) {
+  const tab = CHAT_TABS.get(m.id)
+  if (vscode.window.state.focused && (tab ? tab.visible : true)) return
+  const title = scan.index().find(x => x.id === m.id)?.title || 'a chat'
+  const what = m.ask?.kind === 'question' ? 'has a question' : m.ask?.kind === 'plan' ? 'has a plan for you to approve' : 'needs your OK'
+  vscode.window.showInformationMessage(`Claude ${what}: ${title}`, 'Open').then(pick => {
+    if (pick === 'Open' && EXT_CTX) openChatTab(EXT_CTX, m.id, false)
+  })
 }
 
 /** A value made safe for an HTML attribute. */
@@ -1898,7 +2006,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             if (now !== undefined && now !== null && typeof msg.value !== typeof now) return
             if (msg.key === 'skipPermissions' && msg.value === true) {
               const ok = await vscode.window.showWarningMessage(
-                'Resume and fork chats with --dangerously-skip-permissions? Claude will run every tool without asking.',
+                'Resume and fork chats with --dangerously-skip-permissions, and offer "Bypass permissions" in chats here? Claude will run every tool without asking.',
                 { modal: true }, 'Turn on')
               if (ok !== 'Turn on') { post({ type: 'env', cfg: settingsSnapshot() }); return }
             }
@@ -2092,6 +2200,68 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           case 'chatStop':
             runner.interrupt(msg.id)
             break
+          case 'chatAskDiff': {
+            const ask = runner.askOf(String(msg.id || ''), String(msg.requestId || ''))
+            if (ask) await showProposed(ask)
+            break
+          }
+          case 'chatCancelQueued': {
+            const id = String(msg.id || ''), uuid = String(msg.uuid || '')
+            runner.cancelQueued(id, uuid, ok => post({ type: 'chatQueue', id, uuid, state: ok ? 'cancelled' : 'started' }))
+            break
+          }
+          case 'chatSide': {
+            const id = String(msg.id || ''), key = String(msg.key || '')
+            runner.sideQuestion(id, String(msg.question || '').slice(0, 4000), answer => post({ type: 'chatSideAnswer', id, key, answer }))
+            break
+          }
+          case 'chatThinking':
+            runner.setThinking(String(msg.id || ''), !!msg.on)
+            break
+          case 'chatRewind': {
+            const id = String(msg.id || ''), uuid = String(msg.uuid || '')
+            if (!/^[0-9a-f-]{36}$/i.test(uuid)) break
+            runner.rewind(id, uuid, !!msg.dry, res => post({ type: 'chatRewound', id, uuid, dry: !!msg.dry, res: res && {
+              files: Array.isArray(res.filesChanged) ? res.filesChanged.length : Number(res.files_changed ?? res.filesChanged) || 0,
+              ok: res.canRewind !== false, error: String(res.error || ''),
+              adds: Number(res.insertions) || 0, dels: Number(res.deletions) || 0,
+            } }))
+            break
+          }
+          case 'chatMcp': {
+            const id = String(msg.id || '')
+            runner.mcpStatus(id, list => post({ type: 'chatMcpList', id, list }))
+            break
+          }
+          case 'chatFollow':
+            // /clear moved a chat to a new id: open that one as soon as its file is written
+            if (/^[\w-]+$/.test(String(msg.id || ''))) followNewChat(String(msg.id), post, null)
+            break
+          case 'chatFiles': {
+            // "@" in the box: files in the chat's folder whose path has these letters
+            const id = String(msg.id || ''), q = String(msg.q || '').slice(0, 80)
+            const base = runner.cwdOf(id) || scan.index().find(x => x.id === id)?.cwd || NEW_CHATS.get(id)?.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+            if (!base) break
+            const glob = q.replace(/[[\]{}*?!]/g, '')
+            const found = await vscode.workspace.findFiles(new vscode.RelativePattern(base, `**/*${glob}*`), '**/{node_modules,.git,dist,out,build,.next}/**', 200)
+            const low = glob.toLowerCase()
+            const list = found.map(u => path.relative(base, u.fsPath)).filter(r => !r.startsWith('..'))
+              .sort((a, b) => (path.basename(b).toLowerCase().startsWith(low) - path.basename(a).toLowerCase().startsWith(low)) || a.length - b.length)
+              .slice(0, 20)
+            post({ type: 'chatFilesList', id, q, list })
+            break
+          }
+          case 'chatEditorAsk':
+            postEditor()
+            break
+          case 'chatTerminal': {
+            // something only Claude's own terminal can show (new terms to accept)
+            const bin = claudeBin()
+            if (!bin) break
+            const term = vscode.window.createTerminal({ name: 'Claude', shellPath: bin, env: { PATH: `${path.dirname(bin)}:${process.env.PATH || ''}` } })
+            term.show(false)
+            break
+          }
           case 'chatTaskStop':
             runner.stopTask(String(msg.id || ''), String(msg.taskId || ''))
             break
@@ -2115,7 +2285,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             if (/^[\w.[\]-]{0,60}$/.test(String(msg.value || ''))) runner.setModel(msg.id, String(msg.value || ''))
             break
           case 'chatMode':
-            if (CHAT_MODES.includes(msg.value)) runner.setMode(msg.id, msg.value)
+            if (chatModes().includes(msg.value)) runner.setMode(msg.id, msg.value)
             break
           case 'chatEffort':
             if (!msg.value || CHAT_EFFORTS.includes(msg.value)) runner.setEffort(msg.id, msg.value || '')
@@ -2707,7 +2877,11 @@ function activate (ctx) {
   WATCH = watchTranscripts(ctx)
   runner.init({
     bin: claudeBin,
-    emit: m => broadcast(m),
+    emit: m => {
+      broadcast(m)
+      if (m.type === 'chatAsk') askAlert(m)
+    },
+    onHook: chatHook,
     onWrite: id => WATCH?.poke(id),
     // started, finished or waiting on you: the list and the board show it now
     // what the logbook's own Claude is doing is known here: no need to ask the CLI
@@ -2719,6 +2893,11 @@ function activate (ctx) {
     },
   })
   runner.seedKnown(ctx.globalState.get('chatKnown'))
+  // what you have open, for the line above the box that says what goes with your message
+  ctx.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(ed => { if (ed) LAST_EDITOR = ed; postEditor() }),
+    vscode.window.onDidChangeTextEditorSelection(e => { LAST_EDITOR = e.textEditor; clearTimeout(EDITOR_SOON); EDITOR_SOON = setTimeout(postEditor, 250) }))
+  LAST_EDITOR = vscode.window.activeTextEditor || null
   // and asked afresh once per window, in case skills or plugins changed since
   setTimeout(() => {
     if (DEACTIVATED || !cfg('chatHere', true)) return

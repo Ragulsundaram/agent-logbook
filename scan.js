@@ -95,6 +95,10 @@ const clean = t => {
   if (s.includes('<command-')) {
     for (const k of ['name', 'message', 'args']) s = cutBlocks(s, `<command-${k}>`, `</command-${k}>`)
   }
+  // what the editor had open, sent along with a message: not something you typed
+  if (s.includes('<ide_')) for (const k of ['ide_opened_file', 'ide_selection']) s = cutBlocks(s, `<${k}>`, `</${k}>`)
+  // a file attached to a message: its name stands in for its text
+  if (s.includes('<attached-file')) s = s.replace(/<attached-file name="([^"]*)">[\s\S]*?<\/attached-file>/g, (_, n) => `📎 ${n}`)
   return s.trim()
 }
 
@@ -2102,6 +2106,13 @@ function commandOut (s) {
 const outputNote = (text, ts) => ({ role: 'note', kind: 'command', text,
   tools: [], images: [], edits: [], ts: ts || '' })
 
+const OUTPUT_TOOLS = /^(Bash|Grep|Glob|WebFetch|WebSearch|BashOutput|mcp__)/
+/** A tool result's text, whichever shape it came in, without terminal colours. */
+function toolOutput (c) {
+  const t = typeof c === 'string' ? c : Array.isArray(c) ? c.filter(x => x?.type === 'text').map(x => x.text).join('\n') : ''
+  return String(t).replace(ANSI_CODES, '').replace(/<\/?tool_use_error>/g, '').trim()
+}
+
 /** Drop the heavy bits: image bytes and edit bodies are fetched on demand. */
 const slim = turns => turns.map((t, ti) => ({
   ...t,
@@ -2129,6 +2140,7 @@ function parseTranscript (raw, keepSidechain) {
 function parseStart (keepSidechain) {
   return {
     keepSidechain, turns: [], byFile: new Map(), cacheRead: 0, readable: 0, model: '',
+    toolIdx: new Map(),        // tool_use id -> its tool, so the result that follows can be pinned on it
     // the footer numbers: context used, cache efficiency, turns, and files touched
     info: { series: [], context: 0, window: 2e5, cachePct: 0, turns: 0, files: [] },
   }
@@ -2250,6 +2262,19 @@ function parseMore (st, raw) {
       byFile.set(file, f)
     }
 
+    // what a tool printed, or the error it hit, pinned on the call that ran it
+    for (const b of blocksOf(e)) {
+      if (b?.type !== 'tool_result') continue
+      const tool = st.toolIdx?.get(b.tool_use_id)
+      if (!tool) continue
+      st.toolIdx.delete(b.tool_use_id)
+      const out = toolOutput(b.content)
+      tool.err = !!b.is_error
+      // file reads and listings are long and say little; commands, searches and errors are kept
+      const keep = tool.err ? 1200 : OUTPUT_TOOLS.test(tool.name) ? 2000 : 0
+      if (keep && out) tool.out = out.length > keep ? out.slice(0, keep) + '\n…' : out
+    }
+
     const text = textOf(e)
     const edits = blocksOf(e)
       .filter(b => b?.type === 'tool_use' && EDITS.includes(b.name) &&
@@ -2269,12 +2294,17 @@ function parseMore (st, raw) {
       .map(b => b.name === 'Agent'
         ? { name: b.name, detail: toolDetail(b.name, b.input), useId: b.id }
         : { name: b.name, detail: toolDetail(b.name, b.input) })
+    blocksOf(e).filter(b => b?.type === 'tool_use' && b.id).forEach((b, i) => st.toolIdx?.set(b.id, tools[i]))
+    // results arrive within a few records: a call that never got one is not waited on for ever
+    if (st.toolIdx?.size > 400) for (const k of [...st.toolIdx.keys()].slice(0, 200)) st.toolIdx.delete(k)
     const images = blocksOf(e)
       .filter(b => b?.type === 'image' && b.source?.type === 'base64' && b.source.data)
       .map(b => ({ src: `data:${b.source.media_type || 'image/png'};base64,${b.source.data}` }))
       .concat(shots)
     if ((!text || JUNK.test(text)) && !tools.length && !images.length) continue
-    turns.push({ role: e.type, text: JUNK.test(text) ? '' : text, tools, images, edits, ts: e.timestamp || '' })
+    turns.push({ role: e.type, text: JUNK.test(text) ? '' : text, tools, images, edits, ts: e.timestamp || '',
+      // a message you sent keeps its id: edits made since it can be undone
+      ...(e.type === 'user' && e.uuid ? { uuid: e.uuid } : {}) })
   }
   st.cacheRead = cacheRead; st.readable = readable
 }

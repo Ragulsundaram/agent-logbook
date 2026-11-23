@@ -345,6 +345,11 @@
           "enum": ["", "low", "medium", "high", "xhigh", "max"],
           "description": "How hard Claude thinks in chats started from the logbook. Empty uses Claude's own setting. Changed with /effort in a chat's box, which also sets it here for new chats."
         },
+        "claudeHistory.chatEditorContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "When you chat from the logbook, tell Claude which file you have open and what you have selected, as Claude's own panel does. The line above the message box shows what goes, and you can leave it out of one message."
+        },
         "claudeHistory.chatPermissionMode": {
           "type": "string",
           "default": "default",

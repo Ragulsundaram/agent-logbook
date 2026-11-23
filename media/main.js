@@ -1449,6 +1449,11 @@ function renderBlocks (t, blocks, from, body, to = blocks.length, before = null)
       const who = el('span', 'whot', (turn.role === 'user' ? 'You' : 'Claude') + (turn.ts ? ' · ' + msgClock(turn.ts) : ''))
       if (turn.ts) who.title = clock(turn.ts)
       when.appendChild(who)
+      // a message you sent: the file edits Claude made after it can be undone
+      if (turn.role === 'user' && turn.uuid && window.chatRewindButton) {
+        const rb = window.chatRewindButton(t.id, turn.uuid)
+        if (rb) when.appendChild(rb)
+      }
       w.appendChild(when)
       run = []
     }
@@ -1488,6 +1493,8 @@ let LAST_SIGS = []
 // what a block looks like on screen: its size, and the state of any agent it
 // launched - a card turning from running to done has to be redrawn too
 const blockSig = (b, t) => [b.role, (b.text || '').length, (b.detail || '').length, b.tools.length,
+  // a tool's output lands after the call: the block is redrawn when it does
+  b.tools.filter(x => x.out || x.err).length,
   (b.images || []).length, (b.edits || []).length, b.ts || '',
   b.tools.filter(x => x.useId).map(x => {
     const a = (t.agents || []).find(g => g.toolUseId === x.useId)
@@ -2020,9 +2027,12 @@ function toolSummary (tools) {
   }
   const wrap = el('div', 'twork')
   const head = el('div', 'thead2')
+  const failed = tools.filter(t => t.err).length
   head.append(el('span', 'tsum',
-    order.map(k => phraseFor(k, FILE_TOOLS.has(k) ? new Set(counts.get(k).map(t => t.detail || t)).size : counts.get(k).length)).join(' · ')),
-    el('span', 'chev2', ALLTOOLS ? '⌄' : '›'))
+    order.map(k => phraseFor(k, FILE_TOOLS.has(k) ? new Set(counts.get(k).map(t => t.detail || t)).size : counts.get(k).length)).join(' · ')))
+  // a step that failed says so on the folded line, not only inside it
+  if (failed) head.appendChild(el('span', 'tfail', `${failed} failed`))
+  head.appendChild(el('span', 'chev2', ALLTOOLS ? '⌄' : '›'))
 
   const body = el('div', 'tdetail')
   body.hidden = !ALLTOOLS
@@ -2046,6 +2056,13 @@ function toolSummary (tools) {
       }
       card.appendChild(cp)
     }
+    // what it printed, or the error it hit
+    if (t.out) {
+      const out = el('pre', 'tout' + (t.err ? ' err' : ''))
+      out.textContent = t.out
+      card.appendChild(out)
+    } else if (t.err) card.appendChild(el('div', 'tout err', 'Failed'))
+    if (t.err) card.classList.add('failed')
     body.appendChild(card)
   }
   head.onclick = () => {
@@ -2550,7 +2567,9 @@ function footer (t) {
   spark.title = 'Open the analytics for this chat'
   spark.onclick = () => send({ type: 'analytics', id: t.id })
   top.appendChild(spark)
-  const pct = i.window ? Math.round(i.context / i.window * 100) : 0
+  // a chat running here has Claude's own count; otherwise it is worked out from the transcript
+  const counted = typeof CHAT !== 'undefined' ? CHAT.state.get(t.id)?.context : null
+  const pct = Number.isFinite(counted) ? counted : i.window ? Math.round(i.context / i.window * 100) : 0
   const facts = el('div', 'fnums')
   const row2 = SESSIONS.find(x => x.id === t.id)
   // two labelled groups rather than one long run: what the conversation uses
