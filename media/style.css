@@ -1506,6 +1506,11 @@ body[data-mode="sidebar"] #rescan { display: none !important }
   background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)) }
 /* a quiet lift on focus: the theme's focus colour (often bright yellow) shouted */
 .cbox:focus-within { border-color: color-mix(in srgb, var(--vscode-foreground) 28%, transparent) }
+/* a "!" shell command: the box turns the terminal's shell colour and says so */
+.cbox.shell, .cbox.shell:focus-within { border-color: var(--clay); background: color-mix(in srgb, var(--clay) 8%, var(--vscode-input-background)) }
+.cbox.shell .cinput { color: var(--clay); font-family: var(--vscode-editor-font-family) }
+.cbox.shell::before { content: attr(data-mode); flex: 1 0 100%; order: -1; font-size: 10px; letter-spacing: .03em;
+  text-transform: uppercase; color: var(--clay); padding: 2px 0 0 }
 /* the webview's own textarea:focus outline outranks a single class */
 .cbox .cinput:focus, .cbox .cinput:focus-visible { outline: none }
 .cinput { flex: 1 1 0; min-width: 0; box-sizing: border-box; resize: none; overflow-y: auto; max-height: 220px; padding: 3px 0 1px;

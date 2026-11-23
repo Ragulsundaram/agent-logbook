@@ -650,6 +650,17 @@ function tipDone () {
 function paintGo (c) {
   const st = CHAT.state.get(c.id)
   const empty = !c.ta.value.trim() && !(CHAT.images.get(c.id) || []).length
+  // "!" switches the box to a shell command, as Claude Code's terminal does: it looks it
+  const shell = /^\s*!/.test(c.ta.value) && !(CHAT.images.get(c.id) || []).length
+  c.ta.parentNode.classList.toggle('shell', shell)
+  c.ta.parentNode.dataset.mode = shell ? 'Shell command · runs in the chat\'s folder' : ''
+  if (shell) {
+    c.go.replaceChildren(icon('play'))
+    c.go.classList.remove('stop')
+    c.go.title = 'Run (Enter)'
+    c.go.disabled = !c.ta.value.replace(/^\s*!/, '').trim()
+    return
+  }
   const stop = !!st?.busy && empty
   c.go.replaceChildren(stop ? el('span', 'cstopico') : icon('play'))
   c.go.classList.toggle('stop', stop)

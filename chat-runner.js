@@ -164,6 +164,8 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort } = {}) {
   const env = { ...process.env, PATH: `${path.dirname(bin)}:${process.env.PATH || ''}` }
   // started from inside a Claude session, the child would think it is nested
   delete env.CLAUDECODE
+  // Claude keeps its to-do list with the tool the chat view draws, as in Claude's own editor panel
+  env.CLAUDE_CODE_ENABLE_TASKS = '0'
   const proc = spawn(bin, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
   const r = {
     id, cwd, proc, buf: '', err: '', busy: false, model: model || '', mode: mode || '', effort: effort || '',
@@ -384,7 +386,10 @@ function onLine (r, m) {
     case 'result': {
       // each message is answered as its own turn, with its own result: a chat
       // with a message still queued is still working. Stopping drops the queue.
-      const stopped = m.subtype === 'error_during_execution' || m.terminal_reason === 'interrupted'
+      // only a stop you asked for counts as stopped: the same subtype also means it failed
+      const asked = Date.now() - (r.interruptedAt || 0) < 15000
+      const stopped = ['aborted_streaming', 'aborted_tools', 'interrupted'].includes(m.terminal_reason) ||
+        (m.subtype === 'error_during_execution' && asked)
       r.pending = stopped ? 0 : Math.max(0, r.pending - 1)
       r.busy = r.pending > 0
       clearTimeout(r.stopCheck); r.stopCheck = null
@@ -404,7 +409,7 @@ function onLine (r, m) {
         emit(r.id, {
           type: 'chatDone',
           ms: m.duration_ms || 0,
-          error: m.is_error ? String(m.result || m.subtype || 'Claude stopped with an error.').slice(0, 2000) : '',
+          error: m.is_error ? errorText(m).slice(0, 2000) : '',
           stopped,
         })
       }
@@ -415,6 +420,17 @@ function onLine (r, m) {
       return
     }
   }
+}
+
+/** What went wrong, in words: an error turn keeps its reasons in a list, not in the reply. */
+const RESULT_WHY = {
+  error_max_turns: 'Claude reached the most steps it may take in one reply. Send a message to let it carry on.',
+  error_max_budget_usd: 'Claude reached the spending limit set for this chat.',
+}
+function errorText (m) {
+  if (m.subtype === 'success') return String(m.result || 'Claude stopped with an error.')
+  const why = (Array.isArray(m.errors) ? m.errors : []).map(String).filter(Boolean).join('; ')
+  return why || RESULT_WHY[m.subtype] || String(m.result || '') || 'Claude stopped with an error.'
 }
 
 /** Nothing more is coming: the chat is done, whatever the count of messages said. */
@@ -515,6 +531,7 @@ function interrupt (id) {
   const r = RUNS.get(id)
   if (!r) return
   control(r, { subtype: 'interrupt' })
+  r.interruptedAt = Date.now()
   // a Claude mid-reply ends it at once; one with nothing running says nothing,
   // and the chat must not keep saying "working" because of it
   clearTimeout(r.stopCheck)
