@@ -31,6 +31,8 @@ const CHAT = {
   commands: [],          // slash commands, as the last Claude to start listed them
   models: [],
   busySince: new Map(),  // chat id -> when it last started working
+  taskOut: new Map(),    // "chat id|task id" -> { output, truncated } of a background task you opened
+  todosFold: new Map(),  // chat id -> true/false: you folded or opened its to-do list (a finished one folds by itself)
 }
 let COMPOSER = null
 
@@ -230,6 +232,9 @@ function paintLive () {
     w.appendChild(b)
     live.appendChild(w)
   }
+  // Claude's to-do list, while it is working through one
+  const todos = st?.todos || []
+  if (todos.length) live.appendChild(todoList(id, todos, !!st?.busy))
   // the one status line, as Claude Code's terminal has: what it is doing, for how long
   if ((st?.asks || []).length) {
     const line = el('div', 'chatworking wait')
@@ -238,24 +243,35 @@ function paintLive () {
   } else if (st?.busy) {
     const line = el('div', 'chatworking')
     line.append(el('span', 'chatdots'), el('span', '',
-      p?.tool && !p.text ? `Running ${toolWord(p.tool)}…` : p?.thinking ? 'Thinking…' : p?.text ? 'Writing…' : 'Working…'),
+      st.status === 'compacting' ? 'Compacting the conversation…'
+        : p?.tool && !p.text ? `Running ${toolWord(p.tool)}…` : p?.thinking ? 'Thinking…' : p?.text ? 'Writing…' : 'Working…'),
     el('span', 'chatel', elapsed(id)))
+    live.appendChild(line)
+  } else if (st?.status === 'compacting') {
+    const line = el('div', 'chatworking')
+    line.append(el('span', 'chatdots'), el('span', '', 'Compacting the conversation…'))
     live.appendChild(line)
   } else if (st?.bg?.length) {
     // the reply is done, but agents or commands it started are still going:
     // Claude picks their results up by itself when they finish
     const n = st.bg.length
     const line = el('div', 'chatworking')
-    line.title = st.bg.map(t => t.what).filter(Boolean).join('\n')
     line.append(el('span', 'chatdots'), el('span', '',
-      `Waiting for ${n} background ${n === 1 ? 'task' : 'tasks'}${st.bg[0].what && n === 1 ? `: ${st.bg[0].what}` : ''}`))
+      `Waiting for ${n} background ${n === 1 ? 'task' : 'tasks'}. Claude picks up the results when they finish`))
     live.appendChild(line)
   }
+  // agents and commands running in the background, working or not: each can be looked at or stopped
+  for (const t of st?.bg || []) live.appendChild(bgTask(id, t))
   echoes.filter(isQueued).forEach(drawEcho)
   const note = CHAT.notes.get(id)
   if (note) {
     const n = el('div', 'chatnote' + (note.err ? ' err' : ''))
     n.appendChild(el('span', '', note.text))
+    if (note.action) {
+      const b = el('button', 'btn', note.action.label)
+      b.onclick = () => send({ ...note.action.msg, id })
+      n.appendChild(b)
+    }
     const x = el('button', 'iconbtn', '×')
     x.title = 'Dismiss'
     x.onclick = () => { CHAT.notes.delete(id); paintLive() }
@@ -263,6 +279,72 @@ function paintLive () {
     live.appendChild(n)
   }
   live.hidden = !live.children.length
+}
+
+/** The to-do list: what is done, what Claude is on, what is left. A finished list folds to one line. */
+function todoList (id, todos, busy) {
+  const done = todos.filter(t => t.status === 'completed').length
+  const finished = done === todos.length
+  const w = el('div', 'chattodos')
+  const head = el('button', 'tdhead')
+  const open = !(CHAT.todosFold.get(id) ?? finished)
+  head.append(el('span', 'tdtitle', 'To-do'), el('span', 'chatmeta', `${done} of ${todos.length} done`))
+  head.title = open ? 'Fold the list' : 'Show the list'
+  head.setAttribute('aria-expanded', String(open))
+  head.onclick = () => { CHAT.todosFold.set(id, open); paintLive() }
+  w.appendChild(head)
+  if (!open) return w
+  const ul = el('ul', 'tdlist')
+  for (const t of todos) {
+    const li = el('li', 'td ' + t.status)
+    li.append(el('span', 'tdmark', t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '●' : '○'),
+      el('span', '', t.status === 'in_progress' && busy && t.doing ? t.doing : t.text))
+    ul.appendChild(li)
+  }
+  w.appendChild(ul)
+  return w
+}
+
+/** One background agent or command: what it is, its output on request, and a way to stop it. */
+function bgTask (id, t) {
+  const key = id + '|' + t.id
+  const w = el('div', 'chatshell running bgtask')
+  const head = el('div', 'shhead')
+  const kind = /bash|shell/i.test(t.kind) ? 'Command' : /agent/i.test(t.kind) ? 'Agent' : 'Task'
+  head.append(el('span', 'bgkind', kind), el('span', 'shcmd', t.what || 'Running in the background'))
+  const out = CHAT.taskOut.get(key)
+  const look = el('button', 'btn', out ? 'Hide output' : 'Output')
+  look.onclick = () => {
+    if (CHAT.taskOut.has(key)) { CHAT.taskOut.delete(key); paintLive(); return }
+    CHAT.taskOut.set(key, { output: '', truncated: false, loading: true })
+    send({ type: 'chatTaskOutput', id, taskId: t.id })
+    paintLive()
+  }
+  const stop = el('button', 'btn', 'Stop')
+  stop.title = 'Stops just this one. The reply and anything else running carry on'
+  stop.onclick = () => { stop.disabled = true; stop.textContent = 'Stopping…'; send({ type: 'chatTaskStop', id, taskId: t.id }) }
+  head.append(look, stop)
+  w.appendChild(head)
+  if (out) {
+    const text = out.loading && !out.output ? 'Loading…' : out.output || (out.failed ? 'Its output could not be read.' : 'Nothing printed yet.')
+    const pre = el('pre', 'shout', (out.truncated ? '…' : '') + (text.length > 20000 ? '…' + text.slice(-20000) : text))
+    w.appendChild(pre)
+    pre.onscroll = () => { out.top = pre.scrollHeight - pre.scrollTop - pre.clientHeight > 8 ? pre.scrollTop : null }
+    requestAnimationFrame(() => { pre.scrollTop = out.top ?? pre.scrollHeight })
+  }
+  return w
+}
+// an open output follows along while the task runs
+setInterval(() => {
+  if (!COMPOSER || document.hidden) return
+  const bg = CHAT.state.get(COMPOSER.id)?.bg || []
+  for (const t of bg) if (CHAT.taskOut.has(COMPOSER.id + '|' + t.id)) send({ type: 'chatTaskOutput', id: COMPOSER.id, taskId: t.id })
+}, 2000)
+
+const FALLBACK_WHY = {
+  model_not_found: 'the model you picked is not available',
+  permission_denied: 'your account cannot use the model you picked',
+  overloaded: 'the model you picked is busy right now',
 }
 
 const toolWord = t => ({ Bash: 'a command', Read: 'a file read', Edit: 'an edit', Write: 'a write', Grep: 'a search', Glob: 'a file search', Task: 'an agent', Agent: 'an agent', WebFetch: 'a web fetch', WebSearch: 'a web search' }[t] || t)
@@ -473,8 +555,8 @@ function recall (c, dir) {
   return true
 }
 
-function note (id, text, err) {
-  CHAT.notes.set(id, { text, err })
+function note (id, text, err, action) {
+  CHAT.notes.set(id, { text, err, action })
   if (COMPOSER?.id === id) placeLive()
 }
 
@@ -1047,6 +1129,16 @@ if (!BOARD_MODE) {
       if (m.models?.length) CHAT.models = m.models
       return
     }
+    if (m.type === 'chatTaskOutput') {
+      const key = m.id + '|' + m.taskId
+      const out = CHAT.taskOut.get(key)
+      if (!out) return
+      if (m.output === null) { out.failed = true; out.loading = false }
+      else Object.assign(out, { output: m.output, truncated: m.truncated, loading: false, failed: false })
+      // only its own box changes: redrawing everything would reset what you were scrolled to
+      if (COMPOSER?.id === m.id) placeLive()
+      return
+    }
     if (m.type === 'chatCutoff') { CHAT.cutoff = new Set(m.ids || []); paintComposer(); return }
     if (!m.type.startsWith('chat') || !m.id) return
     const id = m.id
@@ -1088,9 +1180,18 @@ if (!BOARD_MODE) {
         CHAT.state.set(id, { ...st, busy: false, asks: [] })
         CHAT.partial.delete(id)
         CHAT.done.set(id, { at: Date.now(), ms: m.ms })
+        setTimeout(() => { if (COMPOSER?.id === id) paintStatus(COMPOSER) }, 61000)
+        // the sign-in note says what to do about the error; the error itself adds nothing
+        if (CHAT.notes.get(id)?.action) break
         if (m.error && !m.stopped) note(id, m.error, true)
         else if (m.stopped) note(id, 'Stopped. Type to carry on.', false)
-        setTimeout(() => { if (COMPOSER?.id === id) paintStatus(COMPOSER) }, 61000)
+        break
+      case 'chatAuth':
+        note(id, 'Claude is signed out, or its sign-in has expired. Sign in again, then send your message again.', true,
+          { label: 'Sign in again', msg: { type: 'chatLogin' } })
+        break
+      case 'chatFallback':
+        note(id, `Claude switched to ${m.model}${FALLBACK_WHY[m.trigger] ? ` because ${FALLBACK_WHY[m.trigger]}` : ' by itself'}. Pick another with /model.`, false)
         break
       case 'chatExit':
         CHAT.state.set(id, { ...st, running: false, busy: false, asks: [], endedAt: Date.now() })

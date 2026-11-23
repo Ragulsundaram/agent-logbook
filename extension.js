@@ -2092,6 +2092,25 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           case 'chatStop':
             runner.interrupt(msg.id)
             break
+          case 'chatTaskStop':
+            runner.stopTask(String(msg.id || ''), String(msg.taskId || ''))
+            break
+          case 'chatTaskOutput': {
+            const id = String(msg.id || ''), taskId = String(msg.taskId || '')
+            runner.taskOutput(id, taskId, res => post({ type: 'chatTaskOutput', id, taskId, output: res?.output ?? null, truncated: !!res?.truncated }))
+            break
+          }
+          case 'chatLogin': {
+            // signing in is Claude's own flow, in a terminal: it opens the browser and waits there
+            const bin = claudeBin()
+            if (!bin) { vscode.window.showWarningMessage('Claude Code was not found. Install it, or open a terminal once so the logbook can find it.'); break }
+            const term = vscode.window.createTerminal({
+              name: 'Claude sign-in', shellPath: bin, shellArgs: ['auth', 'login'],
+              env: { PATH: `${path.dirname(bin)}:${process.env.PATH || ''}` },
+            })
+            term.show(false)
+            break
+          }
           case 'chatModel':
             if (/^[\w.[\]-]{0,60}$/.test(String(msg.value || ''))) runner.setModel(msg.id, String(msg.value || ''))
             break

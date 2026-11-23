@@ -126,7 +126,9 @@ function state (id) {
     mode: r?.mode || '',
     effort: r?.effort || '',
     asks: r ? [...r.asks.values()] : [],
-    bg: r ? r.bg.map(t => ({ what: t.what, kind: t.kind })) : [],
+    bg: r ? r.bg.map(t => ({ id: t.id, what: t.what, kind: t.kind })) : [],
+    status: r?.status || '',
+    todos: r?.todos || [],
     partial: r ? partialOf(r) : null,
     commands: KNOWN.commands,
     models: KNOWN.models,
@@ -172,6 +174,9 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort } = {}) {
     expectTurn: null,               // a background task finished: Claude's own turn is coming
     nextTurn: null,                 // a reply ended with messages still counted: their turn should start soon
     stopCheck: null,                // Esc was pressed: the reply should end soon
+    status: '',                     // what Claude says it is busy with beyond the reply: 'compacting'
+    todos: [],                      // Claude's to-do list, as its last update left it
+    waits: new Map(),               // our own requests waiting on Claude's answer: request id -> callback
   }
   RUNS.set(id, r)
   proc.stdout.setEncoding('utf8')
@@ -201,6 +206,8 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort } = {}) {
     if (r.ended) return
     r.ended = true
     clearTimeout(r.idle); clearTimeout(r.partialTimer); clearTimeout(r.expectTurn); clearTimeout(r.nextTurn); clearTimeout(r.stopCheck)
+    for (const cb of r.waits.values()) { try { cb(null) } catch {} }
+    r.waits.clear()
     if (RUNS.get(id) === r) RUNS.delete(id)
     ENDED.set(id, Date.now())
     // a newer Claude already took this chat over (a message sent while this one
@@ -225,8 +232,13 @@ function write (r, obj) {
   try { r.proc.stdin.write(JSON.stringify(obj) + '\n') } catch {}
 }
 
-function control (r, request) {
+function control (r, request, onAnswer) {
   const request_id = `lb-${++r.seq}`
+  // an answer that never comes still calls back, so nothing waits for ever
+  if (onAnswer) {
+    const t = setTimeout(() => { if (r.waits.delete(request_id)) onAnswer(null) }, 10000)
+    r.waits.set(request_id, res => { clearTimeout(t); onAnswer(res) })
+  }
   write(r, { type: 'control_request', request_id, request })
   return request_id
 }
@@ -272,6 +284,18 @@ function onLine (r, m) {
     }
     case 'assistant':
       if (m.parent_tool_use_id) return
+      // signed out, or the sign-in expired: nothing works until you sign in again
+      if (m.error === 'authentication_failed') emit(r.id, { type: 'chatAuth' })
+      // the to-do list is whatever Claude last wrote to it
+      for (const b of Array.isArray(m.message?.content) ? m.message.content : []) {
+        if (b?.type === 'tool_use' && b.name === 'TodoWrite' && Array.isArray(b.input?.todos)) {
+          r.todos = b.input.todos.slice(0, 50).map(t => ({
+            text: String(t.content || '').slice(0, 300), doing: String(t.activeForm || '').slice(0, 300),
+            status: ['pending', 'in_progress', 'completed'].includes(t.status) ? t.status : 'pending',
+          }))
+          emit(r.id, { type: 'chatState', state: state(r.id) })
+        }
+      }
       // the whole message is in the transcript now; the view swaps the
       // half-written copy for it on its next read
       emit(r.id, { type: 'chatLanded' })
@@ -285,9 +309,16 @@ function onLine (r, m) {
         r.actualModel = m.model || ''
         if (m.permissionMode) r.mode = m.permissionMode
         emit(r.id, { type: 'chatState', state: state(r.id), actualModel: r.actualModel })
-      } else if (m.subtype === 'status' && m.permissionMode) {
-        r.mode = m.permissionMode
+      } else if (m.subtype === 'status') {
+        if (m.permissionMode) r.mode = m.permissionMode
+        // a status about hooks says nothing about compacting: it is left as it was
+        if (!('userPromptSubmitHooksRunning' in m)) r.status = String(m.status || '')
         emit(r.id, { type: 'chatState', state: state(r.id) })
+      } else if (m.subtype === 'model_fallback' && typeof m.fallback_model === 'string') {
+        // Claude moved to another model by itself: say so, and show the one it is on now
+        r.actualModel = m.fallback_model
+        emit(r.id, { type: 'chatFallback', model: m.fallback_model, trigger: String(m.trigger || '') })
+        emit(r.id, { type: 'chatState', state: state(r.id), actualModel: r.actualModel })
       } else if (m.subtype === 'background_tasks_changed') {
         // the reply can end while agents or commands it started keep going
         r.bg = (Array.isArray(m.tasks) ? m.tasks : []).map(t => ({
@@ -341,6 +372,8 @@ function onLine (r, m) {
       return
     case 'control_response': {
       const res = m.response || {}
+      const cb = r.waits.get(res.request_id)
+      if (cb) { r.waits.delete(res.request_id); try { cb(res.subtype === 'success' ? res.response || {} : null) } catch {} return }
       if (res.request_id === 'init' && res.subtype === 'success') {
         learn(res.response)
         FROM_CHAT = true
@@ -361,6 +394,7 @@ function onLine (r, m) {
       clearTimeout(r.nextTurn); r.nextTurn = null
       if (r.busy) r.nextTurn = setTimeout(() => settle(r, false), 5000)
       r.partial = { text: '', thinking: false, tool: '' }
+      r.status = ''
       clearTimeout(r.partialTimer); r.partialTimer = null
       // an answer that was never given is moot once the turn has ended
       for (const k of r.asks.keys()) emit(r.id, { type: 'chatAskGone', requestId: k })
@@ -487,6 +521,23 @@ function interrupt (id) {
   r.stopCheck = setTimeout(() => settle(r, true), 3000)
 }
 
+/** Stop one background agent or command; the reply and the others carry on. */
+function stopTask (id, taskId) {
+  const r = RUNS.get(id)
+  if (!r || !r.bg.some(t => t.id === taskId)) return false
+  control(r, { subtype: 'stop_task', task_id: taskId })
+  return true
+}
+
+/** What a background agent or command has printed so far. */
+function taskOutput (id, taskId, done) {
+  const r = RUNS.get(id)
+  if (!r || !r.bg.some(t => t.id === taskId)) return done(null)
+  control(r, { subtype: 'get_task_output', task_id: taskId }, res => done(res && {
+    output: String(res.output || ''), truncated: !!res.truncated,
+  }))
+}
+
 function setModel (id, model) {
   const r = RUNS.get(id)
   if (!r) return
@@ -551,4 +602,4 @@ const askOf = (id, requestId) => RUNS.get(id)?.asks.get(requestId) || null
 /** The folder Claude runs in for this chat, when it runs here. */
 const cwdOf = id => RUNS.get(id)?.cwd || ''
 
-module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, setModel, setMode, setEffort, stop, stopAll, markEnded }
+module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, setModel, setMode, setEffort, stop, stopAll, markEnded }
