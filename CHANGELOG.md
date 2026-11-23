@@ -1,13 +1,7 @@
 # Changelog
 
-## 1.9.0
+## 1.10.0
 
-- Chat with Claude right in the logbook. Every Claude chat has a message box under it, and + starts a new chat here. Claude's replies stream in as they are written, with the same status line as the terminal: what it is doing, for how long, and Esc to stop. On by default; turn it off in Settings to keep the logbook read-only.
-- Approvals, questions and plans appear as cards above the box. Pictures can be pasted into a message, and into an answer to a question.
-- The box works like Claude Code's: / lists commands, /model and /effort change the model and effort, Shift+Tab switches the mode, Up brings back earlier messages, and a message starting with ! runs as a shell command whose output Claude gets with your next message. Messages sent while Claude is working queue up behind the reply.
-- New chats start on the mode and effort you picked last.
-- Open a chat in its own editor tab, from its menu, the list's right-click menu, or Alt-click for a split, and keep several side by side. Tabs show whether their chat is working or waiting on you, and come back after a restart.
-- A chat running in a terminal or another app says where, with Show it for a terminal in this window, or continues here as a new chat with its full history.
 - Background commands and agents each get a card while they run, working or not: Output shows what a command printed or the steps an agent has taken so far, and Stop ends just that one. An agent's card says what it is doing now. An agent's report shows as one line with the report folded under it.
 - Working and done come from Claude itself, so a chat no longer sticks on "working". One Esc stops the reply and the turns queued behind it, and a queued message can be taken back.
 - The status line says what is happening: the command or file a step is on, compacting, retrying after an error, hooks running, or thinking with a token count. A sub-agent's current step and Claude's thinking show under it.
@@ -16,6 +10,16 @@
 - Commands, searches and web fetches show what they printed, any step that fails shows its error, and a failed step says so on the folded line. Edits you deny, or that fail, no longer count as changes.
 - Claude's to-do list, /btw for a side question, /thinking, /mcp, and effort changes without a restart. Notices for usage limits, a model switch, an expired sign-in or new terms, and the auto mode "keep going?" question. A pop-up when Claude asks something while you are looking elsewhere.
 - /clear carries on in the fresh chat, and new skills appear in / without a reload. A message starting with ! turns the box into a shell command.
+
+## 1.9.0
+
+- Chat with Claude right in the logbook. Every Claude chat has a message box under it, and + starts a new chat here. Claude's replies stream in as they are written, with the same status line as the terminal: what it is doing, for how long, and Esc to stop. On by default; turn it off in Settings to keep the logbook read-only.
+- Approvals, questions and plans appear as cards above the box. Pictures can be pasted into a message, and into an answer to a question.
+- The box works like Claude Code's: / lists commands, /model and /effort change the model and effort, Shift+Tab switches the mode, Up brings back earlier messages, and a message starting with ! runs as a shell command whose output Claude gets with your next message. Messages sent while Claude is working queue up behind the reply.
+- New chats start on the mode and effort you picked last.
+- Open a chat in its own editor tab, from its menu, the list's right-click menu, or Alt-click for a split, and keep several side by side. Tabs show whether their chat is working or waiting on you, and come back after a restart.
+- A chat running in a terminal or another app says where, with Show it for a terminal in this window, or continues here as a new chat with its full history.
+- A chat waiting on background agents or commands stays marked as working until Claude has taken their results up, and an agent's report shows as one line with the report folded under it.
 - If a window reload or close cuts off a reply, the chat says so and offers Continue.
 - A tidier chat view: the chat's actions sit in one menu on the title row, cost shows once as an estimate at API prices, context shows as a percentage, and the laptop's memory and CPU appear only when a chat is using a lot.
 - Faster and steadier: live updates redraw only what changed, the running-chats check slows down while the panel is hidden, and the chat list refreshes in a fraction of the time.
