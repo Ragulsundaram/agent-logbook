@@ -17,6 +17,12 @@
     "onStartupFinished",
     "onWebviewPanel:claudeHistory.chat"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Chatting with Claude from the logbook is off in a folder you have not trusted: Claude would load that folder's settings, hooks and MCP servers. Reading chats still works."
+    }
+  },
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -335,22 +341,26 @@
           "description": "Pop up a notification when a running chat finishes and is waiting for you. A count always shows in the status bar."
         },
         "claudeHistory.chatHere": {
+          "scope": "application",
           "type": "boolean",
           "default": true,
           "description": "Chat with Claude from the logbook: a message box under each Claude chat, and \"New chat here\" on the + button. Off keeps the logbook read-only, the way it was: chats are resumed in a terminal or another app."
         },
         "claudeHistory.chatEffort": {
+          "scope": "application",
           "type": "string",
           "default": "",
           "enum": ["", "low", "medium", "high", "xhigh", "max"],
           "description": "How hard Claude thinks in chats started from the logbook. Empty uses Claude's own setting. Changed with /effort in a chat's box, which also sets it here for new chats."
         },
         "claudeHistory.chatEditorContext": {
+          "scope": "application",
           "type": "boolean",
           "default": true,
           "description": "When you chat from the logbook, tell Claude which file you have open and what you have selected, as Claude's own panel does. The line above the message box shows what goes, and you can leave it out of one message."
         },
         "claudeHistory.chatPermissionMode": {
+          "scope": "application",
           "type": "string",
           "default": "default",
           "enum": ["default", "acceptEdits", "plan", "auto"],

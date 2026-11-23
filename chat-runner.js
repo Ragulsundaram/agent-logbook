@@ -177,10 +177,14 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort, dirs, allowBypass
     '--include-partial-messages', '--permission-prompt-tool', 'stdio',
     // each message comes back with the id it was sent with: a queued one can be taken back
     '--replay-user-messages']
-  if (forkOf) args.push('--resume', forkOf, '--fork-session', '--session-id', id)
-  else if (fresh) args.push('--session-id', id)
-  else args.push('--resume', id)
-  if (model) args.push('--model', model)
+  // an id is always a value, never a flag of its own: it starts with a letter or digit, and goes joined to its flag
+  const okId = v => /^[A-Za-z0-9][\w-]{0,127}$/.test(String(v || ''))
+  if (!okId(id) || (forkOf && !okId(forkOf))) throw new Error('That chat id is not valid.')
+  if (model && !/^[A-Za-z0-9][\w.[\]-]{0,59}$/.test(model)) model = ''
+  if (forkOf) args.push(`--resume=${forkOf}`, '--fork-session', `--session-id=${id}`)
+  else if (fresh) args.push(`--session-id=${id}`)
+  else args.push(`--resume=${id}`)
+  if (model) args.push(`--model=${model}`)
   if (mode) args.push('--permission-mode', mode)
   if (effort) args.push('--effort', effort)
   // the window's other folders, so Claude may work in them as it does in Claude's own panel

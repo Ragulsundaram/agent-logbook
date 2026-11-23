@@ -641,6 +641,8 @@ function paintCtx (c) {
 /** "@" then a few letters: files in the chat's folder to pick from. */
 let MENTION_SOON = null
 function askMention (c) {
+  // a "!" line runs in a shell: a file name dropped into it unquoted could run as code
+  if (/^\s*!/.test(c.ta.value)) { c.mention = null; return }
   const before = c.ta.value.slice(0, c.ta.selectionStart)
   const m = /(?:^|\s)@([\w./-]*)$/.exec(before)
   if (!m) { c.mention = null; return }
@@ -1151,11 +1153,13 @@ function askBody (a) {
   }
   if (a.tool === 'Bash') {
     wrap.appendChild(pre(String(i.command || '')))
+    if (i.run_in_background) wrap.appendChild(el('div', 'caskwhy', 'Runs in the background, and keeps running after this reply.'))
     if (i.description) wrap.appendChild(el('div', 'caskwhy', i.description))
   } else if (a.tool === 'Write') {
     const lines = String(i.content || '').split('\n')
     wrap.appendChild(pre(lines.slice(0, 40).join('\n') + (lines.length > 40 ? `\n… ${lines.length - 40} more lines` : '')))
   } else if (a.tool === 'Edit') {
+    if (i.replace_all) wrap.appendChild(el('div', 'caskwhy', 'Replaces every match in the file, not just one.'))
     wrap.appendChild(diffBox([[i.old_string, i.new_string]]))
   } else if (a.tool === 'MultiEdit') {
     wrap.appendChild(diffBox((i.edits || []).map(e => [e.old_string, e.new_string])))
@@ -1163,7 +1167,11 @@ function askBody (a) {
     wrap.appendChild(el('div', 'caskwhy', String(i.url || '')))
   } else if (a.tool === 'WebSearch') {
     wrap.appendChild(el('div', 'caskwhy', String(i.query || '')))
-  } else if (!path) {
+  } else if (a.tool === 'NotebookEdit') {
+    wrap.appendChild(el('div', 'caskwhy', `${i.edit_mode === 'delete' ? 'Deletes' : i.edit_mode === 'insert' ? 'Inserts' : 'Replaces'} a ${i.cell_type || 'cell'}${i.cell_id ? ` (${i.cell_id})` : ''}`))
+    if (i.new_source != null) wrap.appendChild(pre(String(i.new_source).slice(0, 4000)))
+  } else if (a.tool !== 'Read') {
+    // any other tool shows its whole input, not just the file it names: that is what is being approved
     const json = JSON.stringify(i, null, 2) || ''
     wrap.appendChild(pre(json.length > 3000 ? json.slice(0, 3000) + '\n…' : json))
   }
@@ -1486,6 +1494,24 @@ if (!BOARD_MODE) {
         const bubble = COMPOSER?.id === id && m.partial?.text && COMPOSER.live.querySelector('.chatstream .bubble')
         const word = bubble && COMPOSER.live.querySelector('.chatworking:not(.wait) > span:nth-child(2)')
         if (bubble && word) {
+          // a long reply is redrawn at most every half second while it grows, not with every few words
+          const now = Date.now()
+          if (m.partial.text.length > 20000 && now - (CHAT.drewAt || 0) < 500) {
+            clearTimeout(CHAT.drawLater)
+            CHAT.drawLater = setTimeout(() => {
+              CHAT.drawLater = null
+              CHAT.drewAt = Date.now()
+              // only the reply's own text changes: the buttons and cards around it, and focus, stay put
+              const text = CHAT.partial.get(id)?.text
+              const b = COMPOSER?.id === id && COMPOSER.live.querySelector('.chatstream .bubble')
+              if (b && text) { b.innerHTML = window.md(text); if (FOLLOW) stickToEnd(COMPOSER.live.parentNode) }
+              else if (COMPOSER?.id === id) placeLive()
+            }, 500)
+            return
+          }
+          // drawn now: a later draw still waiting is no longer needed
+          clearTimeout(CHAT.drawLater); CHAT.drawLater = null
+          CHAT.drewAt = now
           bubble.innerHTML = window.md(m.partial.text)
           word.textContent = 'Writing…'
           if (FOLLOW) stickToEnd(COMPOSER.live.parentNode)
