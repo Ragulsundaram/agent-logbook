@@ -892,13 +892,15 @@ function wake (id, opts) {
   if (RUNS.has(id)) return Promise.resolve(true)
   const pending = WAKES.get(id)
   if (pending) return pending.promise
-  let settle
-  const promise = new Promise(resolve => { settle = resolve })
-  const w = { promise, settle: ok => { if (WAKES.get(id) === w) WAKES.delete(id); clearTimeout(w.timer); settle(ok) } }
+  let settle, fail
+  const promise = new Promise((resolve, reject) => { settle = resolve; fail = reject })
+  const done = () => { if (WAKES.get(id) === w) WAKES.delete(id); clearTimeout(w.timer) }
+  const w = { promise, settle: ok => { done(); settle(ok) }, fail: e => { done(); fail(e) } }
   WAKES.set(id, w)
   const go = () => {
     if (WAKES.get(id) !== w) return
-    try { if (!RUNS.has(id)) start(id, opts); w.settle(true) } catch { w.settle(false) }
+    // a Claude that cannot start (not installed) says why, rather than just "no"
+    try { if (!RUNS.has(id)) start(id, opts); w.settle(true) } catch (e) { w.fail(e) }
   }
   const old = STOPPING.get(id)
   if (old && old.exitCode === null && old.signalCode === null) {
