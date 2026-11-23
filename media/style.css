@@ -934,11 +934,10 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
    launched; the floating button opens the whole set as a tree, because an
    agent can spawn its own and a flat list hides who asked for what. */
 .acards { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 2px }
-.acard { border: 1px solid var(--vscode-panel-border); border-left: 3px solid var(--sage);
+/* a plain card: the "running" word beside the name already says how it is doing */
+.acard { border: 1px solid var(--vscode-panel-border);
   border-radius: 8px; padding: 8px 12px 10px;
   background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background)) }
-.acard.running { border-left-color: var(--amber) }
-.acard.stopped { border-left-color: var(--vscode-descriptionForeground) }
 .ahead { display: flex; align-items: center; gap: 8px }
 .aico { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--sage);
   stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round }
