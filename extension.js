@@ -1785,26 +1785,25 @@ const UNTRUSTED = 'Chatting here needs a trusted folder: trust this window (it i
 /** A path as it really is on disk: a shortcut (symlink) followed to where it points. */
 // a path that does not exist yet (a file about to be written) has its nearest existing folder
 // resolved and the rest added back, so it is compared in the same form as its folder
-// A shortcut whose target does not exist yet is followed to that target, and any other
-// error reading a path gives no answer at all (null), which counts as outside everything
-function real (p, depth = 0) {
-  if (depth > 20) return null
-  let head = path.resolve(p)
+// A path is judged by where it really is: existing parts with their shortcuts followed, a
+// missing tail added back as plain names. A shortcut whose target is missing (it could point
+// anywhere once written), or any other error reading the path, gives no answer (null), which
+// counts as outside everything
+function real (p) {
+  let head = path.resolve(p)              // ".." is gone here, so the tail added back is plain names
   const rest = []
   for (;;) {
     try { return path.join(fs.realpathSync.native(head), ...rest) } catch (e) {
       if (e?.code !== 'ENOENT') return null
     }
-    // a dangling shortcut: where it would lead, not where it sits
-    let link = null
-    try { if (fs.lstatSync(head).isSymbolicLink()) link = fs.readlinkSync(head) } catch (e) { if (e?.code !== 'ENOENT') return null }
-    if (link !== null) return real(path.join(path.resolve(path.dirname(head), link), ...rest), depth + 1)
+    try { if (fs.lstatSync(head).isSymbolicLink()) return null } catch (e) { if (e?.code !== 'ENOENT') return null }
     const up = path.dirname(head)
     if (up === head) return null
     rest.unshift(path.basename(head))
     head = up
   }
 }
+
 /**
  * Whether a path is a folder or inside it, compared where both really are on disk, so a
  * shortcut inside a folder that leads elsewhere does not count. Only a leading ".." step
