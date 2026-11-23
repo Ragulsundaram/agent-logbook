@@ -970,19 +970,22 @@ function localCommand (c, text) {
 function ownCommand (c, kind, arg) {
   const id = c.id
   const clear = () => { c.ta.value = ''; CHAT.drafts.delete(id); c.slash.hidden = true; c.fit?.(); paintGo(c) }
-  if (whereRunning(id) !== 'here') { note(id, `/${kind} works once Claude is running here: send a message first.`, false); clear(); return true }
+  if (whereRunning(id) === 'elsewhere') { note(id, `This chat is running somewhere else, so /${kind} cannot ask it from here.`, false); clear(); return true }
+  // an old chat has no Claude running yet: the host starts one for this, with nothing sent
+  const p = picksFor(id)
+  const with_ = { model: p.model, mode: p.mode, effort: p.effort }
   if (kind === 'btw') {
     if (!arg) { c.ta.value = '/btw '; return true }
     const key = Date.now().toString(36)
     CHAT.side.set(id, [...(CHAT.side.get(id) || []), { key, q: arg, a: null }])
-    send({ type: 'chatSide', id, key, question: arg })
+    send({ type: 'chatSide', id, key, question: arg, ...with_ })
   } else if (kind === 'thinking') {
     const on = arg ? !/^(off|no|0|false)$/i.test(arg) : !(CHAT.state.get(id)?.thinking ?? true)
-    send({ type: 'chatThinking', id, on })
+    send({ type: 'chatThinking', id, on, ...with_ })
     note(id, on ? 'Thinking is on for this chat.' : 'Thinking is off for this chat: replies come faster, with less reasoning.', false)
   } else if (kind === 'mcp') {
     CHAT.mcp.set(id, 'loading')
-    send({ type: 'chatMcp', id })
+    send({ type: 'chatMcp', id, ...with_ })
   }
   clear()
   placeLive()

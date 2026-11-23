@@ -1763,6 +1763,37 @@ async function showProposed (ask) {
 /** Which chat each open view is showing, so a question is only announced when nobody can see it. */
 const SHOWING = new Map()            // view's post -> { id, visible }
 
+/**
+ * Start Claude on a chat with nothing sent, for a command only it can answer (/mcp,
+ * /btw, /thinking): an old chat has its messages but no Claude running until now.
+ * The same checks as sending: chatting here is on, the chat and its folder exist,
+ * and it is not running somewhere else.
+ */
+async function wakeChat (id, msg, post) {
+  if (!/^[\w-]+$/.test(id) || !cfg('chatHere', true)) return false
+  if (runner.has(id)) return true
+  const fail = error => { post({ type: 'chatNotice', id, text: error }); return false }
+  // a new chat has nothing to resume yet: its first message starts it
+  if (NEW_CHATS.has(id)) return fail('Send your first message to start this chat.')
+  const s = scan.index().find(x => x.id === id)
+  if (!s) return fail('This chat was not found on disk.')
+  if (s.provider === 'codex') return fail('Codex chats can only be continued in a terminal.')
+  if (live[id] && !runner.endedRecently(id)) return fail('This chat is running somewhere else, so it cannot be asked from here.')
+  const cwd = s.cwd
+  if (!cwd || !fs.existsSync(cwd)) return fail(`This chat's folder no longer exists${cwd ? `: ${cwd}` : '.'}`)
+  const pick = (v, ok) => ok(v) ? v : ''
+  try {
+    return await runner.wake(id, {
+      cwd,
+      model: pick(String(msg.model || ''), v => /^[\w.[\]-]{0,60}$/.test(v)),
+      mode: pick(msg.mode, v => chatModes().includes(v)) || pick(cfg('chatPermissionMode', 'default'), v => CHAT_MODES.includes(v)),
+      effort: pick(msg.effort, v => CHAT_EFFORTS.includes(v)),
+      dirs: (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath).filter(d => d !== cwd).slice(0, 10),
+      allowBypass: cfg('skipPermissions', false),
+    })
+  } catch (e) { return fail(e.message) }
+}
+
 /** Claude stopped to ask you something and you are not looking: say so, once per question. */
 function askAlert (m) {
   const tab = CHAT_TABS.get(m.id)
@@ -2274,15 +2305,23 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           }
           case 'chatSide': {
             const id = String(msg.id || ''), key = String(msg.key || '')
+            if (!await wakeChat(id, msg, post)) { post({ type: 'chatSideAnswer', id, key, answer: null }); break }
             runner.sideQuestion(id, String(msg.question || '').slice(0, 4000), answer => post({ type: 'chatSideAnswer', id, key, answer }))
             break
           }
           case 'chatThinking':
-            runner.setThinking(String(msg.id || ''), !!msg.on)
+            if (await wakeChat(String(msg.id || ''), msg, post)) runner.setThinking(String(msg.id || ''), !!msg.on)
             break
           case 'chatMcp': {
             const id = String(msg.id || '')
-            runner.mcpStatus(id, list => post({ type: 'chatMcpList', id, list }))
+            if (!await wakeChat(id, msg, post)) { post({ type: 'chatMcpList', id, list: null }); break }
+            // servers connect in the background: asked again while any is still connecting, for a few seconds
+            let tries = 0
+            const ask = () => runner.mcpStatus(id, list => {
+              post({ type: 'chatMcpList', id, list })
+              if (list?.some(x => x.status === 'pending') && ++tries < 6) setTimeout(ask, 2000)
+            })
+            ask()
             break
           }
           case 'chatFollow':

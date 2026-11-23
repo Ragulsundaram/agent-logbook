@@ -3,6 +3,7 @@
 ## Unreleased
 
 - A chat open but idle in the Claude app or a terminal elsewhere can be carried on here: Stop it there and continue here ends it there, and nothing it wrote is lost. The chat also says where it is open, such as the Claude app, rather than only where it was started.
+- /mcp, /btw and /thinking work in an older chat straight away, without sending a message first.
 - MCP servers you add or remove, here or with claude mcp in a terminal, reach the chats running in the logbook: an idle chat starts a fresh Claude for its next message, and a busy one does once its reply is done.
 
 ## 1.10.0

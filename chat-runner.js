@@ -878,6 +878,20 @@ function setThinking (id, on) {
   return true
 }
 
+/** Start Claude on a chat without sending anything, for a command only it can answer (/mcp, /btw). */
+function wake (id, opts) {
+  return new Promise(resolve => {
+    if (RUNS.has(id)) return resolve(true)
+    const go = () => { try { if (!RUNS.has(id)) start(id, opts); resolve(true) } catch { resolve(false) } }
+    // the last Claude on this chat is still leaving: two on one chat would tangle it
+    const old = STOPPING.get(id)
+    if (old && old.exitCode === null && old.signalCode === null) {
+      old.once('exit', () => { if (STOPPING.get(id) === old) STOPPING.delete(id); go() })
+      try { old.kill() } catch {}
+    } else go()
+  })
+}
+
 /** The MCP servers this chat has, and whether each is connected. */
 function mcpStatus (id, done) {
   const r = RUNS.get(id)
@@ -933,4 +947,4 @@ const askOf = (id, requestId) => RUNS.get(id)?.asks.get(requestId) || null
 /** The folder Claude runs in for this chat, when it runs here. */
 const cwdOf = id => RUNS.get(id)?.cwd || ''
 
-module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, mcpStatus, restartAll, setModel, setMode, setEffort, stop, stopAll, markEnded }
+module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, mcpStatus, restartAll, wake, setModel, setMode, setEffort, stop, stopAll, markEnded }
