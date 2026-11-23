@@ -3499,7 +3499,7 @@ function plainText (host) {
     // from the formatted copy, as a browser's own copy (and Claude's app) leaves them out
     if (tag === 'li') return inner.trim() + '\n'
     if (tag === 'br') return '\n'
-    if (tag === 'pre') { code.push(node.textContent.replace(/\n$/, '')); return `\n\n\u0000${code.length - 1}\u0000\n\n` }
+    if (tag === 'pre') { code.push(node.textContent); return `\n\n\u0000${code.length - 1}\u0000\n\n` }
     if (['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'ul', 'ol', 'table', 'tr'].includes(tag)) {
       return inner.trim() + '\n\n'
     }
