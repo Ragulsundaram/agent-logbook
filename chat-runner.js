@@ -855,6 +855,14 @@ function setThinking (id, on) {
   return true
 }
 
+/** Start Claude on a chat without sending anything, for something only it can do (undo). */
+function wake (id, opts) {
+  if (RUNS.has(id)) return true
+  if (STOPPING.has(id)) return false
+  start(id, opts)
+  return true
+}
+
 /** Undo the file edits made since a message. dry: only say what would change. */
 function rewind (id, messageId, dry, done) {
   const r = RUNS.get(id)
@@ -905,4 +913,4 @@ const askOf = (id, requestId) => RUNS.get(id)?.asks.get(requestId) || null
 /** The folder Claude runs in for this chat, when it runs here. */
 const cwdOf = id => RUNS.get(id)?.cwd || ''
 
-module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, rewind, mcpStatus, setModel, setMode, setEffort, stop, stopAll, markEnded }
+module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, rewind, wake, mcpStatus, setModel, setMode, setEffort, stop, stopAll, markEnded }

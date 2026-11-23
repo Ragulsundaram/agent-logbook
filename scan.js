@@ -2037,6 +2037,50 @@ function agentTranscript (id, agentId) {
 }
 
 /**
+ * Undo the file edits made after one of your messages, from the copies Claude
+ * Code keeps: before it first changes a file in a turn it saves the file as it
+ * was, and notes that in the transcript. The first copy saved at or after the
+ * message is the file as it stood when you sent it; a file that did not exist
+ * then has no copy, and goes. Works whether or not Claude is still running.
+ */
+function rewindPlan (id, uuid) {
+  if (!/^[\w-]+$/.test(String(id)) || !/^[0-9a-f-]{36}$/i.test(String(uuid))) return null
+  const rec = index().find(s => s.id === id)
+  if (!rec) return null
+  let raw; try { raw = fs.readFileSync(rec.file, 'utf8') } catch { return null }
+  const order = new Map()                   // a message's place in the chat
+  const firstAfter = new Map()              // file -> its earliest copy from that message on
+  let at = -1
+  for (const line of raw.split('\n')) {
+    if (!line.includes('"file-history-')) {
+      if (at < 0 && line.includes(`"uuid":"${uuid}"`)) at = order.size
+      continue
+    }
+    let e; try { e = JSON.parse(line) } catch { continue }
+    if (e.type === 'file-history-snapshot') {
+      const mid = e.snapshot?.messageId || e.messageId
+      if (mid && !order.has(mid)) order.set(mid, order.size)
+      if (mid === uuid && at < 0) at = order.get(mid)
+    } else if (e.type === 'file-history-delta' && e.trackingPath && e.backup) {
+      const n = order.get(e.snapshotMessageId)
+      if (n === undefined || at < 0 || n < at) continue
+      const file = path.resolve(e.backup.realParentDir || rec.cwd || '', e.trackingPath)
+      if (!firstAfter.has(file)) firstAfter.set(file, e.backup.backupFileName || null)
+    }
+  }
+  if (at < 0) return { files: [], missing: 0 }
+  const dir = path.join(HOME, '.claude', 'file-history', id)
+  const files = []
+  let missing = 0
+  for (const [file, copy] of firstAfter) {
+    if (!copy) { files.push({ file, copy: null }); continue }
+    const p = path.join(dir, copy)
+    if (fs.existsSync(p)) files.push({ file, copy: p }); else missing++
+  }
+  return { files, missing }
+}
+
+/**
  * A background agent's work so far, as plain lines: each step it took, a few
  * lines of what that step printed, and what it wrote. What the Output button
  * on an agent's card shows while it runs; its own record is the only place
@@ -3050,5 +3094,5 @@ try {
 } catch {}
 
 module.exports = {
-  writePrivate, mkdirPrivate, board, agentActivity, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
+  writePrivate, mkdirPrivate, board, agentActivity, rewindPlan, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
   readOnlyCache, saveCacheNow, groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME }

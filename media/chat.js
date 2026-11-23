@@ -423,11 +423,10 @@ setInterval(() => {
 window.chatRewindButton = (id, uuid) => {
   if (!chatOn() || CUR?.provider === 'codex') return null
   const b = el('button', 'msgact')
-  b.appendChild(icon('history'))
+  b.appendChild(icon('undo'))
   b.title = 'Undo the file edits Claude made after this message'
   b.onclick = e => {
     e.stopPropagation()
-    if (whereRunning(id) !== 'here') { note(id, 'Edits can be undone while the chat runs here, for edits made since it started here. Send a message first.', false); return }
     note(id, 'Checking what would change…', false)
     send({ type: 'chatRewind', id, uuid, dry: true })
   }
@@ -1545,9 +1544,9 @@ if (!BOARD_MODE) {
         break
       case 'chatRewound': {
         const r = m.res
-        if (!r || r.error || r.ok === false) { note(id, r?.error ? `Couldn't undo: ${r.error}` : 'There is nothing to undo since that message, or those edits were made before the chat ran here.', false); break }
+        if (!r || r.error || r.ok === false) { note(id, r?.error ? `Couldn't undo: ${r.error}` : 'Couldn\'t undo the edits after that message.', true); break }
         if (m.dry) {
-          if (!r.files) { note(id, 'Nothing was edited after that message.', false); break }
+          if (!r.files) { note(id, r.missing ? 'Claude no longer has copies of the files it edited after that message, so they can\'t be put back.' : 'Nothing was edited after that message.', false); break }
           note(id, `Undo the edits made after that message? ${r.files} file${r.files === 1 ? '' : 's'}${r.adds || r.dels ? ` (+${r.adds} −${r.dels})` : ''} go back to how they were. The chat itself stays as it is.`, false,
             { label: 'Undo them', msg: { type: 'chatRewind', uuid: m.uuid, dry: false } })
         } else note(id, `Undone: ${r.files || 'the'} file${r.files === 1 ? '' : 's'} are back to how they were before that message.`, false)

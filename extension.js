@@ -2220,12 +2220,31 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             break
           case 'chatRewind': {
             const id = String(msg.id || ''), uuid = String(msg.uuid || '')
-            if (!/^[0-9a-f-]{36}$/i.test(uuid)) break
-            runner.rewind(id, uuid, !!msg.dry, res => post({ type: 'chatRewound', id, uuid, dry: !!msg.dry, res: res && {
-              files: Array.isArray(res.filesChanged) ? res.filesChanged.length : Number(res.files_changed ?? res.filesChanged) || 0,
-              ok: res.canRewind !== false, error: String(res.error || ''),
-              adds: Number(res.insertions) || 0, dels: Number(res.deletions) || 0,
-            } }))
+            if (!/^[\w-]+$/.test(id) || !/^[0-9a-f-]{36}$/i.test(uuid)) break
+            const tell = res => post({ type: 'chatRewound', id, uuid, dry: !!msg.dry, res })
+            // running here: Claude undoes it itself, and knows the files changed under it
+            if (runner.has(id)) {
+              runner.rewind(id, uuid, !!msg.dry, res => tell(res && {
+                files: Array.isArray(res.filesChanged) ? res.filesChanged.length : Number(res.files_changed ?? res.filesChanged) || 0,
+                ok: res.canRewind !== false, error: String(res.error || ''),
+                adds: Number(res.insertions) || 0, dels: Number(res.deletions) || 0,
+              }))
+              break
+            }
+            // otherwise from the copies Claude saved: the same files, put back the same way
+            const plan = scan.rewindPlan(id, uuid)
+            if (!plan) { tell({ ok: false, error: 'This chat was not found on disk.' }); break }
+            if (msg.dry) { tell({ ok: true, files: plan.files.length, missing: plan.missing }); break }
+            let done = 0
+            const failed = []
+            for (const f of plan.files) {
+              try {
+                if (f.copy) fs.writeFileSync(f.file, fs.readFileSync(f.copy))
+                else if (fs.existsSync(f.file)) fs.unlinkSync(f.file)     // made after that message: it goes
+                done++
+              } catch (e) { failed.push(path.basename(f.file)) }
+            }
+            tell({ ok: !failed.length, files: done, error: failed.length ? `couldn't write ${failed.join(', ')}` : '' })
             break
           }
           case 'chatMcp': {
