@@ -474,6 +474,8 @@ function onLine (r, m) {
           r.busy = false
           emit(r.id, { type: 'chatState', state: state(r.id) })
           OPTS.onChange(r.id)
+          // the turn never came: a restart waiting for the chat to be done can go ahead now
+          if (r.restart && !r.bg.length && !r.asks.size) { r.restart = false; stop(r.id) }
         }, 30000)
         emit(r.id, { type: 'chatState', state: state(r.id) })
         OPTS.onChange(r.id)
@@ -878,6 +880,38 @@ function setThinking (id, on) {
   return true
 }
 
+/** Start Claude on a chat without sending anything, for a command only it can answer (/mcp, /btw). */
+/**
+ * One start per chat at a time, waiting for the last Claude to leave first (two on one
+ * chat would tangle it). Callers that arrive while one is pending share it and get the
+ * same answer. A stop meanwhile, or an old Claude that will not leave, ends it at once
+ * with false rather than leaving anyone waiting.
+ */
+const WAKES = new Map()              // chat id -> { promise, settle }
+function wake (id, opts) {
+  if (RUNS.has(id)) return Promise.resolve(true)
+  const pending = WAKES.get(id)
+  if (pending) return pending.promise
+  let settle, fail
+  const promise = new Promise((resolve, reject) => { settle = resolve; fail = reject })
+  const done = () => { if (WAKES.get(id) === w) WAKES.delete(id); clearTimeout(w.timer) }
+  const w = { promise, settle: ok => { done(); settle(ok) }, fail: e => { done(); fail(e) } }
+  WAKES.set(id, w)
+  const go = () => {
+    if (WAKES.get(id) !== w) return
+    // a Claude that cannot start (not installed) says why, rather than just "no"
+    try { if (!RUNS.has(id)) start(id, opts); w.settle(true) } catch (e) { w.fail(e) }
+  }
+  const old = STOPPING.get(id)
+  if (old && old.exitCode === null && old.signalCode === null) {
+    old.once('exit', () => { if (STOPPING.get(id) === old) STOPPING.delete(id); go() })
+    try { old.kill() } catch {}
+    w.timer = setTimeout(() => w.settle(false), 5000)
+  } else go()
+  return promise
+}
+const cancelWake = id => WAKES.get(id)?.settle(false)
+
 /** The MCP servers this chat has, and whether each is connected. */
 function mcpStatus (id, done) {
   const r = RUNS.get(id)
@@ -887,6 +921,7 @@ function mcpStatus (id, done) {
 
 function stop (id, now) {
   DEFERRED.delete(id)                 // a send still waiting to start is cancelled too
+  cancelWake(id)                      // and so is a start for /mcp or /btw, answered at once
   const r = RUNS.get(id)
   if (!r) return
   r.stopping = true
@@ -907,8 +942,21 @@ function stop (id, now) {
   setTimeout(() => { try { r.proc.kill() } catch {} }, 3000).unref?.()
 }
 
+/**
+ * Claude reads its MCP servers when it starts, so a change to them reaches a
+ * running chat only through a fresh Claude: an idle one is let go now (the next
+ * message starts it again, with the new servers), a busy one once it is done.
+ */
+function restartAll () {
+  for (const [id, r] of RUNS) {
+    if (r.busy || r.asks.size || r.bg.length) r.restart = true
+    else stop(id)
+  }
+}
+
 function stopAll (now) {
   DEFERRED.clear()
+  for (const id of [...WAKES.keys()]) cancelWake(id)
   for (const id of [...RUNS.keys()]) stop(id, now)
 }
 
@@ -921,4 +969,4 @@ const askOf = (id, requestId) => RUNS.get(id)?.asks.get(requestId) || null
 /** The folder Claude runs in for this chat, when it runs here. */
 const cwdOf = id => RUNS.get(id)?.cwd || ''
 
-module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, mcpStatus, setModel, setMode, setEffort, stop, stopAll, markEnded }
+module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, mcpStatus, restartAll, wake, setModel, setMode, setEffort, stop, stopAll, markEnded }

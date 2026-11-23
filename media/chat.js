@@ -797,10 +797,11 @@ function paintComposer () {
     // where, as the host can tell: asked again now and then, as a chat can move
     const w = CHAT.where.get(id)
     if (!w || Date.now() - w.at > 15000) send({ type: 'chatWhere', id })
+    const idle = !!w?.idle
     const place = {
       terminal: 'Running in a terminal in this window.',
       claude: 'Running in the Claude Code panel.',
-      desktop: 'Running in Claude Desktop.',
+      desktop: 'Open in the Claude app.',
       outside: 'Running in a terminal outside this window.',
     }[w?.where]
     // with a place named, the buttons say the rest
@@ -810,6 +811,13 @@ function paintComposer () {
       show.title = 'Bring that terminal to the front'
       show.onclick = () => send({ type: 'chatShow', id })
       c.block.appendChild(show)
+    }
+    // idle there, waiting for a message: it can be let go there and carried on here
+    if (idle) {
+      const take = el('button', 'btn pri', 'Stop it there and continue here')
+      take.title = 'Claude is idle there. It is stopped there and this chat carries on here; nothing it wrote is lost'
+      take.onclick = () => { take.disabled = true; take.textContent = 'Stopping…'; send({ type: 'chatTakeover', id, idle: true }) }
+      c.block.appendChild(take)
     }
     const b = el('button', 'btn', 'New chat from this one')
     b.title = 'A new chat here with this one\'s full history. The original keeps running on its own'
@@ -962,19 +970,22 @@ function localCommand (c, text) {
 function ownCommand (c, kind, arg) {
   const id = c.id
   const clear = () => { c.ta.value = ''; CHAT.drafts.delete(id); c.slash.hidden = true; c.fit?.(); paintGo(c) }
-  if (whereRunning(id) !== 'here') { note(id, `/${kind} works once Claude is running here: send a message first.`, false); clear(); return true }
+  if (whereRunning(id) === 'elsewhere') { note(id, `This chat is running somewhere else, so /${kind} cannot ask it from here.`, false); clear(); return true }
+  // an old chat has no Claude running yet: the host starts one for this, with nothing sent
+  const p = picksFor(id)
+  const with_ = { model: p.model, mode: p.mode, effort: p.effort }
   if (kind === 'btw') {
     if (!arg) { c.ta.value = '/btw '; return true }
     const key = Date.now().toString(36)
     CHAT.side.set(id, [...(CHAT.side.get(id) || []), { key, q: arg, a: null }])
-    send({ type: 'chatSide', id, key, question: arg })
+    send({ type: 'chatSide', id, key, question: arg, ...with_ })
   } else if (kind === 'thinking') {
     const on = arg ? !/^(off|no|0|false)$/i.test(arg) : !(CHAT.state.get(id)?.thinking ?? true)
-    send({ type: 'chatThinking', id, on })
+    send({ type: 'chatThinking', id, on, ...with_ })
     note(id, on ? 'Thinking is on for this chat.' : 'Thinking is off for this chat: replies come faster, with less reasoning.', false)
   } else if (kind === 'mcp') {
     CHAT.mcp.set(id, 'loading')
-    send({ type: 'chatMcp', id })
+    send({ type: 'chatMcp', id, ...with_ })
   }
   clear()
   placeLive()
@@ -1422,7 +1433,7 @@ if (!BOARD_MODE) {
       if (COMPOSER?.id === m.id) placeLive()
       return
     }
-    if (m.type === 'chatWhere') { CHAT.where.set(m.id, { where: m.where || '', at: Date.now() }); paintComposer(); return }
+    if (m.type === 'chatWhere') { CHAT.where.set(m.id, { where: m.where || '', idle: !!m.idle, at: Date.now() }); paintComposer(); return }
     // the full list of slash commands and models, learned from Claude or kept from before
     if (m.type === 'chatKnown') {
       if (m.commands?.length) CHAT.commands = m.commands

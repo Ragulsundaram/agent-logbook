@@ -312,6 +312,14 @@ async function pollResources (force) {
  * and its parent is gone, so nothing can type to it or answer its questions.
  * Anything else running the chat - a terminal, the Claude extension - is left alone.
  */
+/** The program a running chat's Claude belongs to, read from its process: the Claude app, or not. */
+async function pidHost (pid) {
+  if (!pid) return ''
+  const cmd = await new Promise(resolve => require('node:child_process').execFile('ps', ['-o', 'args=', '-p', String(pid)],
+    { encoding: 'utf8', timeout: 3000 }, (err, stdout) => resolve(err ? '' : String(stdout))))
+  return /\/Claude\.app\/|\/Application Support\/Claude\//.test(cmd) ? 'desktop' : ''
+}
+
 async function orphanPid (id) {
   if (!/^[\w-]+$/.test(String(id || '')) || runner.has(id)) return 0
   const pid = scan.livePid(id)
@@ -1755,6 +1763,37 @@ async function showProposed (ask) {
 /** Which chat each open view is showing, so a question is only announced when nobody can see it. */
 const SHOWING = new Map()            // view's post -> { id, visible }
 
+/**
+ * Start Claude on a chat with nothing sent, for a command only it can answer (/mcp,
+ * /btw, /thinking): an old chat has its messages but no Claude running until now.
+ * The same checks as sending: chatting here is on, the chat and its folder exist,
+ * and it is not running somewhere else.
+ */
+async function wakeChat (id, msg, post) {
+  if (!/^[\w-]+$/.test(id) || !cfg('chatHere', true)) return false
+  if (runner.has(id)) return true
+  const fail = error => { post({ type: 'chatNotice', id, text: error }); return false }
+  // a new chat has nothing to resume yet: its first message starts it
+  if (NEW_CHATS.has(id)) return fail('Send your first message to start this chat.')
+  const s = scan.index().find(x => x.id === id)
+  if (!s) return fail('This chat was not found on disk.')
+  if (s.provider === 'codex') return fail('Codex chats can only be continued in a terminal.')
+  if (live[id] && !runner.endedRecently(id)) return fail('This chat is running somewhere else, so it cannot be asked from here.')
+  const cwd = s.cwd
+  if (!cwd || !fs.existsSync(cwd)) return fail(`This chat's folder no longer exists${cwd ? `: ${cwd}` : '.'}`)
+  const pick = (v, ok) => ok(v) ? v : ''
+  try {
+    return await runner.wake(id, {
+      cwd,
+      model: pick(String(msg.model || ''), v => /^[\w.[\]-]{0,60}$/.test(v)),
+      mode: pick(msg.mode, v => chatModes().includes(v)) || pick(cfg('chatPermissionMode', 'default'), v => CHAT_MODES.includes(v)),
+      effort: pick(msg.effort, v => CHAT_EFFORTS.includes(v)),
+      dirs: (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath).filter(d => d !== cwd).slice(0, 10),
+      allowBypass: cfg('skipPermissions', false),
+    })
+  } catch (e) { return fail(e.message) }
+}
+
 /** Claude stopped to ask you something and you are not looking: say so, once per question. */
 function askAlert (m) {
   const tab = CHAT_TABS.get(m.id)
@@ -1911,6 +1950,8 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               else vscode.window.setStatusBarMessage(`$(check) ${label[c]} ${msg.type === 'mcpConnect' ? 'can now read your chat history - start a new chat to use it' : 'disconnected'}`, 5000)
             }
             post({ type: 'mcp', data: mcp.status() })
+            // chats running here pick the change up with a fresh Claude
+            runner.restartAll()
             break
           }
           case 'board': {
@@ -2169,7 +2210,15 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), orphan: !!(await orphanPid(msg.id)) } })
             break
           case 'chatTakeover': {
-            const pid = await orphanPid(msg.id)
+            // an orphan of this window, or - asked for by name - a Claude sitting idle elsewhere.
+            // Checked again now: one that started working since is not stopped
+            let pid = await orphanPid(msg.id)
+            if (!pid && msg.idle && /^[\w-]+$/.test(String(msg.id || '')) && !runner.has(msg.id)) {
+              // asked fresh, not from the last check: only a Claude still idle right now is stopped
+              const now = await scan.liveSessionsAsync()
+              if (now?.[msg.id] === 'idle') pid = scan.livePid(msg.id)
+              else if (now?.[msg.id]) post({ type: 'chatNotice', id: msg.id, text: 'Claude started working there, so it was left running. Try again once it is done.' })
+            }
             if (pid) {
               const tree = processTree(pid)
               for (const p of tree) { try { process.kill(p, 'SIGTERM') } catch {} }
@@ -2178,7 +2227,8 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               runner.markEnded(msg.id)
               liveSig = ''; pollLive().catch(() => {})
             }
-            post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), endedAt: Date.now() } })
+            // marked as ended only when something was: otherwise it still shows where it runs
+            post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), ...(pid ? { endedAt: Date.now() } : {}) } })
             break
           }
           case 'chatSend':
@@ -2206,11 +2256,14 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             if (!s) break
             const term = await terminalForSession(s.id, false, true)
             const from = s.entrypoint || ''
-            const where = term ? 'terminal'
+            // where it runs now, not where it started: a terminal chat can be open in the app since
+            const host = term ? '' : await pidHost(scan.livePid(s.id))
+            const where = term ? 'terminal' : host === 'desktop' ? 'desktop'
               : from === 'claude-vscode' || from === 'vscode' ? 'claude'
                 : from === 'claude-desktop' ? 'desktop'
                   : from === 'cli' ? 'outside' : ''
-            post({ type: 'chatWhere', id: s.id, where })
+            // idle there: it can be stopped there and carried on here
+            post({ type: 'chatWhere', id: s.id, where, idle: live[s.id] === 'idle' && !!scan.livePid(s.id) })
             break
           }
           case 'chatShow': {
@@ -2258,15 +2311,23 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           }
           case 'chatSide': {
             const id = String(msg.id || ''), key = String(msg.key || '')
+            if (!await wakeChat(id, msg, post)) { post({ type: 'chatSideAnswer', id, key, answer: null }); break }
             runner.sideQuestion(id, String(msg.question || '').slice(0, 4000), answer => post({ type: 'chatSideAnswer', id, key, answer }))
             break
           }
           case 'chatThinking':
-            runner.setThinking(String(msg.id || ''), !!msg.on)
+            if (await wakeChat(String(msg.id || ''), msg, post)) runner.setThinking(String(msg.id || ''), !!msg.on)
             break
           case 'chatMcp': {
             const id = String(msg.id || '')
-            runner.mcpStatus(id, list => post({ type: 'chatMcpList', id, list }))
+            if (!await wakeChat(id, msg, post)) { post({ type: 'chatMcpList', id, list: null }); break }
+            // servers connect in the background: asked again while any is still connecting, for a few seconds
+            let tries = 0
+            const ask = () => runner.mcpStatus(id, list => {
+              post({ type: 'chatMcpList', id, list })
+              if (list?.some(x => x.status === 'pending') && ++tries < 6) setTimeout(ask, 2000)
+            })
+            ask()
             break
           }
           case 'chatFollow':
@@ -2931,6 +2992,31 @@ function activate (ctx) {
     },
   })
   runner.seedKnown(ctx.globalState.get('chatKnown'))
+  // MCP servers added or removed anywhere (here, or with claude mcp in a terminal) reach the
+  // chats running here: Claude only reads them when it starts. The file also holds counters
+  // Claude rewrites all the time, so only a change to the servers themselves counts
+  const claudeJson = path.join(require('node:os').homedir(), '.claude.json')
+  // the servers alone, in a fixed order: projects with none, and the order keys were written in, do not count
+  const sorted = v => Array.isArray(v) ? v.map(sorted)
+    : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sorted(v[k])])) : v
+  const mcpSig = () => {
+    try {
+      const j = JSON.parse(fs.readFileSync(claudeJson, 'utf8'))
+      const projects = Object.entries(j.projects || {})
+        .filter(([, v]) => v?.mcpServers && Object.keys(v.mcpServers).length)
+        .map(([p, v]) => [p, v.mcpServers])
+        .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      return JSON.stringify(sorted([j.mcpServers || {}, projects]))
+    } catch { return null }
+  }
+  let mcpWas = mcpSig()
+  fs.watchFile(claudeJson, { interval: 5000 }, () => {
+    const now = mcpSig()
+    if (now === null || now === mcpWas) return
+    mcpWas = now
+    if (!DEACTIVATED) runner.restartAll()
+  })
+  ctx.subscriptions.push({ dispose: () => fs.unwatchFile(claudeJson) })
   // what you have open, for the line above the box that says what goes with your message
   ctx.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(ed => { if (isFileEditor(ed)) LAST_EDITOR = ed; postEditor() }),
