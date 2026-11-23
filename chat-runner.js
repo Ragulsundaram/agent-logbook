@@ -474,6 +474,8 @@ function onLine (r, m) {
           r.busy = false
           emit(r.id, { type: 'chatState', state: state(r.id) })
           OPTS.onChange(r.id)
+          // the turn never came: a restart waiting for the chat to be done can go ahead now
+          if (r.restart && !r.bg.length && !r.asks.size) { r.restart = false; stop(r.id) }
         }, 30000)
         emit(r.id, { type: 'chatState', state: state(r.id) })
         OPTS.onChange(r.id)
@@ -879,26 +881,34 @@ function setThinking (id, on) {
 }
 
 /** Start Claude on a chat without sending anything, for a command only it can answer (/mcp, /btw). */
-const WAKES = new Map()              // chat id -> a start still waiting for the last Claude to leave
+/**
+ * One start per chat at a time, waiting for the last Claude to leave first (two on one
+ * chat would tangle it). Callers that arrive while one is pending share it and get the
+ * same answer. A stop meanwhile, or an old Claude that will not leave, ends it at once
+ * with false rather than leaving anyone waiting.
+ */
+const WAKES = new Map()              // chat id -> { promise, settle }
 function wake (id, opts) {
-  return new Promise(resolve => {
-    if (RUNS.has(id)) return resolve(true)
-    const token = {}
-    WAKES.set(id, token)
-    // a stop meanwhile (the chat stopped, chatting turned off, the editor closing) cancels it
-    const go = () => {
-      if (WAKES.get(id) !== token) return resolve(false)
-      WAKES.delete(id)
-      try { if (!RUNS.has(id)) start(id, opts); resolve(true) } catch { resolve(false) }
-    }
-    // the last Claude on this chat is still leaving: two on one chat would tangle it
-    const old = STOPPING.get(id)
-    if (old && old.exitCode === null && old.signalCode === null) {
-      old.once('exit', () => { if (STOPPING.get(id) === old) STOPPING.delete(id); go() })
-      try { old.kill() } catch {}
-    } else go()
-  })
+  if (RUNS.has(id)) return Promise.resolve(true)
+  const pending = WAKES.get(id)
+  if (pending) return pending.promise
+  let settle
+  const promise = new Promise(resolve => { settle = resolve })
+  const w = { promise, settle: ok => { if (WAKES.get(id) === w) WAKES.delete(id); clearTimeout(w.timer); settle(ok) } }
+  WAKES.set(id, w)
+  const go = () => {
+    if (WAKES.get(id) !== w) return
+    try { if (!RUNS.has(id)) start(id, opts); w.settle(true) } catch { w.settle(false) }
+  }
+  const old = STOPPING.get(id)
+  if (old && old.exitCode === null && old.signalCode === null) {
+    old.once('exit', () => { if (STOPPING.get(id) === old) STOPPING.delete(id); go() })
+    try { old.kill() } catch {}
+    w.timer = setTimeout(() => w.settle(false), 5000)
+  } else go()
+  return promise
 }
+const cancelWake = id => WAKES.get(id)?.settle(false)
 
 /** The MCP servers this chat has, and whether each is connected. */
 function mcpStatus (id, done) {
@@ -909,7 +919,7 @@ function mcpStatus (id, done) {
 
 function stop (id, now) {
   DEFERRED.delete(id)                 // a send still waiting to start is cancelled too
-  WAKES.delete(id)                    // and so is a start for /mcp or /btw
+  cancelWake(id)                      // and so is a start for /mcp or /btw, answered at once
   const r = RUNS.get(id)
   if (!r) return
   r.stopping = true
@@ -944,7 +954,7 @@ function restartAll () {
 
 function stopAll (now) {
   DEFERRED.clear()
-  WAKES.clear()
+  for (const id of [...WAKES.keys()]) cancelWake(id)
   for (const id of [...RUNS.keys()]) stop(id, now)
 }
 
