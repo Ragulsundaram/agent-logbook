@@ -666,6 +666,8 @@ function settle (r, stopped) {
   clearTimeout(r.nextTurn); r.nextTurn = null
   clearTimeout(r.stopCheck); r.stopCheck = null
   if (!r.busy || r.ended || RUNS.get(r.id) !== r) return
+  // the Esc this settles is used up: a later reply that fails is an error, not "stopped"
+  r.interruptedAt = 0
   r.pending = 0
   r.busy = false
   r.partial = freshPartial()
@@ -713,8 +715,11 @@ function send (id, args) {
     if (f.mediaType === 'application/pdf') content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: f.data }, title: f.name })
     else content.push({ type: 'text', text: `<attached-file name="${String(f.name).replace(/"/g, '')}">\n${f.text}\n</attached-file>` })
   }
-  for (const c of args.context || []) content.push({ type: 'text', text: c })
-  if (text) content.push({ type: 'text', text })
+  // what you typed always comes last: the blocks before it are the logbook's own. A
+  // file sent with no words gets a line of its own, and editor context goes only with words
+  const typed = text || ((files || []).some(f => f.mediaType !== 'application/pdf') ? 'See the attached file.' : '')
+  if (typed) for (const c of args.context || []) content.push({ type: 'text', text: c })
+  if (typed) content.push({ type: 'text', text: typed })
   // Claude's input already closed (it quit on its own): say so, so the text goes back in the box
   if (!r.proc.stdin.writable) {
     emit(id, { type: 'chatError', error: 'Claude had stopped, so the message was not sent. It is back in the box: send it again.' })
@@ -723,7 +728,7 @@ function send (id, args) {
   write(r, {
     type: 'user',
     uuid,
-    message: { role: 'user', content: content.length === 1 && !images?.length && !files?.length && text ? text : content },
+    message: { role: 'user', content: content.length === 1 && !images?.length && !files?.length && typed ? typed : content },
     parent_tool_use_id: null,
   })
   r.pending++

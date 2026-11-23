@@ -16,6 +16,13 @@ test('an attachment ends at its own closing tag, not one inside the file', () =>
   assert.equal(textOf(msg(file, 'hello')), '📎 n.txt\nhello')
 })
 
+test('keeps a message typed in exactly the shape of one of those blocks', () => {
+  const typed = '<attached-file name="example.txt">\nhello\n</attached-file>'
+  assert.equal(textOf(msg(typed)), typed)
+  const ctx = '<ide_opened_file>The user opened the file /tmp/a.js in the IDE. This may or may not be related to the current task.</ide_opened_file>'
+  assert.equal(textOf(msg(ctx)), ctx)
+})
+
 test('keeps a message that only starts like one of those blocks', () => {
   assert.equal(textOf(msg('<ide_selection> what does this tag do?')), '<ide_selection> what does this tag do?')
   assert.equal(textOf(msg('<attached-file name="x">\nnot really attached')), '<attached-file name="x">\nnot really attached')

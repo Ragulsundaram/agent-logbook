@@ -113,7 +113,10 @@ const textOf = m => {
   const c = m?.message?.content ?? m?.content
   if (typeof c === 'string') return clean(c)
   if (!Array.isArray(c)) return ''
-  const texts = c.filter(b => b?.type === 'text').map(b => { const k = sentBlock(String(b.text || '')); return k === null ? b.text : k }).filter(Boolean)
+  const blocks = c.filter(b => b?.type === 'text').map(b => String(b.text || ''))
+  // the logbook sends its blocks before your words, so the last block is always yours,
+  // whatever it looks like; only blocks before it can be the logbook's
+  const texts = blocks.map((t, i) => { const k = i < blocks.length - 1 ? sentBlock(t) : null; return k === null ? t : k }).filter(Boolean)
   return clean(texts.join('\n'))
 }
 const blocksOf = m => {
@@ -1181,7 +1184,7 @@ function snippet (text, at, needle) {
 // bytes added since, the same way the summaries are. A search then scans the
 // index rather than the disk.
 const SEARCH_FILE = path.join(HOME, '.claude', '.chistory-search.json')
-const SEARCH_V = 2
+const SEARCH_V = 3
 let SIDX = null
 let sidxSave = null
 
@@ -2086,9 +2089,22 @@ function agentActivity (id, agentId) {
   // asked every 2s while its Output is open: read again only once the agent has written more
   const seen = ACTIVITY.get(file)
   if (seen && seen.size === st.size && seen.mtime === st.mtimeMs) return seen.text
-  let raw; try { raw = fs.readFileSync(file, 'utf8') } catch { return null }
+  // only the end is shown, so only the end is read: a long-running agent's record can be large
+  const TAIL = 512 * 1024
+  let raw
+  try {
+    if (st.size <= TAIL) raw = fs.readFileSync(file, 'utf8')
+    else {
+      const fd = fs.openSync(file, 'r')
+      const buf = Buffer.alloc(TAIL)
+      fs.readSync(fd, buf, 0, TAIL, st.size - TAIL)
+      fs.closeSync(fd)
+      const s = buf.toString('utf8')
+      raw = s.slice(s.indexOf('\n') + 1)            // from the first whole line
+    }
+  } catch { return null }
   const { turns } = parseTranscript(raw, true)
-  const out = []
+  const out = st.size > TAIL ? ['… earlier steps left out', ''] : []
   for (const t of turns) {
     if (t.role === 'assistant') {
       for (const x of t.tools) {
@@ -2096,7 +2112,7 @@ function agentActivity (id, agentId) {
         if (x.out) out.push(...x.out.split('\n').slice(0, 6).map(l => '    ' + l.slice(0, 200)))
       }
       if (t.text) out.push(t.text.trim(), '')
-    } else if (t.role === 'user' && t.text && !out.length) out.push('Asked to: ' + t.text.replace(/\s+/g, ' ').slice(0, 200) + (t.text.length > 200 ? '…' : ''), '')
+    } else if (t.role === 'user' && t.text && !out.length && st.size <= TAIL) out.push('Asked to: ' + t.text.replace(/\s+/g, ' ').slice(0, 200) + (t.text.length > 200 ? '…' : ''), '')
   }
   const text = out.join('\n').slice(-60000)
   ACTIVITY.set(file, { size: st.size, mtime: st.mtimeMs, text })
