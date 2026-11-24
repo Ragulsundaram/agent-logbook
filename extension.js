@@ -1721,7 +1721,7 @@ async function chatHook ({ id, callback, input }) {
         permissionDecisionReason: `${path.basename(file)} has unsaved changes in the editor, outside this chat's folders. Ask the user to save it, then try again.` } }
     }
     if (doc?.isDirty) {
-      // Claude must not read or edit an older copy than you see: if the save fails, it does not go ahead
+      // Claude must not edit over a newer copy than the one on disk: if the save fails, it does not go ahead
       let saved = false
       try { saved = await doc.save() } catch {}
       if (!saved) {

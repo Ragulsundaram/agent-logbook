@@ -476,7 +476,7 @@ function buildComposer (id) {
   // status sit with the chat's numbers below it, the way Claude Code's own
   // status line does; model and effort are changed with /model and /effort
   const mode = el('select', 'cpick cmode')
-  mode.title = 'What Claude may do without asking (Shift+Tab in the box to switch). New chats start on the last one you picked'
+  mode.title = 'What Claude may do without asking. Shift+Tab in the box switches it for this chat; new chats start on the last one you pick here'
   const status = el('span', 'cstatus')
   const go = el('button', 'cgo')
   // while Claude works and a message is being typed, Stop stays beside Queue
@@ -599,7 +599,7 @@ function addImage (c, file) {
     const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(String(r.result))
     if (!m) { done(); return }
     const list = CHAT.images.get(c.id) || []
-    if (list.length >= 8) overLimit(c.id, file.name || 'a picture', 'pictures')
+    if (list.length >= 8) overLimit(c.id, file.name || 'pasted picture', 'pictures')
     else { list.push({ mediaType: m[1], data: m[2], url: String(r.result) }); CHAT.images.set(c.id, list) }
     paintImages(c)
     paintGo(c)
@@ -618,7 +618,7 @@ function paintImages (c) {
     img.alt = 'Pasted picture'
     const x = el('button', 'cimgx', '×')
     x.title = 'Remove'
-    x.onclick = () => { list.splice(i, 1); paintImages(c); paintGo(c) }
+    x.onclick = () => { list.splice(i, 1); clearOver(c.id); paintImages(c); paintGo(c); placeLive() }
     chip.append(img, x)
     c.imgs.appendChild(chip)
   })
@@ -629,7 +629,7 @@ function paintImages (c) {
     chip.title = f.name
     const x = el('button', 'cimgx', '×')
     x.title = 'Remove'
-    x.onclick = () => { files.splice(i, 1); paintImages(c); paintGo(c) }
+    x.onclick = () => { files.splice(i, 1); clearOver(c.id); paintImages(c); paintGo(c); placeLive() }
     chip.appendChild(x)
     c.imgs.appendChild(chip)
   })
@@ -732,7 +732,8 @@ function submit (c, only) {
   send({ type: 'chatSend', id, uuid, text, images: images.map(im => ({ mediaType: im.mediaType, data: im.data })), files, noContext, model: p.model, mode: p.mode, effort: p.effort })
   const queued = !!CHAT.state.get(id)?.busy
   CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, uuid, images: images.length, files: files.length, pics: images, docs: files, noContext, at: Date.now(), queued }])
-  CHAT.notes.delete(id)
+  // what was left out of this message stays named after it goes
+  if (!CHAT.notes.get(id)?.over) CHAT.notes.delete(id)
   CHAT.done.delete(id)
   const st = CHAT.state.get(id) || { id, asks: [] }
   if (!st.busy) CHAT.busySince.set(id, Date.now())
@@ -789,12 +790,27 @@ function recall (c, dir) {
   return true
 }
 
-/** Past the 8 a message carries: every one left out is named in one note. */
+/**
+ * Past the 8 pictures and 8 files a message carries: every one left out is
+ * named in one note, both kinds together. Pasted pictures share one name, so
+ * they are counted instead.
+ */
 function overLimit (id, name, kind) {
-  const was = CHAT.notes.get(id)
-  const names = was?.over === kind ? [...was.names, name] : [name]
-  note(id, `Not added (a message carries at most 8 ${kind}): ${names.join(', ')}`, true)
-  Object.assign(CHAT.notes.get(id), { over: kind, names })
+  const was = CHAT.notes.get(id)?.over || { pictures: [], files: [] }
+  const over = { ...was, [kind]: [...was[kind], name] }
+  const say = (k, list) => {
+    if (!list.length) return ''
+    const counts = new Map()
+    for (const n of list) counts.set(n, (counts.get(n) || 0) + 1)
+    return `${k}: ` + [...counts].map(([n, x]) => x > 1 ? `${n} (${x})` : n).join(', ')
+  }
+  const parts = [say('pictures', over.pictures), say('files', over.files)].filter(Boolean)
+  note(id, `Not added, a message carries at most 8 pictures and 8 files. ${parts.join('; ')}`, true)
+  CHAT.notes.get(id).over = over
+}
+/** Removing an attachment makes room, so the list of what was left out no longer holds. */
+function clearOver (id) {
+  if (CHAT.notes.get(id)?.over) CHAT.notes.delete(id)
 }
 
 function note (id, text, err, action) {
