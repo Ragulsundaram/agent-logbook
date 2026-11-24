@@ -222,7 +222,8 @@ document.addEventListener('click', e => {
     return
   }
   const a = e.target.closest?.('a[href^="http"]')
-  if (a) { e.preventDefault(); send({ type: 'openUrl', url: a.href }) }
+  // Cursor opens a clicked link itself too, so the click stops here: one tab, not two
+  if (a) { e.preventDefault(); e.stopPropagation(); send({ type: 'openUrl', url: a.href }) }
 })
 
 // The webview's own right-click menu only offers Copy over a selection, so
