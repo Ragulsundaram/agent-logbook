@@ -1711,6 +1711,9 @@ async function chatHook ({ id, callback, input }) {
   const file = String(ti.file_path || ti.notebook_path || '')
   if (!file || !path.isAbsolute(file)) return {}
   if (callback === 'lb_save') {
+    // reading never saves your unsaved work for you: Claude reads the file as it is on disk,
+    // as it does in the terminal. Only an edit, which would write over it, saves first
+    if (input.tool_name === 'Read') return {}
     const doc = vscode.workspace.textDocuments.find(d => d.uri.scheme === 'file' && d.uri.fsPath === file)
     // a file outside the chat's own folders is never saved for it: Claude is asked to wait for you instead
     if (doc?.isDirty && !inChatFolders(id, file)) {
@@ -1727,7 +1730,7 @@ async function chatHook ({ id, callback, input }) {
       }
     }
     // only a file the editor has open has a language server looking at it
-    if (input.tool_name !== 'Read' && doc) {
+    if (doc) {
       PROBLEMS_BEFORE.set(`${id}|${file}`, new Set(problemsOf(file)))
       if (PROBLEMS_BEFORE.size > 200) PROBLEMS_BEFORE.delete(PROBLEMS_BEFORE.keys().next().value)
     }

@@ -135,18 +135,22 @@ function chatMount () {
   paintComposer()
 }
 
-function setMode (c, value) {
+function setMode (c, value, keep = true) {
   picksFor(c.id).mode = value
   c.mode.value = value
   send({ type: 'chatMode', id: c.id, value })
   // and every new chat after it - except bypass, which is picked chat by chat
-  if (value !== 'bypassPermissions') setCfg('chatPermissionMode', value)
+  if (keep && value !== 'bypassPermissions') setCfg('chatPermissionMode', value)
 }
-/** Shift+Tab in the box steps through the modes, as it does in Claude Code's terminal. */
+/**
+ * Shift+Tab in the box steps through the modes, as it does in Claude Code's
+ * terminal - for this chat only: a key pressed in passing never changes the
+ * default every new chat starts with.
+ */
 function cycleMode (c) {
   const list = modes()
   const i = list.findIndex(m => m[0] === picksFor(c.id).mode)
-  setMode(c, list[(i + 1) % list.length][0])
+  setMode(c, list[(i + 1) % list.length][0], false)
 }
 
 /** The mode and status join the "Claude" numbers under the box; a new chat has none yet, so they get their own line. */
@@ -475,6 +479,13 @@ function buildComposer (id) {
   mode.title = 'What Claude may do without asking (Shift+Tab in the box to switch). New chats start on the last one you picked'
   const status = el('span', 'cstatus')
   const go = el('button', 'cgo')
+  // while Claude works and a message is being typed, Stop stays beside Queue
+  const halt = el('button', 'cgo stop')
+  halt.appendChild(el('span', 'cstopico'))
+  halt.title = 'Stop (Escape)'
+  halt.setAttribute('aria-label', 'Stop')
+  halt.hidden = true
+  halt.onclick = () => send({ type: 'chatStop', id })
   // attach a picture, a PDF or a text file
   const clip = el('button', 'cattach')
   clip.appendChild(icon('plus'))
@@ -483,7 +494,7 @@ function buildComposer (id) {
   pickFile.type = 'file'; pickFile.multiple = true; pickFile.hidden = true
   pickFile.accept = 'image/png,image/jpeg,image/gif,image/webp,application/pdf,text/*,' + TEXT_EXT.map(x => '.' + x).join(',')
   clip.onclick = () => pickFile.click()
-  bar.append(clip, pickFile, go)
+  bar.append(clip, pickFile, halt, go)
   // what the editor has open goes with the message: said here, and can be left out
   const ctxLine = el('div', 'cctx')
   const live = el('div', 'chatlive')
@@ -494,7 +505,7 @@ function buildComposer (id) {
   // once, the first time anyone sees the box: what it is and where to turn it off
   const tip = el('div', 'ctip')
   root.append(asks, block, tip, ctxLine, box, slash)
-  const c = { id, root, asks, imgs, block, tip, ta, slash, bar, mode, status, go, live, slashAt: 0, ctxLine, mention: null }
+  const c = { id, root, asks, imgs, block, tip, ta, slash, bar, mode, status, go, halt, live, slashAt: 0, ctxLine, mention: null }
   pickFile.onchange = () => { for (const f of pickFile.files) addAny(c, f); pickFile.value = '' }
 
   const fit = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 220) + 'px' }
@@ -561,7 +572,10 @@ function addAny (c, file) {
     const item = { name: file.name, mediaType: pdf ? 'application/pdf' : 'text/plain' }
     if (pdf) item.data = String(r.result).replace(/^data:[^,]*,/, '')
     else item.text = String(r.result)
-    CHAT.files.set(id, [...(CHAT.files.get(id) || []), item].slice(0, 8))
+    const have = CHAT.files.get(id) || []
+    // a message carries at most 8: one past that is named, not dropped quietly
+    if (have.length >= 8) overLimit(id, file.name, 'files')
+    else CHAT.files.set(id, [...have, item])
     if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
     done()
   }
@@ -585,8 +599,8 @@ function addImage (c, file) {
     const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(String(r.result))
     if (!m) { done(); return }
     const list = CHAT.images.get(c.id) || []
-    list.push({ mediaType: m[1], data: m[2], url: String(r.result) })
-    CHAT.images.set(c.id, list.slice(0, 8))
+    if (list.length >= 8) overLimit(c.id, file.name || 'a picture', 'pictures')
+    else { list.push({ mediaType: m[1], data: m[2], url: String(r.result) }); CHAT.images.set(c.id, list) }
     paintImages(c)
     paintGo(c)
     done()
@@ -775,6 +789,14 @@ function recall (c, dir) {
   return true
 }
 
+/** Past the 8 a message carries: every one left out is named in one note. */
+function overLimit (id, name, kind) {
+  const was = CHAT.notes.get(id)
+  const names = was?.over === kind ? [...was.names, name] : [name]
+  note(id, `Not added (a message carries at most 8 ${kind}): ${names.join(', ')}`, true)
+  Object.assign(CHAT.notes.get(id), { over: kind, names })
+}
+
 function note (id, text, err, action) {
   CHAT.notes.set(id, { text, err, action })
   if (COMPOSER?.id === id) placeLive()
@@ -891,6 +913,7 @@ function paintGo (c) {
     c.go.classList.remove('stop')
     c.go.title = 'Run (Enter)'
     c.go.disabled = !c.ta.value.replace(/^\s*!/, '').trim()
+    c.halt.hidden = !st?.busy
     return
   }
   const stop = !!st?.busy && empty
@@ -898,6 +921,7 @@ function paintGo (c) {
   c.go.classList.toggle('stop', stop)
   c.go.title = stop ? 'Stop (Escape)' : st?.busy ? 'Queue this message (Enter)' : 'Send (Enter)'
   c.go.disabled = !stop && empty
+  c.halt.hidden = !st?.busy || stop
 }
 
 function paintStatus (c) {
@@ -1201,8 +1225,13 @@ function permissionCard (c, a) {
   card.appendChild(el('div', 'caskhead', askTitle(a)))
   card.appendChild(askBody(a))
   const acts = el('div', 'caskacts')
+  const canAlways = a.suggestions.length && !a.noAlways
   // a risky one leads with No, as Claude's terminal does
-  const allow = el('button', a.defaultNo ? 'btn' : 'btn pri', 'Allow')
+  const deny = el('button', a.defaultNo ? 'btn pri' : 'btn', 'Deny')
+  deny.title = 'Claude is told no, and tries another way'
+  deny.onclick = () => answer(c, a, { allow: false })
+  if (a.defaultNo) acts.appendChild(deny)
+  const allow = el('button', a.defaultNo ? 'btn' : 'btn pri', canAlways ? 'Allow once' : 'Allow')
   allow.onclick = () => answer(c, a, { allow: true })
   acts.appendChild(allow)
   if (['Edit', 'Write', 'MultiEdit'].includes(a.tool)) {
@@ -1211,25 +1240,25 @@ function permissionCard (c, a) {
     diff.onclick = () => send({ type: 'chatAskDiff', id: c.id, requestId: a.requestId })
     acts.appendChild(diff)
   }
-  if (a.suggestions.length && !a.noAlways) {
+  if (canAlways) {
     const always = el('button', 'btn', 'Always allow')
-    always.title = alwaysTip(a)
     always.onclick = () => answer(c, a, { allow: true, always: true })
     acts.appendChild(always)
   }
-  const deny = el('button', a.defaultNo ? 'btn pri' : 'btn', 'Deny')
-  deny.title = 'Claude is told no, and tries another way'
-  deny.onclick = () => answer(c, a, { allow: false })
+  if (!a.defaultNo) acts.appendChild(deny)
   const halt = el('button', 'btn', 'Deny and stop')
   halt.title = 'Claude is told no, and the reply ends here'
   halt.onclick = () => answer(c, a, { allow: false, stop: true })
-  acts.append(deny, halt)
+  acts.appendChild(halt)
   const instead = el('input', 'caskinput')
   instead.placeholder = 'Or tell Claude what to do instead, then Enter'
   instead.onkeydown = e => {
     if (e.key === 'Enter' && instead.value.trim()) answer(c, a, { allow: false, message: instead.value.trim() })
   }
-  card.append(acts, instead)
+  card.appendChild(acts)
+  // what "Always allow" would save, in words, not only on hover
+  if (canAlways) card.appendChild(el('div', 'caskwhy caskalways', 'Always allow: ' + alwaysTip(a).split('\n').join('; ')))
+  card.appendChild(instead)
   return card
 }
 

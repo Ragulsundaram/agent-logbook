@@ -282,10 +282,10 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort, dirs, allowBypass
     OPTS.onChange(id)
   }
   const init = { subtype: 'initialize', supportedDialogKinds: ['auto_mode_server_fallback'] }
-  // the editor's part: unsaved files saved before Claude reads or edits them, new problems told after an edit
+  // the editor's part: unsaved files saved before Claude edits them, new problems told after an edit
   if (OPTS.onHook) {
     init.hooks = {
-      PreToolUse: [{ matcher: 'Edit|Write|MultiEdit|Read|NotebookEdit', hookCallbackIds: ['lb_save'] }],
+      PreToolUse: [{ matcher: 'Edit|Write|MultiEdit|NotebookEdit', hookCallbackIds: ['lb_save'] }],
       PostToolUse: [{ matcher: 'Edit|Write|MultiEdit|NotebookEdit', hookCallbackIds: ['lb_problems'] }],
     }
   }

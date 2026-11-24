@@ -942,8 +942,9 @@ function messageMatches (q) {
     chev.textContent = hits.hidden ? '›' : '⌄'
     for (const h of c.hits) {
       const line = el('div', 'fhit' + (h.role === 'user' ? ' you' : ''))
-      const WHO = { user: 'You', assistant: 'Claude', agent: 'Agent', session: 'Session' }
-      line.append(el('span', 'who', WHO[h.role] || 'Claude'), mark(h.text, q))
+      const ai = c.provider === 'codex' ? 'Codex' : 'Claude'
+      const WHO = { user: 'You', assistant: ai, agent: 'Agent', session: 'Session' }
+      line.append(el('span', 'who', WHO[h.role] || ai), mark(h.text, q))
       line.onclick = () => openAt(c.id, q)
       hits.appendChild(line)
     }
@@ -1461,7 +1462,7 @@ function renderBlocks (t, blocks, from, body, to = blocks.length, before = null)
         }))
       }
       // today's messages show just the time; the full date is on hover
-      const who = el('span', 'whot', (turn.role === 'user' ? 'You' : 'Claude') + (turn.ts ? ' · ' + msgClock(turn.ts) : ''))
+      const who = el('span', 'whot', (turn.role === 'user' ? 'You' : t.provider === 'codex' ? 'Codex' : 'Claude') + (turn.ts ? ' · ' + msgClock(turn.ts) : ''))
       if (turn.ts) who.title = clock(turn.ts)
       when.appendChild(who)
       w.appendChild(when)
