@@ -1701,6 +1701,8 @@ body[data-chat] .dback, body[data-chat] .newinchat { display: none !important }
 .mcpdot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-descriptionForeground) }
 .mcprow.ok .mcpdot { background: #4caf50 }
 .mcprow.bad .mcpdot { background: var(--vscode-errorForeground) }
+.mcprow .chatmeta { flex: 1 }
+.mcpbtn { flex: none; font-size: 11px; padding: 1px 8px }
 /* a question's choice with a preview */
 .caskpreview { margin: 6px 0 0; font-size: 11px; text-align: left; white-space: pre-wrap; font-family: var(--vscode-editor-font-family) }
 .bgtask .bgnow { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }

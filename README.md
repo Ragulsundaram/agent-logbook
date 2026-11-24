@@ -26,7 +26,9 @@ you want it to match the Agent Logbook title.
 talking to it without a terminal: the reply streams in as it is written, and
 file edits, commands, questions and plans wait for you as cards you approve,
 deny or answer. Pick the model, effort and permission mode per chat, stop a
-reply with Escape, paste images and use slash commands. The + button starts a
+reply with Escape, paste images and use slash commands. `/mcp` lists the
+chat's MCP servers and, as in the terminal, can turn one off or on for the
+folder, reconnect one that failed, or sign in to one. The + button starts a
 new chat here or in a terminal. This runs your own installed Claude Code in the
 background (`claude -p` with streaming input and output), so your login,
 settings, MCP servers and CLAUDE.md apply as usual, and it writes the same

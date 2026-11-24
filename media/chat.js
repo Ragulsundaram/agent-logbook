@@ -34,6 +34,7 @@ const CHAT = {
   taskOut: new Map(),    // "chat id|task id" -> { output, truncated } of a background task you opened
   side: new Map(),       // chat id -> side questions (/btw) and their answers
   mcp: new Map(),        // chat id -> its MCP servers, once asked with /mcp
+  mcpBusy: new Set(),    // chat id|server with a turn-off, reconnect or sign-in under way
   editor: { label: '', file: '' },   // what the editor has open, which goes with your message
   skipCtx: new Set(),    // chats whose next message goes without the editor's file
   files: new Map(),      // chat id -> attached PDFs and text files waiting to go
@@ -339,7 +340,22 @@ function paintLive () {
     else if (!servers.length) w.appendChild(el('div', 'chatmeta', 'This chat has no MCP servers.'))
     else for (const v of servers) {
       const row = el('div', 'mcprow ' + (v.status === 'connected' ? 'ok' : v.status === 'failed' ? 'bad' : ''))
-      row.append(el('span', 'mcpdot'), el('b', '', v.name), el('span', 'chatmeta', v.status))
+      const SAY = { connected: 'connected', failed: 'failed', 'needs-auth': 'needs sign-in', pending: 'connecting…', disabled: 'off' }
+      row.append(el('span', 'mcpdot'), el('b', '', v.name), el('span', 'chatmeta', SAY[v.status] || v.status))
+      // what the terminal's /mcp offers for this server; off and on are kept for this folder, as there
+      const key = id + '|' + v.name
+      const busy = CHAT.mcpBusy.has(key)
+      const act = (label, kind, tip) => {
+        const b = el('button', 'btn mcpbtn', busy ? 'Working…' : label)
+        b.title = tip
+        b.disabled = busy
+        b.onclick = () => { CHAT.mcpBusy.add(key); send({ type: 'chatMcpAct', id, act: kind, name: v.name }); paintLive() }
+        row.appendChild(b)
+      }
+      if (v.status === 'needs-auth') act('Sign in', 'signin', 'Opens the sign-in page in your browser')
+      if (v.status === 'failed') act('Reconnect', 'reconnect', 'Try connecting to this server again')
+      if (v.status === 'disabled') act('Turn on', 'on', 'Turn this server back on for chats in this folder')
+      else if (v.status !== 'pending') act('Turn off', 'off', 'Turn this server off for chats in this folder, as /mcp does in the terminal; Turn on brings it back')
       w.appendChild(row)
     }
     live.appendChild(w)
@@ -1663,6 +1679,8 @@ if (!BOARD_MODE) {
       }
       case 'chatMcpList':
         CHAT.mcp.set(id, Array.isArray(m.list) ? m.list : 'unavailable')
+        if (m.done) CHAT.mcpBusy.delete(id + '|' + m.done)
+        if (m.err) note(id, m.err, true)
         break
       case 'chatTaskStopFailed':
         CHAT.stopping.delete(id + '|' + m.taskId)

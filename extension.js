@@ -2433,6 +2433,33 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             ask()
             break
           }
+          case 'chatMcpAct': {
+            // turn a server off or on, reconnect it, or sign in to it, as /mcp does in the terminal
+            const id = String(msg.id || ''), act = String(msg.act || ''), name = String(msg.name || '')
+            if (!['on', 'off', 'reconnect', 'signin'].includes(act) || !name || name.length > 128) break
+            const refresh = (err, tries = 6) => {
+              let n = 0
+              const ask = () => runner.mcpStatus(id, list => {
+                post({ type: 'chatMcpList', id, list, err, done: name })
+                err = ''
+                const row = list?.find(x => x.name === name)
+                if ((row?.status === 'pending' || (act === 'signin' && row?.status === 'needs-auth')) && ++n < tries) setTimeout(ask, 2000)
+              })
+              ask()
+            }
+            runner.mcpAct(id, act, name, async r => {
+              if (!r.ok) return refresh(`${name}: ${r.err}`)
+              const url = String(r.res?.authUrl || '')
+              // sign-in finishes in the browser; the server's row turns connected once it has
+              if (act === 'signin' && url) {
+                if (/^https:\/\//i.test(url)) await vscode.env.openExternal(vscode.Uri.parse(url))
+                else return refresh(`${name}: the sign-in link was not a web address, so it was not opened.`)
+                return refresh('', 60)
+              }
+              refresh('')
+            })
+            break
+          }
           case 'chatFollow':
             // /clear moved a chat to a new id: open that one as soon as its file is written
             if (/^[\w-]+$/.test(String(msg.id || ''))) followNewChat(String(msg.id), post, null, 120e3)
