@@ -2032,8 +2032,6 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               else vscode.window.setStatusBarMessage(`$(check) ${label[c]} ${msg.type === 'mcpConnect' ? 'can now read your chat history - start a new chat to use it' : 'disconnected'}`, 5000)
             }
             post({ type: 'mcp', data: mcp.status() })
-            // chats running here pick the change up with a fresh Claude
-            runner.restartAll()
             break
           }
           case 'board': {
@@ -2986,7 +2984,11 @@ function fillChatTab (ctx, panel, id) {
     },
     retarget: (from, to) => { if (CHAT_TABS.get(from) === panel) CHAT_TABS.delete(from); CHAT_TABS.set(to, panel); id = to },
   })
-  panel.onDidDispose(() => { if (CHAT_TABS.get(id) === panel) CHAT_TABS.delete(id) })
+  panel.onDidDispose(() => {
+    if (CHAT_TABS.get(id) === panel) CHAT_TABS.delete(id)
+    // a closed tab lets its Claude go, unless the chat is still open in another view
+    if (!CHAT_TABS.has(id) && ![...SHOWING.values()].some(v => v.id === id)) runner.release(id)
+  })
 }
 
 /**
@@ -3102,29 +3104,6 @@ function activate (ctx) {
   runner.seedKnown(ctx.globalState.get('chatKnown'))
   // MCP servers added or removed anywhere (here, or with claude mcp in a terminal) reach the
   // chats running here: Claude only reads them when it starts. The file also holds counters
-  // Claude rewrites all the time, so only a change to the servers themselves counts
-  const claudeJson = path.join(require('node:os').homedir(), '.claude.json')
-  // the servers alone, in a fixed order: projects with none, and the order keys were written in, do not count
-  const sorted = v => Array.isArray(v) ? v.map(sorted)
-    : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sorted(v[k])])) : v
-  const mcpSig = () => {
-    try {
-      const j = JSON.parse(fs.readFileSync(claudeJson, 'utf8'))
-      const projects = Object.entries(j.projects || {})
-        .filter(([, v]) => v?.mcpServers && Object.keys(v.mcpServers).length)
-        .map(([p, v]) => [p, v.mcpServers])
-        .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
-      return JSON.stringify(sorted([j.mcpServers || {}, projects]))
-    } catch { return null }
-  }
-  let mcpWas = mcpSig()
-  fs.watchFile(claudeJson, { interval: 5000 }, () => {
-    const now = mcpSig()
-    if (now === null || now === mcpWas) return
-    mcpWas = now
-    if (!DEACTIVATED) runner.restartAll()
-  })
-  ctx.subscriptions.push({ dispose: () => fs.unwatchFile(claudeJson) })
   // what you have open, for the line above the box that says what goes with your message
   ctx.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(ed => { if (isFileEditor(ed)) LAST_EDITOR = ed; postEditor() }),

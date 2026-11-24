@@ -45,6 +45,17 @@ let CUR = null, hits = [], hitAt = -1
 let HERE = new Set()                           // the folders this window has open
 const SHUT = new Set()                          // collapsed groups
 const OPENED = new Set()                        // other folders' groups opened by hand
+// folded sections opened by hand stay open when a live update redraws the chat
+const FOLDS = new Map()
+function foldable (key, head, body, chev, startOpen) {
+  body.hidden = !(key && FOLDS.has(key) ? FOLDS.get(key) : startOpen)
+  chev.textContent = body.hidden ? '›' : '⌄'
+  head.onclick = () => {
+    body.hidden = !body.hidden
+    chev.textContent = body.hidden ? '›' : '⌄'
+    if (key) FOLDS.set(key, !body.hidden)
+  }
+}
 const SHOWN = new Map()                         // group -> how many rows are expanded
 const ARCH = new Set()                          // groups showing their archived chats
 let RESULTS = null, SEARCHING = ''              // matches from inside messages
@@ -211,7 +222,8 @@ document.addEventListener('click', e => {
     return
   }
   const a = e.target.closest?.('a[href^="http"]')
-  if (a) { e.preventDefault(); send({ type: 'openUrl', url: a.href }) }
+  // Cursor opens a clicked link itself too, so the click stops here: one tab, not two
+  if (a) { e.preventDefault(); e.stopPropagation(); send({ type: 'openUrl', url: a.href }) }
 })
 
 // The webview's own right-click menu only offers Copy over a selection, so
@@ -1171,7 +1183,7 @@ function collapse (turns) {
       continue
     }
     out.push({ role: t.role, text: t.text, tools: [...t.tools],
-      images: [...(t.images || [])], edits: [...(t.edits || [])], ts: t.ts })
+      images: [...(t.images || [])], edits: [...(t.edits || [])], ts: t.ts, start: t.ts })
   }
   return out.filter(t => t.text || t.tools.length || t.images.length || t.edits.length)
 }
@@ -1247,14 +1259,11 @@ function agentCard (a, sessionId) {
     if (!text) return
     const w = el('div', 'afold')
     const b = el('button', 'afoldhead')
-    b.append(el('span', 'chev2', '›'), el('span', '', label))
+    const chev = el('span', 'chev2')
+    b.append(chev, el('span', '', label))
     const body = el('div', 'afoldbody')
     body.innerHTML = window.md(text)
-    body.hidden = true
-    b.onclick = () => {
-      body.hidden = !body.hidden
-      b.querySelector('.chev2').textContent = body.hidden ? '›' : '⌄'
-    }
+    foldable(`${sessionId}|agent|${a.id}|${label}`, b, body, chev, false)
     w.append(b, body)
     c.appendChild(w)
   }
@@ -1435,7 +1444,7 @@ function renderBlocks (t, blocks, from, body, to = blocks.length, before = null)
     // an agent gets a card of its own, so it drops out of the "ran N tools" line
     const cards = turn.tools.length ? agentCards(turn.tools, t) : null
     const shown = cards ? turn.tools.filter(x => !x.card) : turn.tools
-    if (shown.length) w.appendChild(toolSummary(shown))
+    if (shown.length) w.appendChild(toolSummary(shown, `tools|${t.id}|${turn.start || turn.ts}|${shown[0].name}|${shown[0].detail || ''}`))
     if (cards) w.appendChild(cards)
     if (turn.edits && turn.edits.length) w.appendChild(turnChanges(turn.edits, t.id))
     // one attribution per run, not one per block - and the copy button lives
@@ -1895,6 +1904,7 @@ function showDetail (t, live) {
   }
   foldAll.onclick = () => {
     ALLTOOLS = !ALLTOOLS
+    for (const k of FOLDS.keys()) if (k.startsWith('tools|')) FOLDS.delete(k)
     for (const w of d.querySelectorAll('.twork')) {
       w.querySelector('.tdetail').hidden = !ALLTOOLS
       w.querySelector('.chev2').textContent = ALLTOOLS ? '⌄' : '›'
@@ -2036,7 +2046,7 @@ function phraseFor (name, n) {
 // "Edited 2 files" means two files: two edits to one file counted as two
 const FILE_TOOLS = new Set(['Edit', 'Read', 'NotebookEdit'])
 /** Merge Edit/Write into one "Edited N files" line, since that is how it reads. */
-function toolSummary (tools) {
+function toolSummary (tools, key) {
   const order = [], counts = new Map()
   for (const t of tools) {
     const key = t.name === 'Write' ? 'Edit' : t.name
@@ -2050,10 +2060,11 @@ function toolSummary (tools) {
     order.map(k => phraseFor(k, FILE_TOOLS.has(k) ? new Set(counts.get(k).map(t => t.detail || t)).size : counts.get(k).length)).join(' · ')))
   // a step that failed says so on the folded line, not only inside it
   if (failed) head.appendChild(el('span', 'tfail', `${failed} failed`))
-  head.appendChild(el('span', 'chev2', ALLTOOLS ? '⌄' : '›'))
+  const chev = el('span', 'chev2')
+  head.appendChild(chev)
 
   const body = el('div', 'tdetail')
-  body.hidden = !ALLTOOLS
+  foldable(key, head, body, chev, ALLTOOLS)
   for (const t of tools) {
     // each call is a card: what ran, then the command or path it ran on
     const card = el('div', 'tcard')
@@ -2082,10 +2093,6 @@ function toolSummary (tools) {
     } else if (t.err) card.appendChild(el('div', 'tout err', 'Failed'))
     if (t.err) card.classList.add('failed')
     body.appendChild(card)
-  }
-  head.onclick = () => {
-    body.hidden = !body.hidden
-    head.querySelector('.chev2').textContent = body.hidden ? '›' : '⌄'
   }
   wrap.append(head, body)
   return wrap
@@ -2210,15 +2217,12 @@ function noteCard (n) {
   // it is often longer than everything around it
   if (n.detail) {
     const tog = el('button', 'afoldhead')
-    tog.append(el('span', 'chev2', '›'), el('span', '', n.kind === 'compact' ? 'What Claude kept' : 'What it reported'))
+    const chev = el('span', 'chev2')
+    tog.append(chev, el('span', '', n.kind === 'compact' ? 'What Claude kept' : 'What it reported'))
     const rep = el('div', 'afoldbody')
     rep.innerHTML = window.md(n.detail)
     addCopyButtons(rep)
-    rep.hidden = true
-    tog.onclick = () => {
-      rep.hidden = !rep.hidden
-      tog.querySelector('.chev2').textContent = rep.hidden ? '›' : '⌄'
-    }
+    foldable(`${CUR?.id}|note|${n.kind}|${n.ts}`, tog, rep, chev, false)
     card.append(tog, rep)
   }
   return card
