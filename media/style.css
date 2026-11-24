@@ -691,9 +691,8 @@ mark.on { background: var(--amber); color: #000 }
 
 /* Claude's own markers: the away recap, and where a chat was compacted */
 .note-card { margin: 12px 0; border-radius: 8px; padding: 10px 12px;
-  background: var(--vscode-textBlockQuote-background);
-  border-left: 3px solid var(--clay) }
-.note-card.compact { border-left-color: var(--vscode-descriptionForeground); opacity: .85 }
+  background: var(--vscode-textBlockQuote-background) }
+.note-card.compact { opacity: .85 }
 .nhead { display: flex; align-items: center; gap: 8px; margin-bottom: 6px }
 .nhead b { font-size: 11px; font-weight: 500;
   color: var(--vscode-descriptionForeground) }
@@ -1020,7 +1019,6 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 .apos { font-size: 11px; color: var(--vscode-descriptionForeground);
   font-variant-numeric: tabular-nums; padding: 0 2px }
 /* an agent that was killed or errored - not every one finishes */
-.acard.failed, .acard.killed { border-left-color: var(--vscode-errorForeground) }
 .astate.failed, .astate.killed { color: var(--vscode-errorForeground) }
 .adot.failed, .adot.killed { background: var(--vscode-errorForeground) }
 /* the panel header matches the button that opens it, not the status cards */
@@ -1222,9 +1220,7 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
   .runsprite, .runsprite .legs.a, .runsprite .legs.b, .runlabel::after { animation: none }
 }
 /* notes Claude Code writes itself: an agent finishing, another session's message */
-.note-card.agent { border-left-color: var(--sage) }
 .note-card.agent .nbody { color: var(--vscode-descriptionForeground) }
-.note-card.peer { border-left-color: var(--fall) }
 
 /* resources: only the exceptions are shown */
 .resbadge { flex: none; font-size: 11px; font-weight: 500; padding: 1px 6px; border-radius: 8px;
