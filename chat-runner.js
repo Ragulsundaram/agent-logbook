@@ -708,6 +708,8 @@ function send (id, args) {
       if (DEFERRED.get(id) !== waiting) return
       DEFERRED.delete(id)
       for (const a of waiting) send(id, a)
+      // its tab was closed while they waited: let it go once they are answered
+      if (waiting.release) release(id)
     })
     return true
   }
@@ -953,7 +955,12 @@ function stop (id, now) {
  */
 function release (id) {
   const r = RUNS.get(id)
-  if (!r) { if (!DEFERRED.has(id)) cancelWake(id); return }
+  if (!r) {
+    const waiting = DEFERRED.get(id)
+    if (waiting) waiting.release = true
+    else cancelWake(id)
+    return
+  }
   if (r.busy || r.asks.size || r.bg.length) r.restart = true
   else stop(id)
 }
