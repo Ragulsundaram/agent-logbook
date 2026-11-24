@@ -947,15 +947,15 @@ function stop (id, now) {
 }
 
 /**
- * Claude reads its MCP servers when it starts, so a change to them reaches a
- * running chat only through a fresh Claude: an idle one is let go now (the next
- * message starts it again, with the new servers), a busy one once it is done.
+ * A chat whose tab was closed lets its Claude go: at once when idle, or once the
+ * reply, question or background work it is on is done. Reopening starts a fresh
+ * one, which reads the latest rules, memory and servers.
  */
-function restartAll () {
-  for (const [id, r] of RUNS) {
-    if (r.busy || r.asks.size || r.bg.length) r.restart = true
-    else stop(id)
-  }
+function release (id) {
+  const r = RUNS.get(id)
+  if (!r) { if (!DEFERRED.has(id)) cancelWake(id); return }
+  if (r.busy || r.asks.size || r.bg.length) r.restart = true
+  else stop(id)
 }
 
 function stopAll (now) {
@@ -973,4 +973,4 @@ const askOf = (id, requestId) => RUNS.get(id)?.asks.get(requestId) || null
 /** The folder Claude runs in for this chat, when it runs here. */
 const cwdOf = id => RUNS.get(id)?.cwd || ''
 
-module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, mcpStatus, restartAll, wake, setModel, setMode, setEffort, stop, stopAll, markEnded }
+module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, mcpStatus, release, wake, setModel, setMode, setEffort, stop, stopAll, markEnded }
