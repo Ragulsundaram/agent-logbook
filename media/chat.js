@@ -35,6 +35,7 @@ const CHAT = {
   side: new Map(),       // chat id -> side questions (/btw) and their answers
   mcp: new Map(),        // chat id -> its MCP servers, once asked with /mcp
   mcpBusy: new Set(),    // chat id|server with a turn-off, reconnect or sign-in under way
+  mcpFold: new Map(),    // chat id|group -> folded or not, once changed by hand
   editor: { label: '', file: '' },   // what the editor has open, which goes with your message
   skipCtx: new Set(),    // chats whose next message goes without the editor's file
   files: new Map(),      // chat id -> attached PDFs and text files waiting to go
@@ -207,6 +208,84 @@ setInterval(() => {
   if (e) e.textContent = elapsed(COMPOSER.id)
 }, 1000)
 
+/**
+ * /mcp: the chat's servers grouped the way you act on them - what needs you
+ * first, then what is connected (folded when long), then what is off. Each row
+ * has one switch for on and off, and Sign in or Reconnect only when it applies.
+ */
+function mcpCard (id, servers) {
+  const w = el('div', 'chatside mcpcard')
+  const head = el('div', 'shhead')
+  head.appendChild(el('span', 'bgkind', 'MCP servers'))
+  const sum = el('span', 'shcmd mcpsum', '')
+  head.appendChild(sum)
+  const x = el('button', 'iconbtn', '×')
+  x.title = 'Close (Escape)'
+  x.setAttribute('aria-label', 'Close')
+  x.onclick = () => { CHAT.mcp.delete(id); paintLive() }
+  head.appendChild(x)
+  w.appendChild(head)
+  if (servers === 'loading') { w.appendChild(el('div', 'chatmeta', 'Asking Claude…')); return w }
+  if (servers === 'unavailable') { w.appendChild(el('div', 'chatmeta', 'Claude did not answer. Try /mcp again.')); return w }
+  if (!servers.length) { w.appendChild(el('div', 'chatmeta', 'This chat has no MCP servers.')); return w }
+  const groups = [
+    ['need', 'Needs you', servers.filter(v => v.status === 'needs-auth' || v.status === 'failed')],
+    ['on', 'Connected', servers.filter(v => v.status === 'connected' || v.status === 'pending')],
+    ['off', 'Off', servers.filter(v => v.status === 'disabled')],
+    ['other', 'Other', servers.filter(v => !['needs-auth', 'failed', 'connected', 'pending', 'disabled'].includes(v.status))],
+  ].filter(g => g[2].length)
+  sum.textContent = groups.map(([, label, list]) => `${list.length} ${label.toLowerCase()}`).join(' · ')
+  const list = el('div', 'mcplist')
+  for (const [key, label, rows] of groups) {
+    const fk = id + '|' + key
+    // a long connected list folds by default; what needs you never does
+    const folded = CHAT.mcpFold.has(fk) ? CHAT.mcpFold.get(fk) : key === 'on' && rows.length > 6 && groups.length > 1
+    const gh = el('button', 'mcpgroup')
+    gh.setAttribute('aria-expanded', String(!folded))
+    gh.append(el('span', 'chev2', folded ? '›' : '⌄'), el('span', '', label), el('span', 'mcpcount', String(rows.length)))
+    gh.onclick = () => { CHAT.mcpFold.set(fk, !folded); paintLive() }
+    list.appendChild(gh)
+    if (folded) continue
+    for (const v of rows) list.appendChild(mcpRow(id, v))
+  }
+  w.appendChild(list)
+  return w
+}
+
+function mcpRow (id, v) {
+  const row = el('div', 'mcprow ' + ({ connected: 'ok', failed: 'bad', 'needs-auth': 'auth', pending: 'wait', disabled: 'off' }[v.status] || ''))
+  // "claude.ai Gmail" and "plugin:postman:postman" read better as the name, with where it comes from beside it
+  let name = v.name, from = ''
+  const m = /^claude\.ai (.+)$/.exec(name) || /^plugin:([^:]+):(.+)$/.exec(name)
+  if (m) { from = name.startsWith('plugin:') ? 'plugin' : 'claude.ai'; name = m[m.length - 1] }
+  const nm = el('span', 'mcpname', name)
+  nm.title = v.name
+  row.append(el('span', 'mcpdot'), nm)
+  if (from) row.appendChild(el('span', 'mcpfrom', from))
+  const key = id + '|' + v.name
+  const busy = CHAT.mcpBusy.has(key)
+  const go = act => { CHAT.mcpBusy.add(key); send({ type: 'chatMcpAct', id, act, name: v.name }); paintLive() }
+  if (busy) row.appendChild(el('span', 'mcpstate', 'Working…'))
+  else if (v.status === 'pending') row.appendChild(el('span', 'mcpstate', 'Connecting…'))
+  else if (v.status === 'needs-auth' || v.status === 'failed') {
+    const b = el('button', 'mcplink', v.status === 'failed' ? 'Reconnect' : 'Sign in')
+    b.title = v.status === 'failed' ? 'Try connecting to this server again' : 'Opens the sign-in page in your browser'
+    b.onclick = () => go(v.status === 'failed' ? 'reconnect' : 'signin')
+    row.appendChild(b)
+  }
+  // one switch, as in Claude's own settings; off is kept for this folder, as /mcp does in the terminal
+  const on = v.status !== 'disabled'
+  const sw = el('button', 'mcpswitch' + (on ? ' on' : ''))
+  sw.setAttribute('role', 'switch')
+  sw.setAttribute('aria-checked', String(on))
+  sw.setAttribute('aria-label', `${v.name} ${on ? 'on' : 'off'}`)
+  sw.title = on ? 'Turn off for chats in this folder' : 'Turn on for chats in this folder'
+  sw.disabled = busy || v.status === 'pending'
+  sw.onclick = () => go(on ? 'off' : 'on')
+  row.appendChild(sw)
+  return row
+}
+
 function paintLive () {
   if (!COMPOSER) return
   const id = COMPOSER.id
@@ -327,39 +406,7 @@ function paintLive () {
     live.appendChild(w)
   }
   const servers = CHAT.mcp.get(id)
-  if (servers) {
-    const w = el('div', 'chatside')
-    const head = el('div', 'shhead')
-    head.append(el('span', 'bgkind', 'MCP servers'), el('span', 'shcmd', ''))
-    const x = el('button', 'iconbtn', '×')
-    x.onclick = () => { CHAT.mcp.delete(id); paintLive() }
-    head.appendChild(x)
-    w.appendChild(head)
-    if (servers === 'loading') w.appendChild(el('div', 'chatmeta', 'Asking Claude…'))
-    else if (servers === 'unavailable') w.appendChild(el('div', 'chatmeta', 'Claude did not answer. Try /mcp again.'))
-    else if (!servers.length) w.appendChild(el('div', 'chatmeta', 'This chat has no MCP servers.'))
-    else for (const v of servers) {
-      const row = el('div', 'mcprow ' + (v.status === 'connected' ? 'ok' : v.status === 'failed' ? 'bad' : ''))
-      const SAY = { connected: 'connected', failed: 'failed', 'needs-auth': 'needs sign-in', pending: 'connecting…', disabled: 'off' }
-      row.append(el('span', 'mcpdot'), el('b', '', v.name), el('span', 'chatmeta', SAY[v.status] || v.status))
-      // what the terminal's /mcp offers for this server; off and on are kept for this folder, as there
-      const key = id + '|' + v.name
-      const busy = CHAT.mcpBusy.has(key)
-      const act = (label, kind, tip) => {
-        const b = el('button', 'btn mcpbtn', busy ? 'Working…' : label)
-        b.title = tip
-        b.disabled = busy
-        b.onclick = () => { CHAT.mcpBusy.add(key); send({ type: 'chatMcpAct', id, act: kind, name: v.name }); paintLive() }
-        row.appendChild(b)
-      }
-      if (v.status === 'needs-auth') act('Sign in', 'signin', 'Opens the sign-in page in your browser')
-      if (v.status === 'failed') act('Reconnect', 'reconnect', 'Try connecting to this server again')
-      if (v.status === 'disabled') act('Turn on', 'on', 'Turn this server back on for chats in this folder')
-      else if (v.status !== 'pending') act('Turn off', 'off', 'Turn this server off for chats in this folder, as /mcp does in the terminal; Turn on brings it back')
-      w.appendChild(row)
-    }
-    live.appendChild(w)
-  }
+  if (servers) live.appendChild(mcpCard(id, servers))
   const note = CHAT.notes.get(id)
   if (note) {
     const n = el('div', 'chatnote' + (note.err ? ' err' : ''))
@@ -534,8 +581,10 @@ function buildComposer (id) {
       recall(c, e.key === 'ArrowUp' ? -1 : 1)) { e.preventDefault(); return }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(c) }
     else if (e.key === 'Escape' && !e.isComposing) {
+      // the /mcp card is on top, so Escape closes it first
+      if (CHAT.mcp.has(id)) { e.preventDefault(); CHAT.mcp.delete(id); paintLive() }
       // like the terminal: Escape stops a reply in progress
-      if (CHAT.state.get(id)?.busy) { e.preventDefault(); send({ type: 'chatStop', id }) }
+      else if (CHAT.state.get(id)?.busy) { e.preventDefault(); send({ type: 'chatStop', id }) }
       else ta.blur()
     }
   }
@@ -1717,3 +1766,15 @@ if (!BOARD_MODE) {
     if (COMPOSER?.id === id) { placeLive(); paintComposer(); if (typeof paintRunner === 'function') paintRunner() }
   })
 }
+
+// Escape closes the /mcp card wherever focus is in the chat - after clicking a
+// switch, focus is on the card, not in the box. Fields and menus keep their own Escape.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return
+  if (e.target.closest?.('input, textarea, select, .ctx')) return
+  const id = COMPOSER?.id
+  if (!id || !CHAT.mcp.has(id)) return
+  e.preventDefault()
+  CHAT.mcp.delete(id)
+  paintLive()
+})
