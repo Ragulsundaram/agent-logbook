@@ -660,35 +660,13 @@ function buildComposer (id) {
 const TEXT_EXT = 'txt md csv tsv json yaml yml xml html css js ts jsx tsx py rb go rs java kt swift c h cpp cs php sh sql log diff patch toml ini env conf'.split(' ')
 const MAX_PDF = 18 * 1024 * 1024        // the host takes up to 25 MB of base64, about 18.7 MB
 const MAX_TEXT = 390 * 1024
-/**
- * A picture or file starts reading for a chat. Its slot names the chat, and
- * /clear rewrites the slots under way when it moves the chat, so only reads
- * started before the move follow it; one started later in the earlier chat
- * stays there.
- */
-function readStart (id) {
-  const slot = { id }
-  CHAT.inflight.add(slot)
-  CHAT.reading.set(id, (CHAT.reading.get(id) || 0) + 1)
-  return slot
-}
-/** /clear: what the view holds for a chat goes on under its new id. */
-function moveChatState (id, to) {
-  for (const k of ['state', 'echo', 'partial', 'notes', 'picks', 'side', 'mcp', 'drafts', 'images', 'files', 'sentLog', 'shell', 'todosFold', 'over', 'mcpTop', 'reading']) {
-    if (CHAT[k].has(id)) { CHAT[k].set(to, CHAT[k].get(id)); CHAT[k].delete(id) }
-  }
-  // reads under way now, and an Enter waiting on them, follow; reads started later do not
-  for (const slot of CHAT.inflight) if (slot.id === id) slot.id = to
-  if (CHAT.sendWhenRead.delete(id)) CHAT.sendWhenRead.add(to)
-}
+// reads under way and /clear moves: see chat-moves.js
+const readStart = id => chatMoves.readStart(CHAT, id)
+const moveChatState = (id, to) => chatMoves.moveChatState(CHAT, id, to)
 /** One picture or file finished reading: once none are left, an Enter that waited for them goes. */
 function readDone (slot) {
-  CHAT.inflight.delete(slot)
-  const id = slot.id
-  const left = (CHAT.reading.get(id) || 1) - 1
-  if (left) CHAT.reading.set(id, left); else CHAT.reading.delete(id)
   // the box may have been rebuilt since (you switched chats and back): send from the current one
-  if (!left && CHAT.sendWhenRead.delete(id) && COMPOSER?.id === id) submit(COMPOSER)
+  if (chatMoves.readDone(CHAT, slot) && COMPOSER?.id === slot.id) submit(COMPOSER)
 }
 
 /** A picture goes as a picture; a PDF or a text file is attached by name. */
@@ -708,10 +686,8 @@ function addAny (c, file) {
     const item = { name: file.name, mediaType: pdf ? 'application/pdf' : 'text/plain' }
     if (pdf) item.data = String(r.result).replace(/^data:[^,]*,/, '')
     else item.text = String(r.result)
-    const have = CHAT.files.get(id) || []
     // a message carries at most 8: one past that is named, not dropped quietly
-    if (have.length >= 8) overLimit(id, file.name, 'files')
-    else CHAT.files.set(id, [...have, item])
+    if (chatMoves.readPlace(CHAT, slot, 'files', item) === 'over') overLimit(id, file.name, 'files')
     if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
     done()
   }
@@ -729,9 +705,9 @@ function addImage (c, file) {
     const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(String(r.result))
     if (!m) { done(); return }
     const id = slot.id               // the chat may have moved to a new id while this was read
-    const list = CHAT.images.get(id) || []
-    if (list.length >= 8) overLimit(id, file.name || 'pasted picture', 'pictures')
-    else { list.push({ mediaType: m[1], data: m[2], url: String(r.result) }); CHAT.images.set(id, list) }
+    if (chatMoves.readPlace(CHAT, slot, 'pictures', { mediaType: m[1], data: m[2], url: String(r.result) }) === 'over') {
+      overLimit(id, file.name || 'pasted picture', 'pictures')
+    }
     if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
     done()
   }

@@ -1914,6 +1914,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
 <body${mode ? ` data-mode="${mode}"` : ''}${chatId ? ` data-chat="${chatId}"` : ''}>${fs.readFileSync(path.join(ctx.extensionPath, 'media', 'body.html'), 'utf8')}
 <script nonce="${nonce}" src="${uri('md.js')}"></script>
 <script nonce="${nonce}" src="${uri('main.js')}"></script>
+<script nonce="${nonce}" src="${uri('chat-moves.js')}"></script>
 <script nonce="${nonce}" src="${uri('chat.js')}"></script></body></html>`
 
     const post = m => w.postMessage(m)
