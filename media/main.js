@@ -3374,6 +3374,7 @@ window.addEventListener('message', e => {
     const on = new Set(m.data.map(c => c.id))
     BOARD_ELSEWHERE = new Set(SESSIONS.filter(x => x.live && !on.has(x.id)).map(x => x.id))
     keepTyping(() => renderBoard(m.data))
+    renderOpenIdle(m.open || [])
   }
   if (m.type === 'sessions' && BOARD_MODE) keepTyping(() => syncBoard(m.data))
   if (m.type === 'boardReplied') boardReplied(m)
@@ -4072,6 +4073,27 @@ const OLD_MS = 24 * 3600e3
 const STALE = new Map()            // chats folded into one line: id -> its data
 const UNFOLDED = new Set()         // folded chats opened back up to a full card
 const isStale = c => c.status !== 'busy' && Date.now() - (c.replyTs || c.lastTs || 0) > OLD_MS
+
+/**
+ * Chats open in a tab or the sidebar with no Claude running, one quiet line
+ * each at the bottom, so the board accounts for every chat you can see. A
+ * click goes to where it is open; it starts again when you send it a message.
+ */
+function renderOpenIdle (list) {
+  const wrap = $('#bidle')
+  if (!list.length) { wrap.replaceChildren(); return }
+  const rows = [el('div', 'bsechead', `Open, not running · ${list.length}`)]
+  for (const c of list) {
+    const row = el('div', 'bold-row bidle-row')
+    row.dataset.id = c.id
+    row.title = c.at === 'tab' ? 'Go to its tab. Claude starts again when you send a message.' : 'Open in the sidebar. Claude starts again when you send a message.'
+    row.append(sourceIcon(c.provider || 'claude'), el('span', 'boldtitle', c.title),
+      el('span', 'boldage', c.at === 'tab' ? 'In a tab' : 'In the sidebar'))
+    row.onclick = () => send({ type: 'showOpen', id: c.id })
+    rows.push(row)
+  }
+  wrap.replaceChildren(...rows)
+}
 
 /** Chats left waiting more than a day, one line each under the cards; a click opens one up. */
 function renderStale (list) {

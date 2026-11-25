@@ -2041,7 +2041,15 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             // this window's chats only, unless every window's were asked for
             const all = cfg('boardAllWindows', false)
             const folders = all ? null : (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath)
-            post({ type: 'board', data: scan.board(live, folders), all, seen: seenAt() })
+            post({ type: 'board', data: scan.board(live, folders), all, seen: seenAt(), open: openNotRunning() })
+            break
+          }
+          case 'showOpen': {
+            // an open chat with no Claude: back to where it is open, a tab first
+            const id = String(msg.id || '')
+            const tab = CHAT_TABS.get(id)
+            if (tab) tab.reveal()
+            else await vscode.commands.executeCommand('claudeHistory.focus')
             break
           }
           case 'openBoard':
@@ -2998,6 +3006,24 @@ function paintChatTabs (list) {
   for (const [id, panel] of CHAT_TABS) paintChatTab(EXT_CTX, panel, by.get(id))
 }
 let EXT_CTX = null
+
+/**
+ * Chats open in this window, in a tab or the sidebar, with no Claude running:
+ * the board lists only running ones, so these get a quiet line of their own
+ * and the board matches the tabs you can see.
+ */
+function openNotRunning () {
+  const where = new Map()
+  for (const id of CHAT_TABS.keys()) where.set(id, 'tab')
+  for (const v of SHOWING.values()) if (v.id && !where.has(v.id)) where.set(v.id, 'sidebar')
+  const out = []
+  for (const [id, at] of where) {
+    if (live[id]) continue
+    const s = scan.index().find(x => x.id === id)
+    out.push({ id, at, title: s?.title || '(untitled)', provider: s?.provider || 'claude' })
+  }
+  return out
+}
 
 function fillChatTab (ctx, panel, id) {
   CHAT_TABS.set(id, panel)

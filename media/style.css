@@ -1271,7 +1271,9 @@ body.boardmode #tabs, body.boardmode #limits, body.boardmode #lnudges { display:
 .bsechead:empty { display: none }
 #view-board[data-filter="needs"] #sec-work, #view-board[data-filter="needs"] #sec-old,
 #view-board[data-filter="working"] #sec-needs, #view-board[data-filter="working"] #sec-old,
-#view-board[data-filter="earlier"] #sec-needs, #view-board[data-filter="earlier"] #sec-work { display: none }
+#view-board[data-filter="earlier"] #sec-needs, #view-board[data-filter="earlier"] #sec-work,
+#view-board[data-filter="needs"] #sec-idle, #view-board[data-filter="working"] #sec-idle,
+#view-board[data-filter="earlier"] #sec-idle { display: none }
 #bwork { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; align-items: start }
 /* a working chat: title, what it is doing, what you asked - nothing to answer yet */
 .bcard.slim .bcask { padding-bottom: 10px }
@@ -1368,6 +1370,11 @@ body.boardmode #tabs, body.boardmode #limits, body.boardmode #lnudges { display:
 .boldtitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500 }
 .boldage { flex: none; font-size: 11px; color: var(--vscode-descriptionForeground) }
 #bold > .bcard { margin: 0 0 6px 20px }
+/* open chats with no Claude: quieter than the waiting ones above */
+#bidle:empty { display: none }
+.bidle-row { border-color: transparent; padding-top: 6px; padding-bottom: 6px }
+.bidle-row .boldtitle { font-weight: 400; color: var(--vscode-descriptionForeground) }
+.bidle-row:hover .boldtitle { color: var(--vscode-foreground) }
 
 /* in the sidebar, refresh lives in the view's own title bar beside open-in-editor */
 body[data-mode="sidebar"] #rescan { display: none !important }
