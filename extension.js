@@ -2048,8 +2048,14 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             // an open chat with no Claude: back to where it is open, a tab first
             const id = String(msg.id || '')
             const tab = CHAT_TABS.get(id)
+            const sleeping = !tab && sleepingTabs().find(x => x.id === id)
+            const GROUPS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth']
             if (tab) tab.reveal()
-            else await vscode.commands.executeCommand('claudeHistory.focus')
+            else if (sleeping && GROUPS[sleeping.column - 1]) {
+              // showing it is what wakes it: its group, then its place in that group
+              await vscode.commands.executeCommand(`workbench.action.focus${GROUPS[sleeping.column - 1]}EditorGroup`)
+              await vscode.commands.executeCommand('workbench.action.openEditorAtIndex', sleeping.index)
+            } else await vscode.commands.executeCommand('claudeHistory.focus')
             break
           }
           case 'openBoard':
@@ -3016,11 +3022,37 @@ function openNotRunning () {
   const where = new Map()
   for (const id of CHAT_TABS.keys()) where.set(id, 'tab')
   for (const v of SHOWING.values()) if (v.id && !where.has(v.id)) where.set(v.id, 'sidebar')
+  for (const { id } of sleepingTabs()) if (!where.has(id)) where.set(id, 'tab')
   const out = []
   for (const [id, at] of where) {
     if (live[id]) continue
     const s = scan.index().find(x => x.id === id)
     out.push({ id, at, title: s?.title || '(untitled)', provider: s?.provider || 'claude' })
+  }
+  return out
+}
+
+/**
+ * Chat tabs the editor brought back after a reload but has not woken yet: it
+ * revives a tab only when it is first shown, so until then the logbook has no
+ * hold on it. The tab strip still lists it by name, and the name leads back to
+ * the chat - the newest chat of that name, as a tab is named after its chat.
+ */
+const tabLabel = t => String(t || '').replace(/^[●◆] /, '')
+const shortTitle = t => t.length > 32 ? t.slice(0, 31) + '…' : t
+function sleepingTabs () {
+  const awake = new Set([...CHAT_TABS.values()].map(p => tabLabel(p.title)))
+  const out = []
+  for (const g of vscode.window.tabGroups.all) {
+    g.tabs.forEach((tab, index) => {
+      const input = tab.input
+      if (!(input instanceof vscode.TabInputWebview) || !/claudeHistory\.chat$/.test(input.viewType)) return
+      const label = tabLabel(tab.label)
+      if (awake.has(label)) return
+      const rec = scan.index().filter(x => x.title && shortTitle(x.title) === label)
+        .sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))[0]
+      if (rec) out.push({ id: rec.id, column: g.viewColumn, index })
+    })
   }
   return out
 }
