@@ -1778,6 +1778,7 @@ async function showProposed (ask) {
 }
 
 /** Which chat each open view is showing, so a question is only announced when nobody can see it. */
+const MCP_POLLS = new Map()          // chat|server -> the one follow-up allowed to run
 const SHOWING = new Map()            // view's post -> { id, visible }
 const FILE_SEARCH = new Map()        // view's post -> the @ search in progress
 
@@ -2047,15 +2048,22 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           case 'showOpen': {
             // an open chat with no Claude: back to where it is open, a tab first
             const id = String(msg.id || '')
+            if (!/^[\w-]+$/.test(id)) break
             const tab = CHAT_TABS.get(id)
-            const sleeping = !tab && sleepingTabs().find(x => x.id === id)
+            if (tab) { tab.reveal(); break }
+            const sleeping = sleepingTabs().find(x => x.id === id)
             const GROUPS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth']
-            if (tab) tab.reveal()
-            else if (sleeping && GROUPS[sleeping.column - 1]) {
+            if (sleeping && GROUPS[sleeping.column - 1]) {
               // showing it is what wakes it: its group, then its place in that group
               await vscode.commands.executeCommand(`workbench.action.focus${GROUPS[sleeping.column - 1]}EditorGroup`)
               await vscode.commands.executeCommand('workbench.action.openEditorAtIndex', sleeping.index)
-            } else await vscode.commands.executeCommand('claudeHistory.focus')
+              break
+            }
+            const view = [...SHOWING.values()].find(v => v.id === id)
+            if (view?.mode === 'sidebar') await vscode.commands.executeCommand('claudeHistory.focus')
+            else if (view?.reveal) view.reveal()
+            // closed since the board last looked, or out of reach: the chat in a tab of its own
+            else openChatTab(ctx, id, false)
             break
           }
           case 'openBoard':
@@ -2303,7 +2311,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             break
           }
           case 'chatState':
-            SHOWING.set(post, { id: String(msg.id || ''), visible: isVisible })
+            SHOWING.set(post, { id: String(msg.id || ''), visible: isVisible, mode, reveal: opts.reveal })
             post({ type: 'chatState', id: msg.id, state: { ...runner.state(msg.id), orphan: !!(await orphanPid(msg.id)) } })
             break
           case 'chatTakeover': {
@@ -2441,7 +2449,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             // servers connect in the background: asked again while any is still connecting, for a few seconds
             let tries = 0
             const ask = () => runner.mcpStatus(id, list => {
-              post({ type: 'chatMcpList', id, list })
+              post({ type: 'chatMcpList', id, list, follow: tries > 0 })
               if (list?.some(x => x.status === 'pending') && ++tries < 6) setTimeout(ask, 2000)
             })
             ask()
@@ -2450,15 +2458,27 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           case 'chatMcpAct': {
             // turn a server off or on, reconnect it, or sign in to it, as /mcp does in the terminal
             const id = String(msg.id || ''), act = String(msg.act || ''), name = String(msg.name || '')
-            if (!['on', 'off', 'reconnect', 'signin'].includes(act) || !name || name.length > 128) break
+            // a refused request still answers, or the row would say Working… for good
+            if (!/^[\w-]+$/.test(id) || !['on', 'off', 'reconnect', 'signin'].includes(act) || !name || name.length > 128) {
+              post({ type: 'chatMcpDone', id, name, err: 'That server could not be changed from here. Try /mcp in a terminal.' })
+              break
+            }
+            // one follow-up per server: a second click takes over from the first, never runs beside it
+            const key = id + '|' + name, token = {}
+            MCP_POLLS.set(key, token)
             const refresh = (err, tries = 6) => {
               let n = 0
-              const ask = () => runner.mcpStatus(id, list => {
-                post({ type: 'chatMcpList', id, list, err, done: name })
-                err = ''
-                const row = list?.find(x => x.name === name)
-                if ((row?.status === 'pending' || (act === 'signin' && row?.status === 'needs-auth')) && ++n < tries) setTimeout(ask, 2000)
-              })
+              const ask = () => {
+                if (MCP_POLLS.get(key) !== token) return
+                runner.mcpStatus(id, list => {
+                  if (MCP_POLLS.get(key) !== token) return
+                  post({ type: 'chatMcpList', id, list, err, done: name })
+                  err = ''
+                  const row = list?.find(x => x.name === name)
+                  if ((row?.status === 'pending' || (act === 'signin' && row?.status === 'needs-auth')) && ++n < tries) setTimeout(ask, 2000)
+                  else MCP_POLLS.delete(key)
+                })
+              }
               ask()
             }
             runner.mcpAct(id, act, name, async r => {
@@ -2466,8 +2486,13 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               const url = String(r.res?.authUrl || '')
               // sign-in finishes in the browser; the server's row turns connected once it has
               if (act === 'signin' && url) {
-                if (/^https:\/\//i.test(url)) await vscode.env.openExternal(vscode.Uri.parse(url))
-                else return refresh(`${name}: the sign-in link was not a web address, so it was not opened.`)
+                // the link comes from this chat's own Claude, as in the terminal; only a web page is opened
+                let safe = null
+                try { const u = new URL(url); if (u.protocol === 'https:' && url.length <= 4096) safe = u.toString() } catch {}
+                if (!safe) return refresh(`${name}: the sign-in link was not a web address, so it was not opened.`)
+                let opened = false
+                try { opened = await vscode.env.openExternal(vscode.Uri.parse(safe, true)) } catch {}
+                if (!opened) return refresh(`${name}: the browser did not open for sign-in. Try /mcp in a terminal.`)
                 return refresh('', 60)
               }
               refresh('')
@@ -2973,16 +2998,18 @@ function openInEditor (ctx, beside) {
     { enableScripts: true, retainContextWhenHidden: true },
   )
   panel.iconPath = tabIcon(ctx)
-  wire(ctx, panel.webview, fn => panel.onDidDispose(fn), undefined, () => panel.visible)
+  wire(ctx, panel.webview, fn => panel.onDidDispose(fn), undefined, () => panel.visible, { reveal: () => panel.reveal() })
   return panel
 }
 
 /** One chat on its own in an editor tab, so several can sit side by side. */
 const CHAT_TABS = new Map()
+/** A tab's name: its chat's title, cut to fit. */
+const shortTitle = t => t.length > 32 ? t.slice(0, 31) + '…' : t
 function chatTabTitle (id) {
   const s = scan.index().find(x => x.id === id)
   const t = s?.title || 'Chat'
-  return t.length > 32 ? t.slice(0, 31) + '…' : t
+  return shortTitle(t)
 }
 function openChatTab (ctx, id, beside) {
   const open = CHAT_TABS.get(id)
@@ -3014,19 +3041,20 @@ function paintChatTabs (list) {
 let EXT_CTX = null
 
 /**
- * Chats open in this window, in a tab or the sidebar, with no Claude running:
- * the board lists only running ones, so these get a quiet line of their own
- * and the board matches the tabs you can see.
+ * Chats open in this window, in a tab, the sidebar or the logbook's own tab,
+ * with no Claude running: the board lists only running ones, so these get a
+ * quiet line of their own and the board matches the tabs you can see.
  */
 function openNotRunning () {
+  const idx = new Map(scan.index().map(x => [x.id, x]))
   const where = new Map()
   for (const id of CHAT_TABS.keys()) where.set(id, 'tab')
-  for (const v of SHOWING.values()) if (v.id && !where.has(v.id)) where.set(v.id, 'sidebar')
-  for (const { id } of sleepingTabs()) if (!where.has(id)) where.set(id, 'tab')
+  for (const v of SHOWING.values()) if (v.id && !where.has(v.id)) where.set(v.id, v.mode === 'sidebar' ? 'sidebar' : v.mode === 'chat' ? 'tab' : 'panel')
+  for (const { id } of sleepingTabs(idx)) if (!where.has(id)) where.set(id, 'tab')
   const out = []
   for (const [id, at] of where) {
     if (live[id]) continue
-    const s = scan.index().find(x => x.id === id)
+    const s = idx.get(id)
     out.push({ id, at, title: s?.title || '(untitled)', provider: s?.provider || 'claude' })
   }
   return out
@@ -3036,23 +3064,31 @@ function openNotRunning () {
  * Chat tabs the editor brought back after a reload but has not woken yet: it
  * revives a tab only when it is first shown, so until then the logbook has no
  * hold on it. The tab strip still lists it by name, and the name leads back to
- * the chat - the newest chat of that name, as a tab is named after its chat.
+ * its chat. A best guess, so it fails closed: a name that fits more than one
+ * chat, or more than one tab, is left out rather than pinned on the wrong one.
+ * An untitled chat's tab has no name to go by and is left out too.
  */
 const tabLabel = t => String(t || '').replace(/^[●◆] /, '')
-const shortTitle = t => t.length > 32 ? t.slice(0, 31) + '…' : t
-function sleepingTabs () {
+function sleepingTabs (idx = new Map(scan.index().map(x => [x.id, x]))) {
   const awake = new Set([...CHAT_TABS.values()].map(p => tabLabel(p.title)))
-  const out = []
+  const byLabel = new Map()                 // label -> the chats of that name
+  for (const x of idx.values()) if (x.title) {
+    const k = shortTitle(x.title)
+    byLabel.set(k, [...(byLabel.get(k) || []), x])
+  }
+  const tabs = []
   for (const g of vscode.window.tabGroups.all) {
     g.tabs.forEach((tab, index) => {
       const input = tab.input
       if (!(input instanceof vscode.TabInputWebview) || !/claudeHistory\.chat$/.test(input.viewType)) return
-      const label = tabLabel(tab.label)
-      if (awake.has(label)) return
-      const rec = scan.index().filter(x => x.title && shortTitle(x.title) === label)
-        .sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))[0]
-      if (rec) out.push({ id: rec.id, column: g.viewColumn, index })
+      tabs.push({ label: tabLabel(tab.label), column: g.viewColumn, index })
     })
+  }
+  const out = []
+  for (const t of tabs) {
+    if (awake.has(t.label) || tabs.filter(o => o.label === t.label).length > 1) continue
+    const recs = byLabel.get(t.label) || []
+    if (recs.length === 1) out.push({ id: recs[0].id, column: t.column, index: t.index })
   }
   return out
 }
@@ -3067,7 +3103,7 @@ function fillChatTab (ctx, panel, id) {
     onTitle: t => {
       if (!t) return
       const st = TAB_STATE.get(panel) || { state: '' }
-      TAB_STATE.set(panel, { ...st, base: t.length > 32 ? t.slice(0, 31) + '…' : t })
+      TAB_STATE.set(panel, { ...st, base: shortTitle(t) })
       paintChatTab(ctx, panel, st.state)
     },
     retarget: (from, to) => { if (CHAT_TABS.get(from) === panel) CHAT_TABS.delete(from); CHAT_TABS.set(to, panel); id = to },

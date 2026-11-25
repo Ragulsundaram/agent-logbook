@@ -25,7 +25,9 @@ you want it to match the Agent Logbook title.
 **Chat from the logbook.** A box under every Claude chat lets you carry on
 talking to it without a terminal: the reply streams in as it is written, and
 file edits, commands, questions and plans wait for you as cards you approve,
-deny or answer. Pick the model, effort and permission mode per chat, stop a
+deny or answer. Pick the model, effort and permission mode per chat (Shift+Tab in
+the box switches the mode for that chat only; new chats start on the last one picked
+from the menu), stop a
 reply with Escape, paste images and use slash commands. `/mcp` lists the
 chat's MCP servers and, as in the terminal, can turn one off or on for the
 folder, reconnect one that failed, or sign in to one. The + button starts a
@@ -114,6 +116,8 @@ file you have open with unsaved changes, the logbook saves it (reading one
 never saves it; Claude reads what is on disk), and after an
 edit it passes on any new errors the editor reports in that file. Files you
 attach go to Claude with the message: PDFs as they are, text files as their text.
+A message carries up to 8 pictures and 8 files; anything past that is named in a
+note rather than dropped silently.
 
 ## Settings
 

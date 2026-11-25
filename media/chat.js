@@ -243,13 +243,22 @@ function mcpCard (id, servers) {
     const gh = el('button', 'mcpgroup')
     gh.setAttribute('aria-expanded', String(!folded))
     gh.append(el('span', 'chev2', folded ? '›' : '⌄'), el('span', '', label), el('span', 'mcpcount', String(rows.length)))
-    gh.onclick = () => { CHAT.mcpFold.set(fk, !folded); paintLive() }
+    gh.dataset.f = 'g|' + key
+    gh.onclick = () => { CHAT.mcpFold.set(fk, !folded); paintLive(); mcpRefocus(gh.dataset.f) }
     list.appendChild(gh)
     if (folded) continue
     for (const v of rows) list.appendChild(mcpRow(id, v))
   }
   w.appendChild(list)
   return w
+}
+
+/** The card is redrawn on every change: keyboard focus goes back to the control it was on. */
+function mcpRefocus (f) {
+  requestAnimationFrame(() => {
+    const t = [...document.querySelectorAll('.mcpcard [data-f]')].find(n => n.dataset.f === f)
+    ;(t || document.querySelector('.mcpcard button'))?.focus()
+  })
 }
 
 function mcpRow (id, v) {
@@ -264,9 +273,10 @@ function mcpRow (id, v) {
   if (from) row.appendChild(el('span', 'mcpfrom', from))
   const key = id + '|' + v.name
   const busy = CHAT.mcpBusy.has(key)
-  const go = act => { CHAT.mcpBusy.add(key); send({ type: 'chatMcpAct', id, act, name: v.name }); paintLive() }
-  if (busy) row.appendChild(el('span', 'mcpstate', 'Working…'))
-  else if (v.status === 'pending') row.appendChild(el('span', 'mcpstate', 'Connecting…'))
+  const go = act => { CHAT.mcpBusy.add(key); send({ type: 'chatMcpAct', id, act, name: v.name }); paintLive(); mcpRefocus('s|' + v.name) }
+  const state = text => { const s = el('span', 'mcpstate', text); s.setAttribute('role', 'status'); return s }
+  if (busy) row.appendChild(state('Working…'))
+  else if (v.status === 'pending') row.appendChild(state('Connecting…'))
   else if (v.status === 'needs-auth' || v.status === 'failed') {
     const b = el('button', 'mcplink', v.status === 'failed' ? 'Reconnect' : 'Sign in')
     b.title = v.status === 'failed' ? 'Try connecting to this server again' : 'Opens the sign-in page in your browser'
@@ -278,10 +288,13 @@ function mcpRow (id, v) {
   const sw = el('button', 'mcpswitch' + (on ? ' on' : ''))
   sw.setAttribute('role', 'switch')
   sw.setAttribute('aria-checked', String(on))
-  sw.setAttribute('aria-label', `${v.name} ${on ? 'on' : 'off'}`)
+  sw.setAttribute('aria-label', v.name)
   sw.title = on ? 'Turn off for chats in this folder' : 'Turn on for chats in this folder'
-  sw.disabled = busy || v.status === 'pending'
-  sw.onclick = () => go(on ? 'off' : 'on')
+  // held, not disabled: a disabled button drops keyboard focus while the change goes through
+  const held = busy || v.status === 'pending'
+  sw.setAttribute('aria-disabled', String(held))
+  sw.dataset.f = 's|' + v.name
+  sw.onclick = () => { if (!held) go(on ? 'off' : 'on') }
   row.appendChild(sw)
   return row
 }
@@ -580,7 +593,7 @@ function buildComposer (id) {
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && !e.isComposing &&
       recall(c, e.key === 'ArrowUp' ? -1 : 1)) { e.preventDefault(); return }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(c) }
-    else if (e.key === 'Escape' && !e.isComposing) {
+    else if (e.key === 'Escape' && !e.isComposing && !e.defaultPrevented) {
       // the /mcp card is on top, so Escape closes it first
       if (CHAT.mcp.has(id)) { e.preventDefault(); CHAT.mcp.delete(id); paintLive() }
       // like the terminal: Escape stops a reply in progress
@@ -798,7 +811,10 @@ function submit (c, only) {
   const queued = !!CHAT.state.get(id)?.busy
   CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, uuid, images: images.length, files: files.length, pics: images, docs: files, noContext, at: Date.now(), queued }])
   // what was left out of this message stays named after it goes
-  if (!CHAT.notes.get(id)?.over) CHAT.notes.delete(id)
+  // what was left out stays in view through the send it was left out of, then goes
+  const kept = CHAT.notes.get(id)
+  if (kept?.over && !kept.sent) kept.sent = true
+  else CHAT.notes.delete(id)
   CHAT.done.delete(id)
   const st = CHAT.state.get(id) || { id, asks: [] }
   if (!st.busy) CHAT.busySince.set(id, Date.now())
@@ -861,7 +877,9 @@ function recall (c, dir) {
  * they are counted instead.
  */
 function overLimit (id, name, kind) {
-  const was = CHAT.notes.get(id)?.over || { pictures: [], files: [] }
+  // a note from a message already sent is not added to: this message starts its own list
+  const prev = CHAT.notes.get(id)
+  const was = (!prev?.sent && prev?.over) || { pictures: [], files: [] }
   const over = { ...was, [kind]: [...was[kind], name] }
   const say = (k, list) => {
     if (!list.length) return ''
@@ -1727,8 +1745,15 @@ if (!BOARD_MODE) {
         break
       }
       case 'chatMcpList':
-        CHAT.mcp.set(id, Array.isArray(m.list) ? m.list : 'unavailable')
+        // a follow-up to a switch or sign-in updates the card only while it is open: closed stays closed
+        if (!(m.done || m.follow) || CHAT.mcp.has(id)) CHAT.mcp.set(id, Array.isArray(m.list) ? m.list : 'unavailable')
+        { const f = document.activeElement?.closest?.('.mcpcard') && document.activeElement.dataset?.f
+          if (f) mcpRefocus(f) }
         if (m.done) CHAT.mcpBusy.delete(id + '|' + m.done)
+        if (m.err) note(id, m.err, true)
+        break
+      case 'chatMcpDone':
+        CHAT.mcpBusy.delete(id + '|' + m.name)
         if (m.err) note(id, m.err, true)
         break
       case 'chatTaskStopFailed':

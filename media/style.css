@@ -1372,7 +1372,9 @@ body.boardmode #tabs, body.boardmode #limits, body.boardmode #lnudges { display:
 #bold > .bcard { margin: 0 0 6px 20px }
 /* open chats with no Claude: quieter than the waiting ones above */
 #bidle:empty { display: none }
-.bidle-row { border-color: transparent; padding-top: 6px; padding-bottom: 6px }
+.bidle-row { width: 100%; text-align: left; font: inherit; color: inherit; background: none;
+  border-color: transparent; padding-top: 6px; padding-bottom: 6px }
+.bidle-row:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px }
 .bidle-row .boldtitle { font-weight: 400; color: var(--vscode-descriptionForeground) }
 .bidle-row:hover .boldtitle { color: var(--vscode-foreground) }
 
@@ -1735,7 +1737,7 @@ body[data-chat] .dback, body[data-chat] .newinchat { display: none !important }
   background: var(--vscode-foreground); opacity: .8; transition: transform .12s }
 .mcpswitch.on { background: var(--vscode-button-background) }
 .mcpswitch.on::after { transform: translateX(12px); background: var(--vscode-button-foreground); opacity: 1 }
-.mcpswitch:disabled { opacity: .4; cursor: default }
+.mcpswitch:disabled, .mcpswitch[aria-disabled="true"] { opacity: .4; cursor: default }
 .mcpswitch:focus-visible, .mcplink:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px }
 @media (prefers-reduced-motion: reduce) { .mcpswitch::after { transition: none } }
 /* a question's choice with a preview */

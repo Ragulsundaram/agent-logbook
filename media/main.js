@@ -554,7 +554,8 @@ function dismissOn (menu, close) {
   // a click inside the menu is the action itself - those items close it themselves
   const onClick = e => { if (!menu.contains(e.target)) kill() }
   const onCtx = e => { if (!menu.contains(e.target)) kill() }
-  const onKey = e => { if (e.key === 'Escape') kill() }
+  // Escape is spent on the menu: nothing else closes on the same press
+  const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); kill() } }
   const scrollers = [...document.querySelectorAll('#rows, .msgs, #memrows, .view')]
   setTimeout(() => {
     document.addEventListener('click', onClick, true)
@@ -3962,7 +3963,8 @@ function boardMeta (list) {
   const fresh = list.filter(c => sectionOf(c) === 'needs' && isNew(c)).length
   const bar = $('#bmeta')
   bar.replaceChildren()
-  if (!list.length) return
+  // no running chats means no filter bar, so no filter either: one left on would hide the rest for good
+  if (!list.length) { BFILTER = 'all'; $('#view-board').dataset.filter = 'all'; return }
   for (const [key, label] of [['needs', 'Needs you'], ['working', 'Working'], ['earlier', 'Earlier'], ['all', 'All']]) {
     if (key !== 'all' && !n[key]) continue
     const b = el('button', 'bfilter' + (BFILTER === key ? ' on' : ''))
@@ -4084,11 +4086,11 @@ function renderOpenIdle (list) {
   if (!list.length) { wrap.replaceChildren(); return }
   const rows = [el('div', 'bsechead', `Open, not running · ${list.length}`)]
   for (const c of list) {
-    const row = el('div', 'bold-row bidle-row')
+    const row = el('button', 'bold-row bidle-row')
     row.dataset.id = c.id
-    row.title = c.at === 'tab' ? 'Go to its tab. Claude starts again when you send a message.' : 'Open in the sidebar. Claude starts again when you send a message.'
-    row.append(sourceIcon(c.provider || 'claude'), el('span', 'boldtitle', c.title),
-      el('span', 'boldage', c.at === 'tab' ? 'In a tab' : 'In the sidebar'))
+    const at = { tab: 'In a tab', sidebar: 'In the sidebar', panel: 'In the logbook tab' }[c.at] || 'Open'
+    row.title = `Go to it. Claude starts again when you send a message.`
+    row.append(sourceIcon(c.provider || 'claude'), el('span', 'boldtitle', c.title), el('span', 'boldage', at))
     row.onclick = () => send({ type: 'showOpen', id: c.id })
     rows.push(row)
   }
