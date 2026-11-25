@@ -1760,7 +1760,7 @@ if (!BOARD_MODE) {
       }
       case 'chatMoved': {
         // /clear: the chat goes on under a new id; the view follows it there
-        for (const k of ['state', 'echo', 'partial', 'notes', 'picks', 'side', 'mcp', 'drafts', 'images', 'files', 'sentLog', 'shell', 'todosFold']) {
+        for (const k of ['state', 'echo', 'partial', 'notes', 'picks', 'side', 'mcp', 'drafts', 'images', 'files', 'sentLog', 'shell', 'todosFold', 'over', 'mcpTop']) {
           if (CHAT[k].has(id)) { CHAT[k].set(m.to, CHAT[k].get(id)); CHAT[k].delete(id) }
         }
         CHAT.echo.delete(m.to)
@@ -1781,7 +1781,6 @@ if (!BOARD_MODE) {
         break
       }
       case 'chatMcpList':
-        // a follow-up to a switch or sign-in updates the card only while it is open: closed stays closed
         // only an open card takes it: one closed, even while it was still asking, stays closed
         if (CHAT.mcp.has(id)) CHAT.mcp.set(id, Array.isArray(m.list) ? m.list : 'unavailable')
         if (m.done) mcpDone(id, m.done, m.seq)
