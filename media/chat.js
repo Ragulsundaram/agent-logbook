@@ -13,6 +13,7 @@
 const CHAT = {
   reading: new Map(),    // chat id -> pictures still being read, kept with the chat, not the box
   sendWhenRead: new Set(), // chats whose Enter waits for those pictures
+  moved: new Map(),      // old chat id -> new one, after /clear: a read still under way lands on the new one
   tipSeen: true,         // the one-time "you can reply here" tip, until the host says otherwise
   sentLog: new Map(),    // chat id -> messages sent from here, oldest first: Up brings them back
   shell: new Map(),      // chat id -> "!" commands run here: { key, cmd, out, running, code, sentWith }
@@ -659,6 +660,20 @@ function buildComposer (id) {
 const TEXT_EXT = 'txt md csv tsv json yaml yml xml html css js ts jsx tsx py rb go rs java kt swift c h cpp cs php sh sql log diff patch toml ini env conf'.split(' ')
 const MAX_PDF = 18 * 1024 * 1024        // the host takes up to 25 MB of base64, about 18.7 MB
 const MAX_TEXT = 390 * 1024
+/** Where a chat is now: /clear moves it to a new id, perhaps more than once. */
+function nowId (id) {
+  for (let n = 0; CHAT.moved.has(id) && n < 50; n++) id = CHAT.moved.get(id)
+  return id
+}
+/** One picture or file finished reading: once none are left, an Enter that waited for them goes. */
+function readDone (id) {
+  id = nowId(id)
+  const left = (CHAT.reading.get(id) || 1) - 1
+  if (left) CHAT.reading.set(id, left); else CHAT.reading.delete(id)
+  // the box may have been rebuilt since (you switched chats and back): send from the current one
+  if (!left && CHAT.sendWhenRead.delete(id) && COMPOSER?.id === id) submit(COMPOSER)
+}
+
 /** A picture goes as a picture; a PDF or a text file is attached by name. */
 function addAny (c, file) {
   if (file.type.startsWith('image/')) return addImage(c, file)
@@ -667,16 +682,12 @@ function addAny (c, file) {
   const text = !pdf && (file.type.startsWith('text/') || /json|xml|yaml|javascript|sql/.test(file.type) || TEXT_EXT.includes(ext))
   if (!pdf && !text) { note(c.id, `${file.name} can't be attached: only pictures, PDFs and text files can.`, true); return }
   if (file.size > (pdf ? MAX_PDF : MAX_TEXT)) { note(c.id, `${file.name} is too big to attach (${pdf ? '18 MB' : '390 KB'} at most).`, true); return }
-  const id = c.id
   const r = new FileReader()
-  CHAT.reading.set(id, (CHAT.reading.get(id) || 0) + 1)
-  const done = () => {
-    const left = (CHAT.reading.get(id) || 1) - 1
-    if (left) CHAT.reading.set(id, left); else CHAT.reading.delete(id)
-    if (!left && CHAT.sendWhenRead.delete(id) && COMPOSER?.id === id) submit(COMPOSER)
-  }
-  r.onerror = () => { note(id, `${file.name} could not be read.`, true); done() }
+  CHAT.reading.set(c.id, (CHAT.reading.get(c.id) || 0) + 1)
+  const done = () => readDone(c.id)
+  r.onerror = () => { note(nowId(c.id), `${file.name} could not be read.`, true); done() }
   r.onload = () => {
+    const id = nowId(c.id)           // the chat may have moved to a new id while this was read
     const item = { name: file.name, mediaType: pdf ? 'application/pdf' : 'text/plain' }
     if (pdf) item.data = String(r.result).replace(/^data:[^,]*,/, '')
     else item.text = String(r.result)
@@ -694,23 +705,17 @@ function addImage (c, file) {
   if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) { note(c.id, 'Only PNG, JPEG, GIF and WebP pictures can be sent.', true); return }
   if (file.size > MAX_IMAGE) { note(c.id, 'That picture is over 5 MB.', true); return }
   const r = new FileReader()
-  const id = c.id
-  CHAT.reading.set(id, (CHAT.reading.get(id) || 0) + 1)
-  const done = () => {
-    const left = (CHAT.reading.get(id) || 1) - 1
-    if (left) CHAT.reading.set(id, left); else CHAT.reading.delete(id)
-    // the box may have been rebuilt since (you switched chats and back): send from the current one
-    if (!left && CHAT.sendWhenRead.delete(id) && COMPOSER?.id === id) submit(COMPOSER)
-  }
-  r.onerror = () => { note(c.id, 'That picture could not be read.', true); done() }
+  CHAT.reading.set(c.id, (CHAT.reading.get(c.id) || 0) + 1)
+  const done = () => readDone(c.id)
+  r.onerror = () => { note(nowId(c.id), 'That picture could not be read.', true); done() }
   r.onload = () => {
     const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(String(r.result))
     if (!m) { done(); return }
-    const list = CHAT.images.get(c.id) || []
-    if (list.length >= 8) overLimit(c.id, file.name || 'pasted picture', 'pictures')
-    else { list.push({ mediaType: m[1], data: m[2], url: String(r.result) }); CHAT.images.set(c.id, list) }
-    paintImages(c)
-    paintGo(c)
+    const id = nowId(c.id)           // the chat may have moved to a new id while this was read
+    const list = CHAT.images.get(id) || []
+    if (list.length >= 8) overLimit(id, file.name || 'pasted picture', 'pictures')
+    else { list.push({ mediaType: m[1], data: m[2], url: String(r.result) }); CHAT.images.set(id, list) }
+    if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
     done()
   }
   r.readAsDataURL(file)
@@ -1760,9 +1765,12 @@ if (!BOARD_MODE) {
       }
       case 'chatMoved': {
         // /clear: the chat goes on under a new id; the view follows it there
-        for (const k of ['state', 'echo', 'partial', 'notes', 'picks', 'side', 'mcp', 'drafts', 'images', 'files', 'sentLog', 'shell', 'todosFold', 'over', 'mcpTop']) {
+        for (const k of ['state', 'echo', 'partial', 'notes', 'picks', 'side', 'mcp', 'drafts', 'images', 'files', 'sentLog', 'shell', 'todosFold', 'over', 'mcpTop', 'reading']) {
           if (CHAT[k].has(id)) { CHAT[k].set(m.to, CHAT[k].get(id)); CHAT[k].delete(id) }
         }
+        // reads still under way, and an Enter waiting on them, follow the chat to its new id
+        CHAT.moved.set(id, m.to)
+        if (CHAT.sendWhenRead.delete(id)) CHAT.sendWhenRead.add(m.to)
         CHAT.echo.delete(m.to)
         CHAT.here.set(m.to, { folder: '' })
         if (COMPOSER?.id === id) {
