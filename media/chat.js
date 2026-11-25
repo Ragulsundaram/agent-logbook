@@ -34,9 +34,11 @@ const CHAT = {
   taskOut: new Map(),    // "chat id|task id" -> { output, truncated } of a background task you opened
   side: new Map(),       // chat id -> side questions (/btw) and their answers
   mcp: new Map(),        // chat id -> its MCP servers, once asked with /mcp
-  mcpBusy: new Set(),    // chat id|server with a turn-off, reconnect or sign-in under way
+  mcpBusy: new Map(),    // chat id|server -> the number of the turn-off, reconnect or sign-in under way
   mcpFold: new Map(),    // chat id|group -> folded or not, once changed by hand
   mcpTop: new Map(),     // chat id -> how far the server list is scrolled
+  mcpSeq: 0,             // numbers each /mcp action, so a reply clears only its own
+  over: new Map(),       // chat id -> { pictures, files, sent }: what a message left out
   editor: { label: '', file: '' },   // what the editor has open, which goes with your message
   skipCtx: new Set(),    // chats whose next message goes without the editor's file
   files: new Map(),      // chat id -> attached PDFs and text files waiting to go
@@ -259,6 +261,12 @@ function mcpCard (id, servers) {
   return w
 }
 
+/** An action is over: its row is free again, unless a newer action on the same server is still under way. */
+function mcpDone (id, name, seq) {
+  const key = id + '|' + name
+  if (!seq || CHAT.mcpBusy.get(key) === seq) CHAT.mcpBusy.delete(key)
+}
+
 /** The card is redrawn on every change: keyboard focus goes back to the control it was on. */
 function mcpRefocus (f) {
   requestAnimationFrame(() => {
@@ -280,7 +288,7 @@ function mcpRow (id, v) {
   if (from) row.appendChild(el('span', 'mcpfrom', from))
   const key = id + '|' + v.name
   const busy = CHAT.mcpBusy.has(key)
-  const go = act => { CHAT.mcpBusy.add(key); send({ type: 'chatMcpAct', id, act, name: v.name }); paintLive(); mcpRefocus('s|' + v.name) }
+  const go = act => { const seq = ++CHAT.mcpSeq; CHAT.mcpBusy.set(key, seq); send({ type: 'chatMcpAct', id, act, name: v.name, seq }); paintLive(); mcpRefocus('s|' + v.name) }
   const state = text => { const s = el('span', 'mcpstate', text); s.setAttribute('role', 'status'); return s }
   if (busy) row.appendChild(state('Working…'))
   else if (v.status === 'pending') row.appendChild(state('Connecting…'))
@@ -443,6 +451,17 @@ function paintLive () {
     const x = el('button', 'iconbtn', '×')
     x.title = 'Dismiss'
     x.onclick = () => { CHAT.notes.delete(id); paintLive() }
+    n.appendChild(x)
+    live.appendChild(n)
+  }
+  // what was left out of a message: its own line, so a passing notice never wipes it
+  const over = CHAT.over.get(id)
+  if (over) {
+    const n = el('div', 'chatnote err')
+    n.appendChild(el('span', '', overText(over)))
+    const x = el('button', 'iconbtn', '×')
+    x.title = 'Dismiss'
+    x.onclick = () => { CHAT.over.delete(id); paintLive() }
     n.appendChild(x)
     live.appendChild(n)
   }
@@ -707,7 +726,7 @@ function paintImages (c) {
     img.alt = 'Pasted picture'
     const x = el('button', 'cimgx', '×')
     x.title = 'Remove'
-    x.onclick = () => { list.splice(i, 1); clearOver(c.id); paintImages(c); paintGo(c); placeLive() }
+    x.onclick = () => { list.splice(i, 1); clearOver(c.id, 'pictures'); paintImages(c); paintGo(c); placeLive() }
     chip.append(img, x)
     c.imgs.appendChild(chip)
   })
@@ -718,7 +737,7 @@ function paintImages (c) {
     chip.title = f.name
     const x = el('button', 'cimgx', '×')
     x.title = 'Remove'
-    x.onclick = () => { files.splice(i, 1); clearOver(c.id); paintImages(c); paintGo(c); placeLive() }
+    x.onclick = () => { files.splice(i, 1); clearOver(c.id, 'files'); paintImages(c); paintGo(c); placeLive() }
     chip.appendChild(x)
     c.imgs.appendChild(chip)
   })
@@ -823,10 +842,9 @@ function submit (c, only) {
   CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, uuid, images: images.length, files: files.length, pics: images, docs: files, noContext, at: Date.now(), queued }])
   // what was left out stays in view through the send it was left out of, then goes;
   // a message the logbook sends itself carries no attachments and leaves it be
-  const kept = CHAT.notes.get(id)
-  if (only && kept?.over) {}
-  else if (kept?.over && !kept.sent) kept.sent = true
-  else CHAT.notes.delete(id)
+  const over = CHAT.over.get(id)
+  if (over && !only) { if (over.sent) CHAT.over.delete(id); else over.sent = true }
+  CHAT.notes.delete(id)
   CHAT.done.delete(id)
   const st = CHAT.state.get(id) || { id, asks: [] }
   if (!st.busy) CHAT.busySince.set(id, Date.now())
@@ -889,10 +907,14 @@ function recall (c, dir) {
  * they are counted instead.
  */
 function overLimit (id, name, kind) {
-  // a note from a message already sent is not added to: this message starts its own list
-  const prev = CHAT.notes.get(id)
-  const was = (!prev?.sent && prev?.over) || { pictures: [], files: [] }
-  const over = { ...was, [kind]: [...was[kind], name] }
+  // a list from a message already sent is not added to: this message starts its own
+  const prev = CHAT.over.get(id)
+  const over = prev && !prev.sent ? prev : { pictures: [], files: [] }
+  over[kind] = [...over[kind], name]
+  CHAT.over.set(id, over)
+  if (COMPOSER?.id === id) placeLive()
+}
+function overText (over) {
   const say = (k, list) => {
     if (!list.length) return ''
     const counts = new Map()
@@ -900,12 +922,14 @@ function overLimit (id, name, kind) {
     return `${k}: ` + [...counts].map(([n, x]) => x > 1 ? `${n} (${x})` : n).join(', ')
   }
   const parts = [say('pictures', over.pictures), say('files', over.files)].filter(Boolean)
-  note(id, `Not added, a message carries at most 8 pictures and 8 files. ${parts.join('; ')}`, true)
-  CHAT.notes.get(id).over = over
+  return `Not added, a message carries at most 8 pictures and 8 files. ${parts.join('; ')}`
 }
-/** Removing an attachment makes room, so the list of what was left out no longer holds. */
-function clearOver (id) {
-  if (CHAT.notes.get(id)?.over) CHAT.notes.delete(id)
+/** Removing a picture makes room for pictures, a file for files: only that kind's list goes. */
+function clearOver (id, kind) {
+  const over = CHAT.over.get(id)
+  if (!over || over.sent) return
+  over[kind] = []
+  if (!over.pictures.length && !over.files.length) CHAT.over.delete(id)
 }
 
 function note (id, text, err, action) {
@@ -1760,11 +1784,11 @@ if (!BOARD_MODE) {
         // a follow-up to a switch or sign-in updates the card only while it is open: closed stays closed
         // only an open card takes it: one closed, even while it was still asking, stays closed
         if (CHAT.mcp.has(id)) CHAT.mcp.set(id, Array.isArray(m.list) ? m.list : 'unavailable')
-        if (m.done) CHAT.mcpBusy.delete(id + '|' + m.done)
+        if (m.done) mcpDone(id, m.done, m.seq)
         if (m.err) note(id, m.err, true)
         break
       case 'chatMcpDone':
-        CHAT.mcpBusy.delete(id + '|' + m.name)
+        mcpDone(id, m.name, m.seq)
         if (m.err) note(id, m.err, true)
         break
       case 'chatTaskStopFailed':

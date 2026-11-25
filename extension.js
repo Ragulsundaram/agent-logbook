@@ -2460,9 +2460,10 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           case 'chatMcpAct': {
             // turn a server off or on, reconnect it, or sign in to it, as /mcp does in the terminal
             const id = String(msg.id || ''), act = String(msg.act || ''), name = String(msg.name || '')
+            const seq = Number.isSafeInteger(msg.seq) ? msg.seq : 0
             // a refused request still answers, or the row would say Working… for good
             if (!/^[\w-]+$/.test(id) || !['on', 'off', 'reconnect', 'signin'].includes(act) || !name || name.length > 128) {
-              post({ type: 'chatMcpDone', id, name, err: 'That server could not be changed from here. Try /mcp in a terminal.' })
+              post({ type: 'chatMcpDone', id, name, seq, err: 'That server could not be changed from here. Try /mcp in a terminal.' })
               break
             }
             // one follow-up per server: a second click takes over from the first, never runs beside it
@@ -2471,12 +2472,12 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             const refresh = (err, tries = 6) => {
               let n = 0
               // taken over by a newer action, perhaps from another view of this chat: this view's row is let go
-              const gone = () => MCP_POLLS.get(key) !== token && (post({ type: 'chatMcpDone', id, name }), true)
+              const gone = () => MCP_POLLS.get(key) !== token && (post({ type: 'chatMcpDone', id, name, seq }), true)
               const ask = () => {
                 if (gone()) return
                 runner.mcpStatus(id, list => {
                   if (gone()) return
-                  post({ type: 'chatMcpList', id, list, err, done: name })
+                  post({ type: 'chatMcpList', id, list, err, done: name, seq })
                   err = ''
                   const row = list?.find(x => x.name === name)
                   if ((row?.status === 'pending' || (act === 'signin' && row?.status === 'needs-auth')) && ++n < tries) setTimeout(ask, 2000)

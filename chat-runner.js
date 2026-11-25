@@ -304,7 +304,8 @@ function control (r, request, onAnswer, wait = 10000) {
   // an answer that never comes still calls back, so nothing waits for ever
   if (onAnswer) {
     const t = setTimeout(() => { if (r.waits.delete(request_id)) onAnswer(null) }, wait)
-    r.waits.set(request_id, res => { clearTimeout(t); onAnswer(res) })
+    // the reason Claude gave for a refusal goes along, not just the empty answer
+    r.waits.set(request_id, (res, err) => { clearTimeout(t); onAnswer(res, err) })
   }
   write(r, { type: 'control_request', request_id, request })
   return request_id
