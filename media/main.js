@@ -4081,8 +4081,13 @@ const isStale = c => c.status !== 'busy' && Date.now() - (c.replyTs || c.lastTs 
  * each at the bottom, so the board accounts for every chat you can see. A
  * click goes to where it is open; it starts again when you send it a message.
  */
+let IDLE_SIG = ''
 function renderOpenIdle (list) {
   const wrap = $('#bidle')
+  // asked again every few seconds: the same list is left as it is, so keyboard focus stays put
+  const sig = JSON.stringify(list.map(c => [c.id, c.at, c.title]))
+  if (sig === IDLE_SIG) return
+  IDLE_SIG = sig
   if (!list.length) { wrap.replaceChildren(); return }
   const rows = [el('div', 'bsechead', `Open, not running · ${list.length}`)]
   for (const c of list) {

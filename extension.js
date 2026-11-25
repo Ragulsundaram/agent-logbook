@@ -2053,7 +2053,9 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             if (tab) { tab.reveal(); break }
             const sleeping = sleepingTabs().find(x => x.id === id)
             const GROUPS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth']
-            if (sleeping && GROUPS[sleeping.column - 1]) {
+            // past the eighth group there is no way to show it from here; a second tab would split the chat
+            if (sleeping && !GROUPS[sleeping.column - 1]) break
+            if (sleeping) {
               // showing it is what wakes it: its group, then its place in that group
               await vscode.commands.executeCommand(`workbench.action.focus${GROUPS[sleeping.column - 1]}EditorGroup`)
               await vscode.commands.executeCommand('workbench.action.openEditorAtIndex', sleeping.index)
@@ -2468,10 +2470,12 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             MCP_POLLS.set(key, token)
             const refresh = (err, tries = 6) => {
               let n = 0
+              // taken over by a newer action, perhaps from another view of this chat: this view's row is let go
+              const gone = () => MCP_POLLS.get(key) !== token && (post({ type: 'chatMcpDone', id, name }), true)
               const ask = () => {
-                if (MCP_POLLS.get(key) !== token) return
+                if (gone()) return
                 runner.mcpStatus(id, list => {
-                  if (MCP_POLLS.get(key) !== token) return
+                  if (gone()) return
                   post({ type: 'chatMcpList', id, list, err, done: name })
                   err = ''
                   const row = list?.find(x => x.name === name)

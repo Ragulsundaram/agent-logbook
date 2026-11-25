@@ -36,6 +36,7 @@ const CHAT = {
   mcp: new Map(),        // chat id -> its MCP servers, once asked with /mcp
   mcpBusy: new Set(),    // chat id|server with a turn-off, reconnect or sign-in under way
   mcpFold: new Map(),    // chat id|group -> folded or not, once changed by hand
+  mcpTop: new Map(),     // chat id -> how far the server list is scrolled
   editor: { label: '', file: '' },   // what the editor has open, which goes with your message
   skipCtx: new Set(),    // chats whose next message goes without the editor's file
   files: new Map(),      // chat id -> attached PDFs and text files waiting to go
@@ -222,6 +223,7 @@ function mcpCard (id, servers) {
   const x = el('button', 'iconbtn', '×')
   x.title = 'Close (Escape)'
   x.setAttribute('aria-label', 'Close')
+  x.dataset.f = 'x'
   x.onclick = () => { CHAT.mcp.delete(id); paintLive() }
   head.appendChild(x)
   w.appendChild(head)
@@ -250,6 +252,10 @@ function mcpCard (id, servers) {
     for (const v of rows) list.appendChild(mcpRow(id, v))
   }
   w.appendChild(list)
+  // and the list stays scrolled where you left it
+  const top = CHAT.mcpTop.get(id)
+  if (top) requestAnimationFrame(() => { list.scrollTop = top })
+  list.onscroll = () => CHAT.mcpTop.set(id, list.scrollTop)
   return w
 }
 
@@ -257,7 +263,8 @@ function mcpCard (id, servers) {
 function mcpRefocus (f) {
   requestAnimationFrame(() => {
     const t = [...document.querySelectorAll('.mcpcard [data-f]')].find(n => n.dataset.f === f)
-    ;(t || document.querySelector('.mcpcard button'))?.focus()
+    // gone (moved into a folded group): its group's header, never Close, which Enter would press
+    ;(t || document.querySelector('.mcpcard .mcpgroup'))?.focus()
   })
 }
 
@@ -280,6 +287,7 @@ function mcpRow (id, v) {
   else if (v.status === 'needs-auth' || v.status === 'failed') {
     const b = el('button', 'mcplink', v.status === 'failed' ? 'Reconnect' : 'Sign in')
     b.title = v.status === 'failed' ? 'Try connecting to this server again' : 'Opens the sign-in page in your browser'
+    b.dataset.f = 'l|' + v.name
     b.onclick = () => go(v.status === 'failed' ? 'reconnect' : 'signin')
     row.appendChild(b)
   }
@@ -303,6 +311,9 @@ function paintLive () {
   if (!COMPOSER) return
   const id = COMPOSER.id
   const live = COMPOSER.live
+  // the /mcp card is rebuilt with everything else: keyboard focus goes back where it was
+  const mcpF = document.activeElement?.closest?.('.mcpcard') && document.activeElement.dataset?.f
+  if (mcpF) mcpRefocus(mcpF)
   live.replaceChildren()
   const st = CHAT.state.get(id)
   // what you sent sits above the reply to it; a message queued behind that
@@ -810,10 +821,11 @@ function submit (c, only) {
   send({ type: 'chatSend', id, uuid, text, images: images.map(im => ({ mediaType: im.mediaType, data: im.data })), files, noContext, model: p.model, mode: p.mode, effort: p.effort })
   const queued = !!CHAT.state.get(id)?.busy
   CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, uuid, images: images.length, files: files.length, pics: images, docs: files, noContext, at: Date.now(), queued }])
-  // what was left out of this message stays named after it goes
-  // what was left out stays in view through the send it was left out of, then goes
+  // what was left out stays in view through the send it was left out of, then goes;
+  // a message the logbook sends itself carries no attachments and leaves it be
   const kept = CHAT.notes.get(id)
-  if (kept?.over && !kept.sent) kept.sent = true
+  if (only && kept?.over) {}
+  else if (kept?.over && !kept.sent) kept.sent = true
   else CHAT.notes.delete(id)
   CHAT.done.delete(id)
   const st = CHAT.state.get(id) || { id, asks: [] }
@@ -1746,9 +1758,8 @@ if (!BOARD_MODE) {
       }
       case 'chatMcpList':
         // a follow-up to a switch or sign-in updates the card only while it is open: closed stays closed
-        if (!(m.done || m.follow) || CHAT.mcp.has(id)) CHAT.mcp.set(id, Array.isArray(m.list) ? m.list : 'unavailable')
-        { const f = document.activeElement?.closest?.('.mcpcard') && document.activeElement.dataset?.f
-          if (f) mcpRefocus(f) }
+        // only an open card takes it: one closed, even while it was still asking, stays closed
+        if (CHAT.mcp.has(id)) CHAT.mcp.set(id, Array.isArray(m.list) ? m.list : 'unavailable')
         if (m.done) CHAT.mcpBusy.delete(id + '|' + m.done)
         if (m.err) note(id, m.err, true)
         break
