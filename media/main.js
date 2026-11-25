@@ -3963,7 +3963,7 @@ function boardMeta (list) {
   const bar = $('#bmeta')
   bar.replaceChildren()
   if (!list.length) return
-  for (const [key, label] of [['needs', 'Needs you'], ['all', 'All'], ['working', 'Working'], ['earlier', 'Earlier']]) {
+  for (const [key, label] of [['needs', 'Needs you'], ['working', 'Working'], ['earlier', 'Earlier'], ['all', 'All']]) {
     if (key !== 'all' && !n[key]) continue
     const b = el('button', 'bfilter' + (BFILTER === key ? ' on' : ''))
     b.append(el('span', '', label), el('em', '', String(n[key])))
