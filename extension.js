@@ -3162,7 +3162,13 @@ async function findChat (ctx) {
     const s = scan.index().find(x => x.id === item.s.id)
     if (!s) return
     seenChat(s.id)
-    if (s.provider !== 'codex') { openChatTab(ctx, s.id, beside); return }
+    if (s.provider !== 'codex') {
+      openChatTab(ctx, s.id, beside)
+      // hand focus to the tab the editor's own way: left to the closing search
+      // box, focus sits nowhere the editor tracks and the next shortcut is lost
+      setTimeout(() => vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup'), 150)
+      return
+    }
     // a Codex chat only continues in a terminal: the one already running it, if there is one
     const attached = await terminalForSession(s.id, false)
     if (live[s.id] && !attached) {
