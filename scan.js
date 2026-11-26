@@ -2065,9 +2065,21 @@ function agentTranscript (id, agentId) {
   const rec = index().find(s => s.id === id)
   if (!rec) return null
   const file = path.join(agentDir(rec.file), `agent-${agentId}.jsonl`)
-  let raw; try { raw = fs.readFileSync(file, 'utf8') } catch { return null }
-  const { turns, info } = parseTranscript(raw, true)
   const key = id + '#' + agentId
+  // followed live while the agent writes, so only what it added since the last
+  // read is parsed, the way an open chat is; a file rewritten starts over
+  let c = AGENT_PARSED.get(key)
+  let more = c && c.file === file ? readFrom(file, c.off) : null
+  if (!more) {
+    c = { file, off: 0, st: parseStart(true) }
+    more = readFrom(file, 0)
+    if (!more) return null
+  }
+  if (more.raw) parseMore(c.st, more.raw)
+  c.off = more.off
+  AGENT_PARSED.delete(key); AGENT_PARSED.set(key, c)
+  while (AGENT_PARSED.size > PARSED_MAX) AGENT_PARSED.delete(AGENT_PARSED.keys().next().value)
+  const { turns, info } = parseResult(c.st)
   full = { id: key, turns }
   const all = subAgents(id)
   const meta = all.find(a => a.id === agentId) || {}
@@ -2655,6 +2667,7 @@ function board (live, folders) {
  */
 const PARSED = new Map()          // id -> { file, off, st, signals }
 const PARSED_MAX = 3
+const AGENT_PARSED = new Map()    // 'chat#agent' -> the same, for agent threads, kept apart so they never push an open chat out
 
 /** Whole lines from `off` to the end, and where the next read starts. */
 function readFrom (file, off) {

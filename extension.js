@@ -1981,6 +1981,8 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               if (/^[\w-]+$/.test(String(msg.id || ''))) openChatTab(ctx, msg.id, true)
               break
             }
+            // choosing a chat outdates any agent thread still being read for this view
+            AGENT_NAV.set(post, (AGENT_NAV.get(post) || 0) + 1)
             seenChat(msg.id)
             WATCH?.setOpen(post, msg.id)
             // clicked again while the whole chat is still being read: wait for that
@@ -2615,8 +2617,12 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               if (term) { resumeInTerminal(s, false, term); break }
             }
             if (target === 'logbook' || (runner.has(s.id) && (!msg.target || msg.open))) {
-              if (CHAT_TABS.has(s.id) || mode === 'board' || mode === 'chat') openChatTab(ctx, s.id, false)
-              else post({ type: 'openHere', id: s.id, q: typeof msg.q === 'string' ? msg.q.slice(0, 200) : '' })
+              const q = typeof msg.q === 'string' ? msg.q.slice(0, 200) : ''
+              if (CHAT_TABS.has(s.id) || mode === 'board' || mode === 'chat') {
+                const tab = openChatTab(ctx, s.id, false)
+                // from a search result: the tab shows the chat at the match, as a list would
+                if (q && tab?.webview) tab.webview.postMessage({ type: 'openHere', id: s.id, q })
+              } else post({ type: 'openHere', id: s.id, q })
               break
             }
             // two Claudes writing one chat would tangle it, so the logbook's lets go first
