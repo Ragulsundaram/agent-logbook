@@ -499,10 +499,16 @@ function bgTask (id, t) {
   const w = el('div', 'chatshell running bgtask')
   const head = el('div', 'shhead')
   const kind = /bash|shell/i.test(t.kind) ? 'Command' : /agent/i.test(t.kind) ? 'Agent' : 'Task'
+  // only an agent running on this machine keeps a thread here to open
+  const agent = kind === 'Agent' && !/remote/i.test(t.kind)
   head.append(el('span', 'bgkind', kind), el('span', 'shcmd', t.what || 'Running in the background'))
-  const out = CHAT.taskOut.get(key)
-  const look = el('button', 'btn', out ? 'Hide output' : 'Output')
+  const out = agent ? null : CHAT.taskOut.get(key)
+  // an agent's work reads best as its own thread, steps and all, the way a finished one shows;
+  // a command's is what it printed
+  const look = el('button', 'btn', agent ? 'Open' : out ? 'Hide output' : 'Output')
+  if (agent) look.title = 'Open its steps as a thread'
   look.onclick = () => {
+    if (agent) { openAgent(id, t.id); return }
     if (CHAT.taskOut.has(key)) { CHAT.taskOut.delete(key); paintLive(); return }
     CHAT.taskOut.set(key, { output: '', truncated: false, loading: true })
     send({ type: 'chatTaskOutput', id, taskId: t.id })
@@ -518,9 +524,8 @@ function bgTask (id, t) {
   // what an agent is on right now, and how far it has got
   if (t.now || t.steps) w.appendChild(el('div', 'chatmeta bgnow', [t.now, t.steps ? `${t.steps} step${t.steps === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')))
   if (out) {
-    const agent = /agent/i.test(t.kind)
     const text = out.loading && !out.output ? 'Loading…' : out.output ||
-      (out.failed ? (agent ? 'Nothing recorded yet: the agent is just starting.' : 'Its output could not be read.') : agent ? 'No steps yet.' : 'Nothing printed yet.')
+      (out.failed ? 'Its output could not be read.' : 'Nothing printed yet.')
     const pre = el('pre', 'shout', (out.truncated ? '…' : '') + (text.length > 20000 ? '…' + text.slice(-20000) : text))
     w.appendChild(pre)
     pre.onscroll = () => { out.top = pre.scrollHeight - pre.scrollTop - pre.clientHeight > 8 ? pre.scrollTop : null }
@@ -1737,6 +1742,7 @@ if (!BOARD_MODE) {
         break
       }
       case 'chatNotice':
+        if (m.soft && CHAT.notes.get(id)?.action) break   // a passing word never covers one you can act on
         note(id, m.text, false, m.action === 'terminal' ? { label: 'Open Claude in a terminal', msg: { type: 'chatTerminal' } } : undefined)
         break
       case 'chatLimit': {

@@ -23,10 +23,17 @@ const settingsSnapshot = () => {
 }
 const skipFlag = () => cfg('skipPermissions', false) ? ' --dangerously-skip-permissions' : ''
 
-/** "auto" sends a chat back where it was started. */
+/** Where Resume can open a chat. "logbook" is the logbook's own chat, with its message box. */
+const TARGET_KEYS = ['logbook', 'auto', 'terminal', 'claude', 'desktop']
+
+/** "auto" sends a chat back where it was started; "logbook" needs chatting here on. */
 function resolveTarget (s, asked) {
   if (s.provider === 'codex') return 'terminal'   // nothing else can open one
-  const want = asked || cfg('resumeTarget', 'auto')
+  let want = TARGET_KEYS.includes(asked) ? asked : cfg('resumeTarget', 'logbook')
+  if (!TARGET_KEYS.includes(want)) want = 'auto'
+  // where the logbook cannot chat - chatting here off, an untrusted folder - it would only
+  // show the chat, so Resume goes where it started instead
+  if (want === 'logbook' && (!cfg('chatHere', true) || !folderTrusted(s.cwd))) want = 'auto'
   if (want !== 'auto') return want
   const from = s.entrypoint || ''
   if (from === 'claude-vscode' || from === 'vscode') return 'claude'
@@ -84,8 +91,10 @@ function watchTranscripts (ctx) {
     touched.clear(); dirty.clear()
     const fresh = new Map()
     for (const [post, id] of open) {
-      if (!ids.has(id)) continue
-      if (!fresh.has(id)) fresh.set(id, liveCall('transcript', id))
+      // an agent's thread is open as "chat#agent", and its file is named agent-<agent>
+      const [sid, aid] = id.split('#')
+      if (!ids.has(id) && !(aid && ids.has('agent-' + aid))) continue
+      if (!fresh.has(id)) fresh.set(id, aid ? liveCall('agentTranscript', sid, aid) : liveCall('transcript', id))
       const data = await fresh.get(id)
       if (open.get(post) !== id) continue        // moved to another chat meanwhile
       post({ type: 'session', data, live: true })
@@ -125,16 +134,18 @@ function watchTranscripts (ctx) {
   // start the search worker now, so it has indexed before anyone types
   try { searcher() } catch {}
   return {
-    setOpen: (post, id) => {
+    // an agent's thread passes its own file, as the index lists only chats
+    setOpen: (post, id, agentFile) => {
       if (!post) return
       if (!id) { open.delete(post); return }
       open.set(post, id)
       if (!files.has(id)) {
-        const file = scan.index().find(s => s.id === id)?.file
+        const file = agentFile || scan.index().find(s => s.id === id)?.file
         if (file) files.set(id, { file, seen: stamp(file) })
       }
       for (const k of files.keys()) if (![...open.values()].includes(k)) files.delete(k)
     },
+    openOf: post => open.get(post),
     // Refresh redraws the chats on screen too, not only the list behind them
     refreshOpen: () => { for (const id of open.values()) dirty.add(id); clearTimeout(timer); flush().catch(() => {}) },
     // a chat run from the logbook says when it has written, rather than
@@ -1928,7 +1939,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               groups: scan.groupsFor()
                 .map(g => g.name),
               here: hereNames(),
-              target: cfg('resumeTarget', 'auto'),
+              target: cfg('resumeTarget', 'logbook'),
               pageSize: cfg('pageSize', 8),
               sort: cfg('sort', 'recent'),
               dateFormat: cfg('dateFormat', 'locale'),
@@ -2006,8 +2017,17 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           case 'agent':
             // a sub-agent's thread renders through the same view as a session; the
             // parent chat's live refresh would draw over it, so stop that until back
-            WATCH?.setOpen(post, null)
-            post({ type: 'session', data: await chatCall('agentTranscript', msg.id, msg.agentId) })
+            {
+              const was = WATCH?.openOf(post)
+              const data = await chatCall('agentTranscript', msg.id, msg.agentId)
+              // another chat opened in this view while it was read: that one stays
+              if (WATCH && WATCH.openOf(post) !== was) break
+              // no thread to show yet: the chat stays as it is, refresh and all
+              if (!data) { post({ type: 'chatNotice', id: msg.id, soft: true, text: "That agent's steps could not be opened yet." }); break }
+              // the thread refreshes as the agent writes, the way a running chat does
+              WATCH?.setOpen(post, data.id, data.file)
+              post({ type: 'session', data })
+            }
             break
           case 'perf':
             break
@@ -2137,6 +2157,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
 
           case 'setTarget':
             // the picker writes the setting, so it is visible and editable in Settings
+            if (!TARGET_KEYS.includes(msg.target)) break
             await vscode.workspace.getConfiguration('claudeHistory')
               .update('resumeTarget', msg.target, vscode.ConfigurationTarget.Global)
             break
@@ -2188,6 +2209,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             // the Settings tab writes the same settings the editor's own
             // settings page does, so the two can never drift apart
             if (!SETTINGS.includes(msg.key)) return
+            if (msg.key === 'resumeTarget' && !TARGET_KEYS.includes(msg.value)) return
             const now = vscode.workspace.getConfiguration('claudeHistory').get(msg.key)
             if (now !== undefined && now !== null && typeof msg.value !== typeof now) return
             if (msg.key === 'skipPermissions' && msg.value === true) {
@@ -2584,12 +2606,13 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             if (!s) return
             // a chat running here is already open for business: Resume just shows it.
             // A named place (a terminal, the app) is a move, and asks to stop it first.
-            if (runner.has(s.id) && (!msg.target || msg.open)) {
+            // Resume set to the logbook opens it the same way, with its message box ready
+            const target = resolveTarget(s, msg.target)
+            if (target === 'logbook' || (runner.has(s.id) && (!msg.target || msg.open))) {
               if (CHAT_TABS.has(s.id) || mode === 'board' || mode === 'chat') openChatTab(ctx, s.id, false)
               else post({ type: 'openHere', id: s.id })
               break
             }
-            const target = resolveTarget(s, msg.target)
             // two Claudes writing one chat would tangle it, so the logbook's lets go first
             if (runner.has(s.id)) {
               const pick = await vscode.window.showWarningMessage(
@@ -3026,6 +3049,59 @@ function openChatTab (ctx, id, beside) {
   fillChatTab(ctx, panel, id)
   return panel
 }
+/** "3h ago" for the search box: enough to tell this week's chat from last month's. */
+function agoText (ts) {
+  const m = Math.max(0, Math.round((Date.now() - (ts || 0)) / 6e4))
+  if (m < 60) return m <= 1 ? 'just now' : `${m}m ago`
+  const h = Math.round(m / 60)
+  if (h < 48) return `${h}h ago`
+  const d = Math.round(h / 24)
+  return d < 60 ? `${d}d ago` : new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+}
+const LIVE_WORDS = { busy: 'working', waiting: 'needs you', idle: 'open' }
+
+/**
+ * Cursor's own search box over every chat, so an older one is a shortcut away
+ * with the sidebar closed. Most recent first; typing matches title or folder.
+ * A Claude chat opens in its own tab, a Codex one goes back to its terminal.
+ */
+async function findChat (ctx) {
+  const chats = scan.sessionList(live).sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))
+  if (!chats.length) { vscode.window.showInformationMessage('No chats yet.'); return }
+  const side = { iconPath: new vscode.ThemeIcon('split-horizontal'), tooltip: 'Open to the side' }
+  const qp = vscode.window.createQuickPick()
+  qp.title = 'Find a chat'
+  qp.placeholder = 'Type part of a chat title or folder'
+  qp.matchOnDescription = true
+  qp.items = chats.map(s => ({
+    label: (s.live ? '$(pulse) ' : '') + s.title,
+    description: [LIVE_WORDS[s.live] || '', s.project, s.provider === 'codex' ? 'Codex' : '',
+      s.archived ? 'archived' : '', agoText(s.lastTs)].filter(Boolean).join(' · '),
+    buttons: s.provider === 'codex' ? [] : [side],
+    s,
+  }))
+  const go = async (item, beside) => {
+    qp.hide()
+    if (!item) return
+    const s = scan.index().find(x => x.id === item.s.id)
+    if (!s) return
+    seenChat(s.id)
+    if (s.provider !== 'codex') { openChatTab(ctx, s.id, beside); return }
+    // a Codex chat only continues in a terminal: the one already running it, if there is one
+    const attached = await terminalForSession(s.id, false)
+    if (live[s.id] && !attached) {
+      const pick = await vscode.window.showWarningMessage(
+        'This chat is running outside this window. Codex will not attach twice.', 'Open anyway', 'Cancel')
+      if (pick !== 'Open anyway') return
+    }
+    resumeInTerminal(s, false, attached)
+  }
+  qp.onDidAccept(() => go(qp.selectedItems[0], false))
+  qp.onDidTriggerItemButton(e => go(e.item, true))
+  qp.onDidHide(() => qp.dispose())
+  qp.show()
+}
+
 // the tab says whether its chat is working or waiting on you, so a row of chat
 // tabs reads like the list: a coloured dot icon, and a mark before the name
 const TAB_STATE = new WeakMap()          // panel -> { base, state }
@@ -3220,7 +3296,6 @@ function activate (ctx) {
     },
     onHook: chatHook,
     // a background agent's Output: its steps so far, from its own record
-    agentOutput: (id, agentId) => chatCall('agentActivity', id, agentId),
     onWrite: id => WATCH?.poke(id),
     // started, finished or waiting on you: the list and the board show it now
     // what the logbook's own Claude is doing is known here: no need to ask the CLI
@@ -3266,7 +3341,7 @@ function activate (ctx) {
       broadcast({
         type: 'env',
         here: hereNames(),
-        target: cfg('resumeTarget', 'auto'),
+        target: cfg('resumeTarget', 'logbook'),
         pageSize: cfg('pageSize', 8),
         sort: cfg('sort', 'recent'),
         dateFormat: cfg('dateFormat', 'locale'),
@@ -3281,6 +3356,7 @@ function activate (ctx) {
       vscode.commands.executeCommand('claudeHistory.view.focus')),
     vscode.commands.registerCommand('claudeHistory.openInEditor', () => openInEditor(ctx, false)),
     vscode.commands.registerCommand('claudeHistory.board', () => openBoard(ctx)),
+    vscode.commands.registerCommand('claudeHistory.findChat', () => findChat(ctx)),
     // forget which windows were already announced, then check again now
     vscode.commands.registerCommand('claudeHistory.testUsageAlerts', async () => {
       await ctx.globalState.update('limitAlertsSeen', {})
