@@ -2073,15 +2073,8 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             const tab = CHAT_TABS.get(id)
             if (tab) { tab.reveal(); break }
             const sleeping = sleepingTabs().find(x => x.id === id)
-            const GROUPS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth']
             // past the eighth group there is no way to show it from here; a second tab would split the chat
-            if (sleeping && !GROUPS[sleeping.column - 1]) break
-            if (sleeping) {
-              // showing it is what wakes it: its group, then its place in that group
-              await vscode.commands.executeCommand(`workbench.action.focus${GROUPS[sleeping.column - 1]}EditorGroup`)
-              await vscode.commands.executeCommand('workbench.action.openEditorAtIndex', sleeping.index)
-              break
-            }
+            if (sleeping) { await wakeTab(sleeping); break }
             const view = [...SHOWING.values()].find(v => v.id === id)
             if (view?.mode === 'sidebar') await vscode.commands.executeCommand('claudeHistory.focus')
             else if (view?.reveal) view.reveal()
@@ -3040,9 +3033,20 @@ function chatTabTitle (id) {
   const t = s?.title || 'Chat'
   return shortTitle(t)
 }
+const GROUPS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth']
+// a tab restored by a reload stays asleep until shown: showing it is what wakes
+// it, its group first, then its place in that group
+async function wakeTab (sleeping) {
+  if (!GROUPS[sleeping.column - 1]) return
+  await vscode.commands.executeCommand(`workbench.action.focus${GROUPS[sleeping.column - 1]}EditorGroup`)
+  await vscode.commands.executeCommand('workbench.action.openEditorAtIndex', sleeping.index)
+}
 function openChatTab (ctx, id, beside) {
   const open = CHAT_TABS.get(id)
   if (open) { open.reveal(); return open }
+  // already in a tab from before a reload: show that one, never a second copy
+  const sleeping = sleepingTabs().find(x => x.id === id)
+  if (sleeping && GROUPS[sleeping.column - 1]) { wakeTab(sleeping); return null }
   const panel = vscode.window.createWebviewPanel('claudeHistory.chat', chatTabTitle(id),
     beside ? vscode.ViewColumn.Beside : vscode.ViewColumn.Active,
     { enableScripts: true, retainContextWhenHidden: true })
