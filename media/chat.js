@@ -13,6 +13,7 @@
 const CHAT = {
   reading: new Map(),    // chat id -> pictures still being read, kept with the chat, not the box
   sendWhenRead: new Set(), // chats whose Enter waits for those pictures
+  inflight: new Set(),   // reads under way, each { id }: /clear moves the ones it catches to the new id
   tipSeen: true,         // the one-time "you can reply here" tip, until the host says otherwise
   sentLog: new Map(),    // chat id -> messages sent from here, oldest first: Up brings them back
   shell: new Map(),      // chat id -> "!" commands run here: { key, cmd, out, running, code, sentWith }
@@ -34,6 +35,11 @@ const CHAT = {
   taskOut: new Map(),    // "chat id|task id" -> { output, truncated } of a background task you opened
   side: new Map(),       // chat id -> side questions (/btw) and their answers
   mcp: new Map(),        // chat id -> its MCP servers, once asked with /mcp
+  mcpBusy: new Map(),    // chat id|server -> the number of the turn-off, reconnect or sign-in under way
+  mcpFold: new Map(),    // chat id|group -> folded or not, once changed by hand
+  mcpTop: new Map(),     // chat id -> how far the server list is scrolled
+  mcpSeq: 0,             // numbers each /mcp action, so a reply clears only its own
+  over: new Map(),       // chat id -> { pictures, files, sent }: what a message left out
   editor: { label: '', file: '' },   // what the editor has open, which goes with your message
   skipCtx: new Set(),    // chats whose next message goes without the editor's file
   files: new Map(),      // chat id -> attached PDFs and text files waiting to go
@@ -135,18 +141,22 @@ function chatMount () {
   paintComposer()
 }
 
-function setMode (c, value) {
+function setMode (c, value, keep = true) {
   picksFor(c.id).mode = value
   c.mode.value = value
   send({ type: 'chatMode', id: c.id, value })
   // and every new chat after it - except bypass, which is picked chat by chat
-  if (value !== 'bypassPermissions') setCfg('chatPermissionMode', value)
+  if (keep && value !== 'bypassPermissions') setCfg('chatPermissionMode', value)
 }
-/** Shift+Tab in the box steps through the modes, as it does in Claude Code's terminal. */
+/**
+ * Shift+Tab in the box steps through the modes, as it does in Claude Code's
+ * terminal - for this chat only: a key pressed in passing never changes the
+ * default every new chat starts with.
+ */
 function cycleMode (c) {
   const list = modes()
   const i = list.findIndex(m => m[0] === picksFor(c.id).mode)
-  setMode(c, list[(i + 1) % list.length][0])
+  setMode(c, list[(i + 1) % list.length][0], false)
 }
 
 /** The mode and status join the "Claude" numbers under the box; a new chat has none yet, so they get their own line. */
@@ -202,10 +212,117 @@ setInterval(() => {
   if (e) e.textContent = elapsed(COMPOSER.id)
 }, 1000)
 
+/**
+ * /mcp: the chat's servers grouped the way you act on them - what needs you
+ * first, then what is connected (folded when long), then what is off. Each row
+ * has one switch for on and off, and Sign in or Reconnect only when it applies.
+ */
+function mcpCard (id, servers) {
+  const w = el('div', 'chatside mcpcard')
+  const head = el('div', 'shhead')
+  head.appendChild(el('span', 'bgkind', 'MCP servers'))
+  const sum = el('span', 'shcmd mcpsum', '')
+  head.appendChild(sum)
+  const x = el('button', 'iconbtn', '×')
+  x.title = 'Close (Escape)'
+  x.setAttribute('aria-label', 'Close')
+  x.dataset.f = 'x'
+  x.onclick = () => { CHAT.mcp.delete(id); paintLive() }
+  head.appendChild(x)
+  w.appendChild(head)
+  if (servers === 'loading') { w.appendChild(el('div', 'chatmeta', 'Asking Claude…')); return w }
+  if (servers === 'unavailable') { w.appendChild(el('div', 'chatmeta', 'Claude did not answer. Try /mcp again.')); return w }
+  if (!servers.length) { w.appendChild(el('div', 'chatmeta', 'This chat has no MCP servers.')); return w }
+  const groups = [
+    ['need', 'Needs you', servers.filter(v => v.status === 'needs-auth' || v.status === 'failed')],
+    ['on', 'Connected', servers.filter(v => v.status === 'connected' || v.status === 'pending')],
+    ['off', 'Off', servers.filter(v => v.status === 'disabled')],
+    ['other', 'Other', servers.filter(v => !['needs-auth', 'failed', 'connected', 'pending', 'disabled'].includes(v.status))],
+  ].filter(g => g[2].length)
+  sum.textContent = groups.map(([, label, list]) => `${list.length} ${label.toLowerCase()}`).join(' · ')
+  const list = el('div', 'mcplist')
+  for (const [key, label, rows] of groups) {
+    const fk = id + '|' + key
+    // a long connected list folds by default; what needs you never does
+    const folded = CHAT.mcpFold.has(fk) ? CHAT.mcpFold.get(fk) : key === 'on' && rows.length > 6 && groups.length > 1
+    const gh = el('button', 'mcpgroup')
+    gh.setAttribute('aria-expanded', String(!folded))
+    gh.append(el('span', 'chev2', folded ? '›' : '⌄'), el('span', '', label), el('span', 'mcpcount', String(rows.length)))
+    gh.dataset.f = 'g|' + key
+    gh.onclick = () => { CHAT.mcpFold.set(fk, !folded); paintLive(); mcpRefocus(gh.dataset.f) }
+    list.appendChild(gh)
+    if (folded) continue
+    for (const v of rows) list.appendChild(mcpRow(id, v))
+  }
+  w.appendChild(list)
+  // and the list stays scrolled where you left it
+  const top = CHAT.mcpTop.get(id)
+  if (top) requestAnimationFrame(() => { list.scrollTop = top })
+  list.onscroll = () => CHAT.mcpTop.set(id, list.scrollTop)
+  return w
+}
+
+/** An action is over: its row is free again, unless a newer action on the same server is still under way. */
+function mcpDone (id, name, seq) {
+  const key = id + '|' + name
+  if (!seq || CHAT.mcpBusy.get(key) === seq) CHAT.mcpBusy.delete(key)
+}
+
+/** The card is redrawn on every change: keyboard focus goes back to the control it was on. */
+function mcpRefocus (f) {
+  requestAnimationFrame(() => {
+    const t = [...document.querySelectorAll('.mcpcard [data-f]')].find(n => n.dataset.f === f)
+    // gone (moved into a folded group): its group's header, never Close, which Enter would press
+    ;(t || document.querySelector('.mcpcard .mcpgroup'))?.focus()
+  })
+}
+
+function mcpRow (id, v) {
+  const row = el('div', 'mcprow ' + ({ connected: 'ok', failed: 'bad', 'needs-auth': 'auth', pending: 'wait', disabled: 'off' }[v.status] || ''))
+  // "claude.ai Gmail" and "plugin:postman:postman" read better as the name, with where it comes from beside it
+  let name = v.name, from = ''
+  const m = /^claude\.ai (.+)$/.exec(name) || /^plugin:([^:]+):(.+)$/.exec(name)
+  if (m) { from = name.startsWith('plugin:') ? 'plugin' : 'claude.ai'; name = m[m.length - 1] }
+  const nm = el('span', 'mcpname', name)
+  nm.title = v.name
+  row.append(el('span', 'mcpdot'), nm)
+  if (from) row.appendChild(el('span', 'mcpfrom', from))
+  const key = id + '|' + v.name
+  const busy = CHAT.mcpBusy.has(key)
+  const go = act => { const seq = ++CHAT.mcpSeq; CHAT.mcpBusy.set(key, seq); send({ type: 'chatMcpAct', id, act, name: v.name, seq }); paintLive(); mcpRefocus('s|' + v.name) }
+  const state = text => { const s = el('span', 'mcpstate', text); s.setAttribute('role', 'status'); return s }
+  if (busy) row.appendChild(state('Working…'))
+  else if (v.status === 'pending') row.appendChild(state('Connecting…'))
+  else if (v.status === 'needs-auth' || v.status === 'failed') {
+    const b = el('button', 'mcplink', v.status === 'failed' ? 'Reconnect' : 'Sign in')
+    b.title = v.status === 'failed' ? 'Try connecting to this server again' : 'Opens the sign-in page in your browser'
+    b.dataset.f = 'l|' + v.name
+    b.onclick = () => go(v.status === 'failed' ? 'reconnect' : 'signin')
+    row.appendChild(b)
+  }
+  // one switch, as in Claude's own settings; off is kept for this folder, as /mcp does in the terminal
+  const on = v.status !== 'disabled'
+  const sw = el('button', 'mcpswitch' + (on ? ' on' : ''))
+  sw.setAttribute('role', 'switch')
+  sw.setAttribute('aria-checked', String(on))
+  sw.setAttribute('aria-label', v.name)
+  sw.title = on ? 'Turn off for chats in this folder' : 'Turn on for chats in this folder'
+  // held, not disabled: a disabled button drops keyboard focus while the change goes through
+  const held = busy || v.status === 'pending'
+  sw.setAttribute('aria-disabled', String(held))
+  sw.dataset.f = 's|' + v.name
+  sw.onclick = () => { if (!held) go(on ? 'off' : 'on') }
+  row.appendChild(sw)
+  return row
+}
+
 function paintLive () {
   if (!COMPOSER) return
   const id = COMPOSER.id
   const live = COMPOSER.live
+  // the /mcp card is rebuilt with everything else: keyboard focus goes back where it was
+  const mcpF = document.activeElement?.closest?.('.mcpcard') && document.activeElement.dataset?.f
+  if (mcpF) mcpRefocus(mcpF)
   live.replaceChildren()
   const st = CHAT.state.get(id)
   // what you sent sits above the reply to it; a message queued behind that
@@ -322,24 +439,7 @@ function paintLive () {
     live.appendChild(w)
   }
   const servers = CHAT.mcp.get(id)
-  if (servers) {
-    const w = el('div', 'chatside')
-    const head = el('div', 'shhead')
-    head.append(el('span', 'bgkind', 'MCP servers'), el('span', 'shcmd', ''))
-    const x = el('button', 'iconbtn', '×')
-    x.onclick = () => { CHAT.mcp.delete(id); paintLive() }
-    head.appendChild(x)
-    w.appendChild(head)
-    if (servers === 'loading') w.appendChild(el('div', 'chatmeta', 'Asking Claude…'))
-    else if (servers === 'unavailable') w.appendChild(el('div', 'chatmeta', 'Claude did not answer. Try /mcp again.'))
-    else if (!servers.length) w.appendChild(el('div', 'chatmeta', 'This chat has no MCP servers.'))
-    else for (const v of servers) {
-      const row = el('div', 'mcprow ' + (v.status === 'connected' ? 'ok' : v.status === 'failed' ? 'bad' : ''))
-      row.append(el('span', 'mcpdot'), el('b', '', v.name), el('span', 'chatmeta', v.status))
-      w.appendChild(row)
-    }
-    live.appendChild(w)
-  }
+  if (servers) live.appendChild(mcpCard(id, servers))
   const note = CHAT.notes.get(id)
   if (note) {
     const n = el('div', 'chatnote' + (note.err ? ' err' : ''))
@@ -352,6 +452,17 @@ function paintLive () {
     const x = el('button', 'iconbtn', '×')
     x.title = 'Dismiss'
     x.onclick = () => { CHAT.notes.delete(id); paintLive() }
+    n.appendChild(x)
+    live.appendChild(n)
+  }
+  // what was left out of a message: its own line, so a passing notice never wipes it
+  const over = CHAT.over.get(id)
+  if (over) {
+    const n = el('div', 'chatnote err')
+    n.appendChild(el('span', '', overText(over)))
+    const x = el('button', 'iconbtn', '×')
+    x.title = 'Dismiss'
+    x.onclick = () => { CHAT.over.delete(id); paintLive() }
     n.appendChild(x)
     live.appendChild(n)
   }
@@ -472,9 +583,16 @@ function buildComposer (id) {
   // status sit with the chat's numbers below it, the way Claude Code's own
   // status line does; model and effort are changed with /model and /effort
   const mode = el('select', 'cpick cmode')
-  mode.title = 'What Claude may do without asking (Shift+Tab in the box to switch). New chats start on the last one you picked'
+  mode.title = 'What Claude may do without asking. Shift+Tab in the box switches it for this chat; new chats start on the last one you pick here'
   const status = el('span', 'cstatus')
   const go = el('button', 'cgo')
+  // while Claude works and a message is being typed, Stop stays beside Queue
+  const halt = el('button', 'cgo stop')
+  halt.appendChild(el('span', 'cstopico'))
+  halt.title = 'Stop (Escape)'
+  halt.setAttribute('aria-label', 'Stop')
+  halt.hidden = true
+  halt.onclick = () => send({ type: 'chatStop', id })
   // attach a picture, a PDF or a text file
   const clip = el('button', 'cattach')
   clip.appendChild(icon('plus'))
@@ -483,7 +601,7 @@ function buildComposer (id) {
   pickFile.type = 'file'; pickFile.multiple = true; pickFile.hidden = true
   pickFile.accept = 'image/png,image/jpeg,image/gif,image/webp,application/pdf,text/*,' + TEXT_EXT.map(x => '.' + x).join(',')
   clip.onclick = () => pickFile.click()
-  bar.append(clip, pickFile, go)
+  bar.append(clip, pickFile, halt, go)
   // what the editor has open goes with the message: said here, and can be left out
   const ctxLine = el('div', 'cctx')
   const live = el('div', 'chatlive')
@@ -494,7 +612,7 @@ function buildComposer (id) {
   // once, the first time anyone sees the box: what it is and where to turn it off
   const tip = el('div', 'ctip')
   root.append(asks, block, tip, ctxLine, box, slash)
-  const c = { id, root, asks, imgs, block, tip, ta, slash, bar, mode, status, go, live, slashAt: 0, ctxLine, mention: null }
+  const c = { id, root, asks, imgs, block, tip, ta, slash, bar, mode, status, go, halt, live, slashAt: 0, ctxLine, mention: null }
   pickFile.onchange = () => { for (const f of pickFile.files) addAny(c, f); pickFile.value = '' }
 
   const fit = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 220) + 'px' }
@@ -506,9 +624,11 @@ function buildComposer (id) {
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && !e.isComposing &&
       recall(c, e.key === 'ArrowUp' ? -1 : 1)) { e.preventDefault(); return }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(c) }
-    else if (e.key === 'Escape' && !e.isComposing) {
+    else if (e.key === 'Escape' && !e.isComposing && !e.defaultPrevented) {
+      // the /mcp card is on top, so Escape closes it first
+      if (CHAT.mcp.has(id)) { e.preventDefault(); CHAT.mcp.delete(id); paintLive() }
       // like the terminal: Escape stops a reply in progress
-      if (CHAT.state.get(id)?.busy) { e.preventDefault(); send({ type: 'chatStop', id }) }
+      else if (CHAT.state.get(id)?.busy) { e.preventDefault(); send({ type: 'chatStop', id }) }
       else ta.blur()
     }
   }
@@ -540,6 +660,15 @@ function buildComposer (id) {
 const TEXT_EXT = 'txt md csv tsv json yaml yml xml html css js ts jsx tsx py rb go rs java kt swift c h cpp cs php sh sql log diff patch toml ini env conf'.split(' ')
 const MAX_PDF = 18 * 1024 * 1024        // the host takes up to 25 MB of base64, about 18.7 MB
 const MAX_TEXT = 390 * 1024
+// reads under way and /clear moves: see chat-moves.js
+const readStart = id => chatMoves.readStart(CHAT, id)
+const moveChatState = (id, to) => chatMoves.moveChatState(CHAT, id, to)
+/** One picture or file finished reading: once none are left, an Enter that waited for them goes. */
+function readDone (slot) {
+  // the box may have been rebuilt since (you switched chats and back): send from the current one
+  if (chatMoves.readDone(CHAT, slot) && COMPOSER?.id === slot.id) submit(COMPOSER)
+}
+
 /** A picture goes as a picture; a PDF or a text file is attached by name. */
 function addAny (c, file) {
   if (file.type.startsWith('image/')) return addImage(c, file)
@@ -548,20 +677,17 @@ function addAny (c, file) {
   const text = !pdf && (file.type.startsWith('text/') || /json|xml|yaml|javascript|sql/.test(file.type) || TEXT_EXT.includes(ext))
   if (!pdf && !text) { note(c.id, `${file.name} can't be attached: only pictures, PDFs and text files can.`, true); return }
   if (file.size > (pdf ? MAX_PDF : MAX_TEXT)) { note(c.id, `${file.name} is too big to attach (${pdf ? '18 MB' : '390 KB'} at most).`, true); return }
-  const id = c.id
   const r = new FileReader()
-  CHAT.reading.set(id, (CHAT.reading.get(id) || 0) + 1)
-  const done = () => {
-    const left = (CHAT.reading.get(id) || 1) - 1
-    if (left) CHAT.reading.set(id, left); else CHAT.reading.delete(id)
-    if (!left && CHAT.sendWhenRead.delete(id) && COMPOSER?.id === id) submit(COMPOSER)
-  }
-  r.onerror = () => { note(id, `${file.name} could not be read.`, true); done() }
+  const slot = readStart(c.id)
+  const done = () => readDone(slot)
+  r.onerror = () => { note(slot.id, `${file.name} could not be read.`, true); done() }
   r.onload = () => {
+    const id = slot.id               // the chat may have moved to a new id while this was read
     const item = { name: file.name, mediaType: pdf ? 'application/pdf' : 'text/plain' }
     if (pdf) item.data = String(r.result).replace(/^data:[^,]*,/, '')
     else item.text = String(r.result)
-    CHAT.files.set(id, [...(CHAT.files.get(id) || []), item].slice(0, 8))
+    // a message carries at most 8: one past that is named, not dropped quietly
+    if (chatMoves.readPlace(CHAT, slot, 'files', item) === 'over') overLimit(id, file.name, 'files')
     if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
     done()
   }
@@ -572,23 +698,17 @@ function addImage (c, file) {
   if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) { note(c.id, 'Only PNG, JPEG, GIF and WebP pictures can be sent.', true); return }
   if (file.size > MAX_IMAGE) { note(c.id, 'That picture is over 5 MB.', true); return }
   const r = new FileReader()
-  const id = c.id
-  CHAT.reading.set(id, (CHAT.reading.get(id) || 0) + 1)
-  const done = () => {
-    const left = (CHAT.reading.get(id) || 1) - 1
-    if (left) CHAT.reading.set(id, left); else CHAT.reading.delete(id)
-    // the box may have been rebuilt since (you switched chats and back): send from the current one
-    if (!left && CHAT.sendWhenRead.delete(id) && COMPOSER?.id === id) submit(COMPOSER)
-  }
-  r.onerror = () => { note(c.id, 'That picture could not be read.', true); done() }
+  const slot = readStart(c.id)
+  const done = () => readDone(slot)
+  r.onerror = () => { note(slot.id, 'That picture could not be read.', true); done() }
   r.onload = () => {
     const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(String(r.result))
     if (!m) { done(); return }
-    const list = CHAT.images.get(c.id) || []
-    list.push({ mediaType: m[1], data: m[2], url: String(r.result) })
-    CHAT.images.set(c.id, list.slice(0, 8))
-    paintImages(c)
-    paintGo(c)
+    const id = slot.id               // the chat may have moved to a new id while this was read
+    if (chatMoves.readPlace(CHAT, slot, 'pictures', { mediaType: m[1], data: m[2], url: String(r.result) }) === 'over') {
+      overLimit(id, file.name || 'pasted picture', 'pictures')
+    }
+    if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
     done()
   }
   r.readAsDataURL(file)
@@ -604,7 +724,7 @@ function paintImages (c) {
     img.alt = 'Pasted picture'
     const x = el('button', 'cimgx', '×')
     x.title = 'Remove'
-    x.onclick = () => { list.splice(i, 1); paintImages(c); paintGo(c) }
+    x.onclick = () => { list.splice(i, 1); clearOver(c.id, 'pictures'); paintImages(c); paintGo(c); placeLive() }
     chip.append(img, x)
     c.imgs.appendChild(chip)
   })
@@ -615,7 +735,7 @@ function paintImages (c) {
     chip.title = f.name
     const x = el('button', 'cimgx', '×')
     x.title = 'Remove'
-    x.onclick = () => { files.splice(i, 1); paintImages(c); paintGo(c) }
+    x.onclick = () => { files.splice(i, 1); clearOver(c.id, 'files'); paintImages(c); paintGo(c); placeLive() }
     chip.appendChild(x)
     c.imgs.appendChild(chip)
   })
@@ -718,6 +838,10 @@ function submit (c, only) {
   send({ type: 'chatSend', id, uuid, text, images: images.map(im => ({ mediaType: im.mediaType, data: im.data })), files, noContext, model: p.model, mode: p.mode, effort: p.effort })
   const queued = !!CHAT.state.get(id)?.busy
   CHAT.echo.set(id, [...(CHAT.echo.get(id) || []), { text, uuid, images: images.length, files: files.length, pics: images, docs: files, noContext, at: Date.now(), queued }])
+  // what was left out stays in view through the send it was left out of, then goes;
+  // a message the logbook sends itself carries no attachments and leaves it be
+  const over = CHAT.over.get(id)
+  if (over && !only) { if (over.sent) CHAT.over.delete(id); else over.sent = true }
   CHAT.notes.delete(id)
   CHAT.done.delete(id)
   const st = CHAT.state.get(id) || { id, asks: [] }
@@ -773,6 +897,37 @@ function recall (c, dir) {
   const end = ta.value.length
   ta.setSelectionRange(end, end)
   return true
+}
+
+/**
+ * Past the 8 pictures and 8 files a message carries: every one left out is
+ * named in one note, both kinds together. Pasted pictures share one name, so
+ * they are counted instead.
+ */
+function overLimit (id, name, kind) {
+  // a list from a message already sent is not added to: this message starts its own
+  const prev = CHAT.over.get(id)
+  const over = prev && !prev.sent ? prev : { pictures: [], files: [] }
+  over[kind] = [...over[kind], name]
+  CHAT.over.set(id, over)
+  if (COMPOSER?.id === id) placeLive()
+}
+function overText (over) {
+  const say = (k, list) => {
+    if (!list.length) return ''
+    const counts = new Map()
+    for (const n of list) counts.set(n, (counts.get(n) || 0) + 1)
+    return `${k}: ` + [...counts].map(([n, x]) => x > 1 ? `${n} (${x})` : n).join(', ')
+  }
+  const parts = [say('pictures', over.pictures), say('files', over.files)].filter(Boolean)
+  return `Not added, a message carries at most 8 pictures and 8 files. ${parts.join('; ')}`
+}
+/** Removing a picture makes room for pictures, a file for files: only that kind's list goes. */
+function clearOver (id, kind) {
+  const over = CHAT.over.get(id)
+  if (!over || over.sent) return
+  over[kind] = []
+  if (!over.pictures.length && !over.files.length) CHAT.over.delete(id)
 }
 
 function note (id, text, err, action) {
@@ -891,6 +1046,7 @@ function paintGo (c) {
     c.go.classList.remove('stop')
     c.go.title = 'Run (Enter)'
     c.go.disabled = !c.ta.value.replace(/^\s*!/, '').trim()
+    c.halt.hidden = !st?.busy
     return
   }
   const stop = !!st?.busy && empty
@@ -898,6 +1054,7 @@ function paintGo (c) {
   c.go.classList.toggle('stop', stop)
   c.go.title = stop ? 'Stop (Escape)' : st?.busy ? 'Queue this message (Enter)' : 'Send (Enter)'
   c.go.disabled = !stop && empty
+  c.halt.hidden = !st?.busy || stop
 }
 
 function paintStatus (c) {
@@ -1201,8 +1358,13 @@ function permissionCard (c, a) {
   card.appendChild(el('div', 'caskhead', askTitle(a)))
   card.appendChild(askBody(a))
   const acts = el('div', 'caskacts')
+  const canAlways = a.suggestions.length && !a.noAlways
   // a risky one leads with No, as Claude's terminal does
-  const allow = el('button', a.defaultNo ? 'btn' : 'btn pri', 'Allow')
+  const deny = el('button', a.defaultNo ? 'btn pri' : 'btn', 'Deny')
+  deny.title = 'Claude is told no, and tries another way'
+  deny.onclick = () => answer(c, a, { allow: false })
+  if (a.defaultNo) acts.appendChild(deny)
+  const allow = el('button', a.defaultNo ? 'btn' : 'btn pri', canAlways ? 'Allow once' : 'Allow')
   allow.onclick = () => answer(c, a, { allow: true })
   acts.appendChild(allow)
   if (['Edit', 'Write', 'MultiEdit'].includes(a.tool)) {
@@ -1211,25 +1373,25 @@ function permissionCard (c, a) {
     diff.onclick = () => send({ type: 'chatAskDiff', id: c.id, requestId: a.requestId })
     acts.appendChild(diff)
   }
-  if (a.suggestions.length && !a.noAlways) {
+  if (canAlways) {
     const always = el('button', 'btn', 'Always allow')
-    always.title = alwaysTip(a)
     always.onclick = () => answer(c, a, { allow: true, always: true })
     acts.appendChild(always)
   }
-  const deny = el('button', a.defaultNo ? 'btn pri' : 'btn', 'Deny')
-  deny.title = 'Claude is told no, and tries another way'
-  deny.onclick = () => answer(c, a, { allow: false })
+  if (!a.defaultNo) acts.appendChild(deny)
   const halt = el('button', 'btn', 'Deny and stop')
   halt.title = 'Claude is told no, and the reply ends here'
   halt.onclick = () => answer(c, a, { allow: false, stop: true })
-  acts.append(deny, halt)
+  acts.appendChild(halt)
   const instead = el('input', 'caskinput')
   instead.placeholder = 'Or tell Claude what to do instead, then Enter'
   instead.onkeydown = e => {
     if (e.key === 'Enter' && instead.value.trim()) answer(c, a, { allow: false, message: instead.value.trim() })
   }
-  card.append(acts, instead)
+  card.appendChild(acts)
+  // what "Always allow" would save, in words, not only on hover
+  if (canAlways) card.appendChild(el('div', 'caskwhy caskalways', 'Always allow: ' + alwaysTip(a).split('\n').join('; ')))
+  card.appendChild(instead)
   return card
 }
 
@@ -1596,9 +1758,7 @@ if (!BOARD_MODE) {
       }
       case 'chatMoved': {
         // /clear: the chat goes on under a new id; the view follows it there
-        for (const k of ['state', 'echo', 'partial', 'notes', 'picks', 'side', 'mcp', 'drafts', 'images', 'files', 'sentLog', 'shell', 'todosFold']) {
-          if (CHAT[k].has(id)) { CHAT[k].set(m.to, CHAT[k].get(id)); CHAT[k].delete(id) }
-        }
+        moveChatState(id, m.to)
         CHAT.echo.delete(m.to)
         CHAT.here.set(m.to, { folder: '' })
         if (COMPOSER?.id === id) {
@@ -1617,7 +1777,14 @@ if (!BOARD_MODE) {
         break
       }
       case 'chatMcpList':
-        CHAT.mcp.set(id, Array.isArray(m.list) ? m.list : 'unavailable')
+        // only an open card takes it: one closed, even while it was still asking, stays closed
+        if (CHAT.mcp.has(id)) CHAT.mcp.set(id, Array.isArray(m.list) ? m.list : 'unavailable')
+        if (m.done) mcpDone(id, m.done, m.seq)
+        if (m.err) note(id, m.err, true)
+        break
+      case 'chatMcpDone':
+        mcpDone(id, m.name, m.seq)
+        if (m.err) note(id, m.err, true)
         break
       case 'chatTaskStopFailed':
         CHAT.stopping.delete(id + '|' + m.taskId)
@@ -1654,3 +1821,15 @@ if (!BOARD_MODE) {
     if (COMPOSER?.id === id) { placeLive(); paintComposer(); if (typeof paintRunner === 'function') paintRunner() }
   })
 }
+
+// Escape closes the /mcp card wherever focus is in the chat - after clicking a
+// switch, focus is on the card, not in the box. Fields and menus keep their own Escape.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return
+  if (e.target.closest?.('input, textarea, select, .ctx')) return
+  const id = COMPOSER?.id
+  if (!id || !CHAT.mcp.has(id)) return
+  e.preventDefault()
+  CHAT.mcp.delete(id)
+  paintLive()
+})

@@ -1271,7 +1271,9 @@ body.boardmode #tabs, body.boardmode #limits, body.boardmode #lnudges { display:
 .bsechead:empty { display: none }
 #view-board[data-filter="needs"] #sec-work, #view-board[data-filter="needs"] #sec-old,
 #view-board[data-filter="working"] #sec-needs, #view-board[data-filter="working"] #sec-old,
-#view-board[data-filter="earlier"] #sec-needs, #view-board[data-filter="earlier"] #sec-work { display: none }
+#view-board[data-filter="earlier"] #sec-needs, #view-board[data-filter="earlier"] #sec-work,
+#view-board[data-filter="needs"] #sec-idle, #view-board[data-filter="working"] #sec-idle,
+#view-board[data-filter="earlier"] #sec-idle { display: none }
 #bwork { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; align-items: start }
 /* a working chat: title, what it is doing, what you asked - nothing to answer yet */
 .bcard.slim .bcask { padding-bottom: 10px }
@@ -1368,6 +1370,13 @@ body.boardmode #tabs, body.boardmode #limits, body.boardmode #lnudges { display:
 .boldtitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500 }
 .boldage { flex: none; font-size: 11px; color: var(--vscode-descriptionForeground) }
 #bold > .bcard { margin: 0 0 6px 20px }
+/* open chats with no Claude: quieter than the waiting ones above */
+#bidle:empty { display: none }
+.bidle-row { width: 100%; text-align: left; font: inherit; color: inherit; background: none;
+  border-color: transparent; padding-top: 6px; padding-bottom: 6px }
+.bidle-row:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px }
+.bidle-row .boldtitle { font-weight: 400; color: var(--vscode-descriptionForeground) }
+.bidle-row:hover .boldtitle { color: var(--vscode-foreground) }
 
 /* in the sidebar, refresh lives in the view's own title bar beside open-in-editor */
 body[data-mode="sidebar"] #rescan { display: none !important }
@@ -1697,10 +1706,40 @@ body[data-chat] .dback, body[data-chat] .newinchat { display: none !important }
 .chatside .shcmd { flex: 1 1 auto; min-width: 0 }
 .chatside .bgkind { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; opacity: .7 }
 .chatside .bubble { margin-top: 4px; white-space: pre-wrap }
-.mcprow { display: flex; align-items: center; gap: 8px; padding: 2px 0 }
-.mcpdot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-descriptionForeground) }
-.mcprow.ok .mcpdot { background: #4caf50 }
-.mcprow.bad .mcpdot { background: var(--vscode-errorForeground) }
+.mcpcard { border-style: solid; padding: 0; overflow: hidden }
+.mcpcard .shhead { padding: 6px 10px; border-bottom: 1px solid var(--vscode-panel-border) }
+.mcpsum { font-size: 11px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.mcplist { max-height: min(50vh, 360px); overflow-y: auto; padding: 2px 0 6px }
+.mcpgroup { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 10px 2px; border: 0; background: none;
+  color: var(--vscode-descriptionForeground); font: inherit; font-size: 11px; cursor: pointer; text-align: left }
+.mcpgroup:hover { color: var(--vscode-foreground) }
+.mcpgroup:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px }
+.mcpcount { opacity: .7 }
+.mcpgroup .chev2 { width: 10px; text-align: center }
+.mcprow { display: flex; align-items: center; gap: 8px; min-height: 24px; padding: 0 10px 0 24px }
+.mcprow:hover { background: var(--vscode-list-hoverBackground) }
+.mcpdot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--vscode-descriptionForeground); opacity: .6 }
+.mcprow.ok .mcpdot { background: var(--vscode-testing-iconPassed, #4caf50); opacity: 1 }
+.mcprow.bad .mcpdot { background: var(--vscode-errorForeground); opacity: 1 }
+.mcprow.auth .mcpdot { background: var(--vscode-editorWarning-foreground, #cca700); opacity: 1 }
+.mcpname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.mcprow.off .mcpname { color: var(--vscode-descriptionForeground) }
+.mcpfrom { flex: none; font-size: 10px; color: var(--vscode-descriptionForeground) }
+.mcpstate { margin-left: auto; font-size: 11px; color: var(--vscode-descriptionForeground) }
+.mcplink { margin-left: auto; flex: none; border: 0; background: none; padding: 0 2px; font: inherit; font-size: 11px;
+  color: var(--vscode-textLink-foreground); cursor: pointer }
+.mcplink:hover { text-decoration: underline }
+.mcprow > .mcpswitch { flex: none }
+.mcprow > .mcpname + .mcpswitch, .mcprow > .mcpfrom + .mcpswitch { margin-left: auto }
+.mcpswitch { position: relative; width: 26px; height: 14px; border-radius: 7px; border: 0; padding: 0; cursor: pointer;
+  background: var(--vscode-input-border, rgba(127,127,127,.4)) }
+.mcpswitch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--vscode-foreground); opacity: .8; transition: transform .12s }
+.mcpswitch.on { background: var(--vscode-button-background) }
+.mcpswitch.on::after { transform: translateX(12px); background: var(--vscode-button-foreground); opacity: 1 }
+.mcpswitch:disabled, .mcpswitch[aria-disabled="true"] { opacity: .4; cursor: default }
+.mcpswitch:focus-visible, .mcplink:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px }
+@media (prefers-reduced-motion: reduce) { .mcpswitch::after { transition: none } }
 /* a question's choice with a preview */
 .caskpreview { margin: 6px 0 0; font-size: 11px; text-align: left; white-space: pre-wrap; font-family: var(--vscode-editor-font-family) }
 .bgtask .bgnow { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }

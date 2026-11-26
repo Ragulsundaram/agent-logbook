@@ -25,8 +25,12 @@ you want it to match the Agent Logbook title.
 **Chat from the logbook.** A box under every Claude chat lets you carry on
 talking to it without a terminal: the reply streams in as it is written, and
 file edits, commands, questions and plans wait for you as cards you approve,
-deny or answer. Pick the model, effort and permission mode per chat, stop a
-reply with Escape, paste images and use slash commands. The + button starts a
+deny or answer. Pick the model, effort and permission mode per chat (Shift+Tab in
+the box switches the mode for that chat only; new chats start on the last one picked
+from the menu), stop a
+reply with Escape, paste images and use slash commands. `/mcp` lists the
+chat's MCP servers and, as in the terminal, can turn one off or on for the
+folder, reconnect one that failed, or sign in to one. The + button starts a
 new chat here or in a terminal. This runs your own installed Claude Code in the
 background (`claude -p` with streaming input and output), so your login,
 settings, MCP servers and CLAUDE.md apply as usual, and it writes the same
@@ -107,10 +111,13 @@ kept in the editor's own extension storage until the next one.
 As in Claude's own editor panel, a message you send from the logbook also tells
 Claude which file you have open and the lines you have selected (the line above
 the box shows what goes, with Leave out for one message, and
-`claudeHistory.chatEditorContext` turns it off). Before Claude reads or edits a
-file you have open with unsaved changes, the logbook saves it, and after an
+`claudeHistory.chatEditorContext` turns it off). Before Claude edits a
+file you have open with unsaved changes, the logbook saves it (reading one
+never saves it; Claude reads what is on disk), and after an
 edit it passes on any new errors the editor reports in that file. Files you
 attach go to Claude with the message: PDFs as they are, text files as their text.
+A message carries up to 8 pictures and 8 files; anything past that is named in a
+note rather than dropped silently.
 
 ## Settings
 

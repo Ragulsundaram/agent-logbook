@@ -554,7 +554,8 @@ function dismissOn (menu, close) {
   // a click inside the menu is the action itself - those items close it themselves
   const onClick = e => { if (!menu.contains(e.target)) kill() }
   const onCtx = e => { if (!menu.contains(e.target)) kill() }
-  const onKey = e => { if (e.key === 'Escape') kill() }
+  // Escape is spent on the menu: nothing else closes on the same press
+  const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); kill() } }
   const scrollers = [...document.querySelectorAll('#rows, .msgs, #memrows, .view')]
   setTimeout(() => {
     document.addEventListener('click', onClick, true)
@@ -942,8 +943,9 @@ function messageMatches (q) {
     chev.textContent = hits.hidden ? '›' : '⌄'
     for (const h of c.hits) {
       const line = el('div', 'fhit' + (h.role === 'user' ? ' you' : ''))
-      const WHO = { user: 'You', assistant: 'Claude', agent: 'Agent', session: 'Session' }
-      line.append(el('span', 'who', WHO[h.role] || 'Claude'), mark(h.text, q))
+      const ai = c.provider === 'codex' ? 'Codex' : 'Claude'
+      const WHO = { user: 'You', assistant: ai, agent: 'Agent', session: 'Session' }
+      line.append(el('span', 'who', WHO[h.role] || ai), mark(h.text, q))
       line.onclick = () => openAt(c.id, q)
       hits.appendChild(line)
     }
@@ -1461,7 +1463,7 @@ function renderBlocks (t, blocks, from, body, to = blocks.length, before = null)
         }))
       }
       // today's messages show just the time; the full date is on hover
-      const who = el('span', 'whot', (turn.role === 'user' ? 'You' : 'Claude') + (turn.ts ? ' · ' + msgClock(turn.ts) : ''))
+      const who = el('span', 'whot', (turn.role === 'user' ? 'You' : t.provider === 'codex' ? 'Codex' : 'Claude') + (turn.ts ? ' · ' + msgClock(turn.ts) : ''))
       if (turn.ts) who.title = clock(turn.ts)
       when.appendChild(who)
       w.appendChild(when)
@@ -3373,6 +3375,7 @@ window.addEventListener('message', e => {
     const on = new Set(m.data.map(c => c.id))
     BOARD_ELSEWHERE = new Set(SESSIONS.filter(x => x.live && !on.has(x.id)).map(x => x.id))
     keepTyping(() => renderBoard(m.data))
+    renderOpenIdle(m.open || [])
   }
   if (m.type === 'sessions' && BOARD_MODE) keepTyping(() => syncBoard(m.data))
   if (m.type === 'boardReplied') boardReplied(m)
@@ -3960,8 +3963,9 @@ function boardMeta (list) {
   const fresh = list.filter(c => sectionOf(c) === 'needs' && isNew(c)).length
   const bar = $('#bmeta')
   bar.replaceChildren()
-  if (!list.length) return
-  for (const [key, label] of [['all', 'All'], ['needs', 'Needs you'], ['working', 'Working'], ['earlier', 'Earlier']]) {
+  // no running chats means no filter bar, so no filter either: one left on would hide the rest for good
+  if (!list.length) { BFILTER = 'all'; $('#view-board').dataset.filter = 'all'; return }
+  for (const [key, label] of [['needs', 'Needs you'], ['working', 'Working'], ['earlier', 'Earlier'], ['all', 'All']]) {
     if (key !== 'all' && !n[key]) continue
     const b = el('button', 'bfilter' + (BFILTER === key ? ' on' : ''))
     b.append(el('span', '', label), el('em', '', String(n[key])))
@@ -4071,6 +4075,32 @@ const OLD_MS = 24 * 3600e3
 const STALE = new Map()            // chats folded into one line: id -> its data
 const UNFOLDED = new Set()         // folded chats opened back up to a full card
 const isStale = c => c.status !== 'busy' && Date.now() - (c.replyTs || c.lastTs || 0) > OLD_MS
+
+/**
+ * Chats open in a tab or the sidebar with no Claude running, one quiet line
+ * each at the bottom, so the board accounts for every chat you can see. A
+ * click goes to where it is open; it starts again when you send it a message.
+ */
+let IDLE_SIG = ''
+function renderOpenIdle (list) {
+  const wrap = $('#bidle')
+  // asked again every few seconds: the same list is left as it is, so keyboard focus stays put
+  const sig = JSON.stringify(list.map(c => [c.id, c.at, c.title]))
+  if (sig === IDLE_SIG) return
+  IDLE_SIG = sig
+  if (!list.length) { wrap.replaceChildren(); return }
+  const rows = [el('div', 'bsechead', `Open, not running · ${list.length}`)]
+  for (const c of list) {
+    const row = el('button', 'bold-row bidle-row')
+    row.dataset.id = c.id
+    const at = { tab: 'In a tab', sidebar: 'In the sidebar', panel: 'In the logbook tab' }[c.at] || 'Open'
+    row.title = `Go to it. Claude starts again when you send a message.`
+    row.append(sourceIcon(c.provider || 'claude'), el('span', 'boldtitle', c.title), el('span', 'boldage', at))
+    row.onclick = () => send({ type: 'showOpen', id: c.id })
+    rows.push(row)
+  }
+  wrap.replaceChildren(...rows)
+}
 
 /** Chats left waiting more than a day, one line each under the cards; a click opens one up. */
 function renderStale (list) {

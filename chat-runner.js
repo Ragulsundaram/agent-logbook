@@ -282,10 +282,10 @@ function start (id, { cwd, fresh, forkOf, model, mode, effort, dirs, allowBypass
     OPTS.onChange(id)
   }
   const init = { subtype: 'initialize', supportedDialogKinds: ['auto_mode_server_fallback'] }
-  // the editor's part: unsaved files saved before Claude reads or edits them, new problems told after an edit
+  // the editor's part: unsaved files saved before Claude edits them, new problems told after an edit
   if (OPTS.onHook) {
     init.hooks = {
-      PreToolUse: [{ matcher: 'Edit|Write|MultiEdit|Read|NotebookEdit', hookCallbackIds: ['lb_save'] }],
+      PreToolUse: [{ matcher: 'Edit|Write|MultiEdit|NotebookEdit', hookCallbackIds: ['lb_save'] }],
       PostToolUse: [{ matcher: 'Edit|Write|MultiEdit|NotebookEdit', hookCallbackIds: ['lb_problems'] }],
     }
   }
@@ -304,7 +304,8 @@ function control (r, request, onAnswer, wait = 10000) {
   // an answer that never comes still calls back, so nothing waits for ever
   if (onAnswer) {
     const t = setTimeout(() => { if (r.waits.delete(request_id)) onAnswer(null) }, wait)
-    r.waits.set(request_id, res => { clearTimeout(t); onAnswer(res) })
+    // the reason Claude gave for a refusal goes along, not just the empty answer
+    r.waits.set(request_id, (res, err) => { clearTimeout(t); onAnswer(res, err) })
   }
   write(r, { type: 'control_request', request_id, request })
   return request_id
@@ -547,7 +548,7 @@ function onLine (r, m) {
     case 'control_response': {
       const res = m.response || {}
       const cb = r.waits.get(res.request_id)
-      if (cb) { r.waits.delete(res.request_id); try { cb(res.subtype === 'success' ? res.response || {} : null) } catch {} return }
+      if (cb) { r.waits.delete(res.request_id); try { cb(res.subtype === 'success' ? res.response || {} : null, res.subtype === 'success' ? '' : String(res.error || '')) } catch {} return }
       if (res.request_id === 'init' && res.subtype === 'success') {
         learn(res.response)
         FROM_CHAT = true
@@ -925,6 +926,26 @@ function mcpStatus (id, done) {
   control(r, { subtype: 'mcp_status' }, res => done(Array.isArray(res?.mcpServers) ? res.mcpServers.map(x => ({ name: String(x.name || ''), status: String(x.status || '') })) : null))
 }
 
+/**
+ * What /mcp offers in the terminal, for one server of this chat: turn it off or
+ * on (Claude keeps that for the folder, as /mcp does), reconnect it, or start its sign-in. done gets
+ * { ok, res } or { ok: false, err }.
+ */
+const MCP_ACTS = {
+  on: name => ({ subtype: 'mcp_toggle', serverName: name, enabled: true }),
+  off: name => ({ subtype: 'mcp_toggle', serverName: name, enabled: false }),
+  reconnect: name => ({ subtype: 'mcp_reconnect', serverName: name }),
+  signin: name => ({ subtype: 'mcp_authenticate', serverName: name }),
+}
+function mcpAct (id, act, name, done) {
+  const r = RUNS.get(id)
+  if (!r) return done({ ok: false, err: 'This chat is not running here. Send a message, then try again.' })
+  if (!Object.hasOwn(MCP_ACTS, act)) return done({ ok: false, err: 'Unknown action.' })
+  // reconnecting and signing in reach out to the server, so they get longer
+  control(r, MCP_ACTS[act](name), (res, err) => done(res ? { ok: true, res } : { ok: false, err: err || 'Claude did not answer.' }),
+    act === 'on' || act === 'off' ? 15000 : 60000)
+}
+
 function stop (id, now) {
   DEFERRED.delete(id)                 // a send still waiting to start is cancelled too
   cancelWake(id)                      // and so is a start for /mcp or /btw, answered at once
@@ -980,4 +1001,4 @@ const askOf = (id, requestId) => RUNS.get(id)?.asks.get(requestId) || null
 /** The folder Claude runs in for this chat, when it runs here. */
 const cwdOf = id => RUNS.get(id)?.cwd || ''
 
-module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, mcpStatus, release, wake, setModel, setMode, setEffort, stop, stopAll, markEnded }
+module.exports = { init, probe, seedKnown, cwdOf, askOf, has, endedRecently, liveMap, state, send, answer, interrupt, stopTask, taskOutput, cancelQueued, sideQuestion, setThinking, mcpStatus, mcpAct, release, wake, setModel, setMode, setEffort, stop, stopAll, markEnded }
