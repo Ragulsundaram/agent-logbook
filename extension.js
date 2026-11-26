@@ -162,6 +162,7 @@ function watchTranscripts (ctx) {
  * query's result is delivered - anything older has been typed past.
  */
 let SEARCHER = null, searchSeq = 0
+const searchLatest = new WeakMap()     // who asked -> its newest search id; one asker never supersedes another
 const searchWaiting = new Map()
 
 function searcher () {
@@ -242,10 +243,11 @@ function callOn (lane, fn, args) {
 const chatCall = (fn, ...args) => callOn('main', fn, args)
 const liveCall = (fn, ...args) => callOn('live', fn, args)
 
-function runSearch (q, post, limit) {
+function runSearch (q, post, limit, who = post) {
   // the webview asks for more chats 60 at a time; it is still a message, so bound it
   limit = Math.min(5000, Math.max(60, Math.floor(+limit) || 60))
   const id = ++searchSeq
+  searchLatest.set(who, id)
   let w
   try { w = searcher() } catch {
     post({ type: 'results', q, data: scan.search(q, { limit }) })    // no worker, do it here
@@ -262,7 +264,7 @@ function runSearch (q, post, limit) {
   searchWaiting.set(id, m => {
     if (m.chat) { found.push(m.chat); last = m.at || last }
     else { clearTimeout(watchdog); searchWaiting.delete(id) }
-    if (id !== searchSeq) return                          // typed past this one
+    if (id !== searchLatest.get(who)) return              // typed past this one
     if (m.error) {
       const qq = String(q).trim().toLowerCase()
       post({ type: 'results', q: qq, data: { q: qq, chats: found, matches: last.matches || 0,
@@ -280,6 +282,7 @@ function runSearch (q, post, limit) {
 const hereNames = () => (vscode.workspace.workspaceFolders || []).map(f => scan.projectName(f.uri.fsPath))
 
 let WATCH = null
+const AGENT_NAV = new WeakMap()        // view -> its newest agent request, so an older read cannot land over it
 // every open view - the sidebar and any editor tabs - so a refresh reaches all of them
 const VIEWS = new Set()
 const broadcast = m => { for (const post of VIEWS) post(m) }
@@ -2019,7 +2022,11 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             // parent chat's live refresh would draw over it, so stop that until back
             {
               const was = WATCH?.openOf(post)
+              const tok = (AGENT_NAV.get(post) || 0) + 1
+              AGENT_NAV.set(post, tok)
               const data = await chatCall('agentTranscript', msg.id, msg.agentId)
+              // a later agent was asked for meanwhile: only the newest request lands
+              if (AGENT_NAV.get(post) !== tok) break
               // another chat opened in this view while it was read: that one stays
               if (WATCH && WATCH.openOf(post) !== was) break
               // no thread to show yet: the chat stays as it is, refresh and all
@@ -2601,9 +2608,15 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             // A named place (a terminal, the app) is a move, and asks to stop it first.
             // Resume set to the logbook opens it the same way, with its message box ready
             const target = resolveTarget(s, msg.target)
+            // the default is the logbook, but a chat already running in one of
+            // this window's terminals is that terminal: show it rather than a copy
+            if (target === 'logbook' && !msg.target && live[s.id] && !runner.has(s.id)) {
+              const term = await terminalForSession(s.id, false)
+              if (term) { resumeInTerminal(s, false, term); break }
+            }
             if (target === 'logbook' || (runner.has(s.id) && (!msg.target || msg.open))) {
               if (CHAT_TABS.has(s.id) || mode === 'board' || mode === 'chat') openChatTab(ctx, s.id, false)
-              else post({ type: 'openHere', id: s.id })
+              else post({ type: 'openHere', id: s.id, q: typeof msg.q === 'string' ? msg.q.slice(0, 200) : '' })
               break
             }
             // two Claudes writing one chat would tangle it, so the logbook's lets go first
@@ -3172,7 +3185,7 @@ async function findChat (ctx) {
         if (m.chat) found.push(m.chat)
         else if (m.data) { found = m.data.chats || found; qp.busy = false }
         schedule()
-      }, 60)
+      }, 60, qp)
     }, 250)
   })
   const go = async (item, beside) => {

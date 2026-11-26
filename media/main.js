@@ -935,8 +935,8 @@ function messageMatches (q) {
     resume.title = 'Resume this chat'
     resume.onclick = e => {
       e.stopPropagation()
-      if (resumeKey() === 'logbook' && c.provider !== 'codex') openAt(c.id, q)
-      else send({ type: 'resume', id: c.id })
+      // the host decides where it goes; set to the logbook, it opens at the match
+      send({ type: 'resume', id: c.id, q })
     }
     const open = el('button', 'fopen', 'Open')
     open.onclick = e => { e.stopPropagation(); openAt(c.id, q) }
@@ -3364,7 +3364,7 @@ window.addEventListener('message', e => {
   }
   if (CHAT_ONLY && m.type === 'session' && m.data && m.data.id !== CHAT_ONLY && m.data.sessionId !== CHAT_ONLY) return
   // Resume on a chat running here: open it, as a click on its row would
-  if (m.type === 'openHere' && m.id) { PERF = { id: m.id, t0: performance.now() }; send({ type: 'session', id: m.id }) }
+  if (m.type === 'openHere' && m.id) { JUMP = typeof m.q === 'string' ? m.q : ''; PERF = { id: m.id, t0: performance.now() }; send({ type: 'session', id: m.id }) }
   if (m.type === 'env' && BOARD_MODE && m.cfg) send({ type: 'board' })
   if (m.type === 'env') {
     // partial env messages (a group edit, a settings snapshot) leave it alone
