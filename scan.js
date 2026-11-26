@@ -20,7 +20,7 @@ function writePrivate (file, data) {
 const mkdirPrivate = dir => { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); try { fs.chmodSync(dir, 0o700) } catch {} }
 // Bump whenever a summary field changes shape. A cache written by an older build is
 // then ignored rather than quietly feeding the new code fields it never wrote.
-const CACHE_V = 18
+const CACHE_V = 19
 const VSDB = path.join(HOME, 'Library', 'Application Support', 'Cursor',
   'User', 'globalStorage', 'state.vscdb')
 
@@ -349,7 +349,7 @@ function codexImported () {
 }
 
 // the harness talks to itself through the user role too
-const CODEX_JUNK = /^\s*<(environment_context|user_instructions|ide_opened_file|permissions instructions|turn_aborted)/
+const CODEX_JUNK = /^\s*(<(environment_context|user_instructions|ide_opened_file|permissions instructions|turn_aborted)|# AGENTS\.md instructions\b)/
 
 /** Every Codex rollout file. Nested year/month/day, so walk rather than list. */
 function codexFiles () {
@@ -3056,4 +3056,5 @@ try {
 
 module.exports = {
   writePrivate, mkdirPrivate, board, textOf, summariseForTest: summariseFile, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
-  readOnlyCache, saveCacheNow, groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME }
+  readOnlyCache, saveCacheNow, groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME,
+  summariseCodexForTest: summariseCodex }

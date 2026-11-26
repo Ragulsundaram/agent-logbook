@@ -3060,26 +3060,98 @@ function agoText (ts) {
 }
 const LIVE_WORDS = { busy: 'working', waiting: 'needs you', idle: 'open' }
 
+// which day-group a chat falls in, by the calendar rather than hours ago
+function dayGroup (ts) {
+  const start = new Date(); start.setHours(0, 0, 0, 0)
+  const day = 864e5, t = ts || 0
+  if (t >= start.getTime()) return 'Today'
+  if (t >= start.getTime() - day) return 'Yesterday'
+  if (t >= start.getTime() - 6 * day) return 'This week'
+  if (t >= start.getTime() - 29 * day) return 'This month'
+  return 'Older'
+}
+// a title is shown as text: "$(name)" would otherwise draw an icon
+const plainLabel = t => String(t || '(untitled)').replace(/\$\(/g, '$​(')
+
 /**
  * Cursor's own search box over every chat, so an older one is a shortcut away
- * with the sidebar closed. Most recent first; typing matches title or folder.
+ * with the sidebar closed. Running chats first, then the rest by day; each row
+ * carries its agent's logo. Typing matches title or folder, and from three
+ * letters on also finds chats that mention the words, under their own heading.
  * A Claude chat opens in its own tab, a Codex one goes back to its terminal.
  */
 async function findChat (ctx) {
   const chats = scan.sessionList(live).sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))
   if (!chats.length) { vscode.window.showInformationMessage('No chats yet.'); return }
   const side = { iconPath: new vscode.ThemeIcon('split-horizontal'), tooltip: 'Open to the side' }
-  const qp = vscode.window.createQuickPick()
-  qp.title = 'Find a chat'
-  qp.placeholder = 'Type part of a chat title or folder'
-  qp.matchOnDescription = true
-  qp.items = chats.map(s => ({
-    label: (s.live ? '$(pulse) ' : '') + s.title,
-    description: [LIVE_WORDS[s.live] || '', s.project, s.provider === 'codex' ? 'Codex' : '',
+  const logo = {
+    claude: vscode.Uri.joinPath(ctx.extensionUri, 'media', 'pick-claude.svg'),
+    codex: vscode.Uri.joinPath(ctx.extensionUri, 'media', 'pick-codex.svg'),
+  }
+  // the folder is noise on every row when it is the one this window has open
+  const here = new Set((vscode.workspace.workspaceFolders || []).map(f => f.name))
+  const row = (s, extra) => ({
+    label: plainLabel(s.title),
+    iconPath: logo[s.provider === 'codex' ? 'codex' : 'claude'],
+    description: [LIVE_WORDS[s.live] || '', here.has(s.project) ? '' : s.project,
       s.archived ? 'archived' : '', agoText(s.lastTs)].filter(Boolean).join(' · '),
     buttons: s.provider === 'codex' ? [] : [side],
     s,
-  }))
+    ...extra,
+  })
+  const sep = label => ({ label, kind: vscode.QuickPickItemKind.Separator })
+  const base = []
+  const running = chats.filter(s => s.live)
+  if (running.length) base.push(sep('Running now'), ...running.map(s => row(s)))
+  let group = ''
+  for (const s of chats) {
+    if (s.live) continue
+    const g = dayGroup(s.lastTs)
+    if (g !== group) { base.push(sep(g)); group = g }
+    base.push(row(s))
+  }
+
+  const qp = vscode.window.createQuickPick()
+  qp.title = 'Find a chat'
+  qp.placeholder = 'Type a title, a folder, or words from inside a chat'
+  qp.matchOnDescription = true
+  qp.items = base
+
+  // words from inside chats: the same search the logbook's search box runs
+  const byId = new Map(chats.map(s => [s.id, s]))
+  let typed = '', timer = null, found = [], paintTimer = null
+  const paint = () => {
+    const q = typed.toLowerCase()
+    const extra = found
+      .filter(c => byId.has(c.id) && !String(c.title || '').toLowerCase().includes(q))
+      .slice(0, 30)
+      .map(c => row(byId.get(c.id), {
+        alwaysShow: true,
+        // headings drop away while typing, so the line itself says why it is here
+        detail: '$(search) ' + plainLabel((c.hits?.[0]?.text || 'mentions it').replace(/\s+/g, ' ').trim().slice(0, 160)),
+      }))
+    const keep = qp.activeItems[0]?.s?.id
+    qp.items = extra.length ? [...base, sep('Mentioned in'), ...extra] : base
+    const again = keep && qp.items.find(i => i.s?.id === keep)
+    if (again) qp.activeItems = [again]
+  }
+  const schedule = () => { clearTimeout(paintTimer); paintTimer = setTimeout(paint, 120) }
+  qp.onDidChangeValue(v => {
+    clearTimeout(timer)
+    typed = v.trim()
+    found = []
+    if (typed.length < 3) { qp.busy = false; schedule(); return }
+    const q = typed
+    timer = setTimeout(() => {
+      qp.busy = true
+      runSearch(q, m => {
+        if (typed !== q || m.type !== 'results') return
+        if (m.chat) found.push(m.chat)
+        else if (m.data) { found = m.data.chats || found; qp.busy = false }
+        schedule()
+      }, 60)
+    }, 250)
+  })
   const go = async (item, beside) => {
     qp.hide()
     if (!item) return
@@ -3098,7 +3170,7 @@ async function findChat (ctx) {
   }
   qp.onDidAccept(() => go(qp.selectedItems[0], false))
   qp.onDidTriggerItemButton(e => go(e.item, true))
-  qp.onDidHide(() => qp.dispose())
+  qp.onDidHide(() => { typed = '\0'; clearTimeout(timer); clearTimeout(paintTimer); qp.dispose() })
   qp.show()
 }
 

@@ -14,8 +14,10 @@ file diffs each edit made. Search across every transcript, not just titles.
 
 **Find one fast.** Ctrl+Cmd+H (Ctrl+Alt+H on Windows and Linux), or "Agent
 Logbook: Find a Chat…" in the Command Palette, opens a search box over every
-chat, even with the sidebar closed. The most recent come first, running ones are
-marked, and typing matches a chat's title or folder. Enter opens the chat in its
+chat, even with the sidebar closed. Running chats come first, then the rest under
+Today, Yesterday and older headings, each with its agent's logo. Typing matches a
+chat's title or folder, and from three letters on also finds chats that mention
+the words, with the line that matched. Enter opens the chat in its
 own tab; the button on a row opens it to the side. A Codex chat goes back to its
 terminal.
 

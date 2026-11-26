@@ -79,3 +79,22 @@ test('a failed edit whose id is __proto__ still comes off the counts', () => {
     assert.deepEqual(Object.keys(s.files), [])
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('a Codex chat is titled by the first message typed, not the instructions sent ahead of it', () => {
+  const { summariseCodexForTest } = require('../scan.js')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-title-'))
+  try {
+    const file = path.join(dir, 'rollout-2026-01-01T00-00-00-abc.jsonl')
+    const user = text => ({ timestamp: '2026-01-01T00:00:01Z', type: 'response_item',
+      payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } })
+    fs.writeFileSync(file, [
+      { type: 'session_meta', payload: { id: 'abc', cwd: '/tmp/example' } },
+      user('# AGENTS.md instructions for /tmp/example\n\n<INSTRUCTIONS>\nBe brief.\n</INSTRUCTIONS>'),
+      user('<environment_context>\n<cwd>/tmp/example</cwd>\n</environment_context>'),
+      user('Rename the helper in utils'),
+    ].map(l => JSON.stringify(l)).join('\n') + '\n')
+    const s = summariseCodexForTest(file)
+    assert.equal(s.title, 'Rename the helper in utils')
+    assert.equal(s.turns, 1)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
