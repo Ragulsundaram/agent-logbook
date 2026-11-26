@@ -1067,9 +1067,13 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 .seclabel { display: block; margin: 16px 0 6px; font-size: 11px; font-weight: 500;
   color: var(--vscode-descriptionForeground) }
 
-.setrow { display: flex; align-items: center; gap: 12px; padding: 12px 0 }
+/* in a narrow sidebar the control drops under its text instead of squeezing
+   the text into a column one word wide */
+.setrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 0 }
 .setrow + .setrow { border-top: 1px solid var(--vscode-panel-border) }
-.settxt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px }
+.settxt { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 1px }
+.setrow > .swrap, .setrow > .stepper { margin-left: auto }
+.setrow > select { flex: 0 1 auto; max-width: 100%; min-width: 0; text-overflow: ellipsis }
 .settxt b { font-size: 13px; font-weight: 500 }
 .settxt em { font-style: normal; font-size: 11px;
   color: var(--vscode-descriptionForeground) }
