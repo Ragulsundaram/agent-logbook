@@ -1600,6 +1600,13 @@ function updateLive (t) {
   const facts = $('#detail .dhead .facts')
   if (facts) facts.textContent = chatFacts(t)
   CUR = t
+  // an agent thread's status and its Copy result move too: it finishes while you watch
+  if (t.isAgent) {
+    const st = $('#detail .dtop .astate')
+    if (st && t.status) { st.textContent = t.status; st.className = 'astate ' + statusClass(t.status) }
+    const acts = $('#detail .dhead > .acts')
+    if (acts) acts.replaceWith(agentActs(t))
+  }
   // the footer numbers and the agents button move with every reply
   const d = $('#detail')
   // The footer's numbers are swapped in place rather than the footer replaced:

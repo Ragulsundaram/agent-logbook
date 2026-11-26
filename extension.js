@@ -63,6 +63,7 @@ function watchTranscripts (ctx) {
   // stopped refreshing until the chat was opened again
   let timer = null, lastRun = 0
   const open = new Map()
+  const opened = new WeakMap()  // view -> how many times a chat was opened in it, so a slow live read never lands over a newer open
   const touched = new Set()
   const dirty = new Set()       // chat ids known to have changed, whatever noticed it
   const files = new Map()       // open chat id -> its transcript and how it last looked
@@ -91,12 +92,16 @@ function watchTranscripts (ctx) {
     touched.clear(); dirty.clear()
     const fresh = new Map()
     for (const [post, id] of open) {
-      // an agent's thread is open as "chat#agent", and its file is named agent-<agent>
+      // an agent's thread is open as "chat#agent", and its file is named agent-<agent>;
+      // its finish is written to the parent chat, so a change there refreshes it too
       const [sid, aid] = id.split('#')
-      if (!ids.has(id) && !(aid && ids.has('agent-' + aid))) continue
+      if (!ids.has(id) && !(aid && (ids.has('agent-' + aid) || ids.has(sid)))) continue
+      const gen = opened.get(post)
       if (!fresh.has(id)) fresh.set(id, aid ? liveCall('agentTranscript', sid, aid) : liveCall('transcript', id))
       const data = await fresh.get(id)
       if (open.get(post) !== id) continue        // moved to another chat meanwhile
+      // reopened meanwhile: that read is newer than this one, so this one stays unposted
+      if (opened.get(post) !== gen) continue
       post({ type: 'session', data, live: true })
       const f = files.get(id)
       if (f) f.seen = stamp(f.file)
@@ -137,6 +142,7 @@ function watchTranscripts (ctx) {
     // an agent's thread passes its own file, as the index lists only chats
     setOpen: (post, id, agentFile) => {
       if (!post) return
+      opened.set(post, (opened.get(post) || 0) + 1)
       if (!id) { open.delete(post); return }
       open.set(post, id)
       if (!files.has(id)) {

@@ -2069,9 +2069,12 @@ function agentTranscript (id, agentId) {
   // followed live while the agent writes, so only what it added since the last
   // read is parsed, the way an open chat is; a file rewritten starts over
   let c = AGENT_PARSED.get(key)
-  let more = c && c.file === file ? readFrom(file, c.off) : null
+  // a file replaced rather than appended to, even by one of the same size,
+  // starts with different bytes: read it afresh instead of from the old offset
+  const head = headOf(file)
+  let more = c && c.file === file && c.head === head ? readFrom(file, c.off) : null
   if (!more) {
-    c = { file, off: 0, st: parseStart(true) }
+    c = { file, head, off: 0, st: parseStart(true) }
     more = readFrom(file, 0)
     if (!more) return null
   }
@@ -2668,6 +2671,17 @@ function board (live, folders) {
 const PARSED = new Map()          // id -> { file, off, st, signals }
 const PARSED_MAX = 3
 const AGENT_PARSED = new Map()    // 'chat#agent' -> the same, for agent threads, kept apart so they never push an open chat out
+
+/** The file's first bytes and its identity on disk: what an append leaves alone. */
+function headOf (file) {
+  let fd
+  try {
+    fd = fs.openSync(file, 'r')
+    const buf = Buffer.alloc(512)
+    const n = fs.readSync(fd, buf, 0, 512, 0)
+    return fs.fstatSync(fd).ino + ':' + buf.subarray(0, n).toString('base64')
+  } catch { return '' } finally { if (fd !== undefined) try { fs.closeSync(fd) } catch {} }
+}
 
 /** Whole lines from `off` to the end, and where the next read starts. */
 function readFrom (file, off) {
