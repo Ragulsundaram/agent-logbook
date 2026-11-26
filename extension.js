@@ -3104,47 +3104,66 @@ async function findChat (ctx) {
     ...extra,
   })
   const sep = label => ({ label, kind: vscode.QuickPickItemKind.Separator })
-  const base = []
-  const running = chats.filter(s => s.live)
-  if (running.length) base.push(sep('Running now'), ...running.map(s => row(s)))
-  let group = ''
-  for (const s of chats) {
-    if (s.live) continue
-    const g = dayGroup(s.lastTs)
-    if (g !== group) { base.push(sep(g)); group = g }
-    base.push(row(s))
+  // running first, then by day; `extra` marks rows the editor must not filter out
+  const grouped = (list, extra) => {
+    const out = []
+    const running = list.filter(s => s.live)
+    if (running.length) out.push(sep('Running now'), ...running.map(s => row(s, extra)))
+    let group = ''
+    for (const s of list) {
+      if (s.live) continue
+      const g = dayGroup(s.lastTs)
+      if (g !== group) { out.push(sep(g)); group = g }
+      out.push(row(s, extra))
+    }
+    return out
   }
+  const base = grouped(chats)
 
   const qp = vscode.window.createQuickPick()
   qp.title = 'Find a chat'
   qp.placeholder = 'Type a title, a folder, or words from inside a chat'
-  qp.matchOnDescription = true
+  // the matching is done here, not by the editor: its loose letter-by-letter
+  // match turns "sap" into "SuperPay Add", and it re-sorts by how well a title
+  // matches, so a chat from months ago could sit above this morning's
+  qp.matchOnDescription = false
+  qp.matchOnDetail = false
+  qp.sortByLabel = false
   qp.items = base
 
   // words from inside chats: the same search the logbook's search box runs
   const byId = new Map(chats.map(s => [s.id, s]))
   let typed = '', timer = null, found = [], paintTimer = null
-  const paint = () => {
-    const q = typed.toLowerCase()
-    const extra = found
-      .filter(c => byId.has(c.id) && !String(c.title || '').toLowerCase().includes(q))
-      .slice(0, 30)
-      .map(c => row(byId.get(c.id), {
-        alwaysShow: true,
-        // headings drop away while typing, so the line itself says why it is here
-        detail: '$(search) ' + plainLabel((c.hits?.[0]?.text || 'mentions it').replace(/\s+/g, ' ').trim().slice(0, 160)),
-      }))
-    const keep = qp.activeItems[0]?.s?.id
-    qp.items = extra.length ? [...base, sep('Mentioned in'), ...extra] : base
+  // a new word puts the top result under the cursor; results arriving later keep it where it is
+  const paint = (hold = false) => {
+    const keep = hold && qp.activeItems[0]?.s?.id
+    if (!typed) qp.items = base
+    else {
+      // every word typed must appear in the title or the folder, in any order
+      const words = typed.toLowerCase().split(/\s+/).filter(Boolean)
+      const hit = s => { const t = `${s.title || ''} ${s.project || ''}`.toLowerCase(); return words.every(w => t.includes(w)) }
+      const titled = chats.filter(hit)
+      const shown = new Set(titled.map(s => s.id))
+      const show = { alwaysShow: true }
+      const mentions = found
+        .filter(c => byId.has(c.id) && !shown.has(c.id))
+        .slice(0, 30)
+        .map(c => row(byId.get(c.id), {
+          ...show,
+          detail: '$(search) ' + plainLabel((c.hits?.[0]?.text || 'mentions it').replace(/\s+/g, ' ').trim().slice(0, 160)),
+        }))
+      qp.items = [...grouped(titled, show), ...(mentions.length ? [sep('Mentioned in'), ...mentions] : [])]
+    }
     const again = keep && qp.items.find(i => i.s?.id === keep)
     if (again) qp.activeItems = [again]
   }
-  const schedule = () => { clearTimeout(paintTimer); paintTimer = setTimeout(paint, 120) }
+  const schedule = () => { clearTimeout(paintTimer); paintTimer = setTimeout(() => paint(true), 120) }
   qp.onDidChangeValue(v => {
     clearTimeout(timer)
     typed = v.trim()
     found = []
-    if (typed.length < 3) { qp.busy = false; schedule(); return }
+    paint()                                    // titles at once, no flash of the editor's own matching
+    if (typed.length < 3) { qp.busy = false; return }
     const q = typed
     timer = setTimeout(() => {
       qp.busy = true
