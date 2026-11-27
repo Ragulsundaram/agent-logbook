@@ -4,7 +4,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { textOf, activityOf, summariseForTest } = require('../scan.js')
+const { textOf, summariseForTest, headForTest } = require('../scan.js')
 const msg = (...texts) => ({ entrypoint: 'sdk-cli', message: { role: 'user', content: texts.map(text => ({ type: 'text', text })) } })
 
 test('shows the editor context and attachments sent beside a message as short chips', () => {
@@ -38,55 +38,6 @@ test("leaves Claude's replies as written, marker-shaped or not", () => {
   assert.equal(textOf(reply), block + '\nthat is the format')
 })
 
-test("an agent's output shows its last step even when that step's result is huge", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lb-agent-'))
-  const file = path.join(dir, 'agent-test.jsonl')
-  const L = o => JSON.stringify(o)
-  fs.writeFileSync(file, [
-    L({ type: 'user', message: { role: 'user', content: 'run the checks' } }),
-    L({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'npm test' } }] } }),
-    L({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: 'boom\n' + 'x'.repeat(700 * 1024) }] } }),
-  ].join('\n') + '\n')
-  try {
-    const out = activityOf(file)
-    assert.match(out, /› Bash: npm test {2}\(failed\)/)
-    assert.match(out, /boom/)
-  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
-})
-
-test("an agent's output keeps a recent failure whose call is far back", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lb-agent-'))
-  const file = path.join(dir, 'agent-test.jsonl')
-  const L = o => JSON.stringify(o)
-  // the call, then a long stretch of other records, then its failing result near the end
-  const filler = Array.from({ length: 300 }, (_, k) => L({ type: 'user', isMeta: true, message: { role: 'user', content: 'note ' + k + ' ' + 'y'.repeat(4000) } }))
-  fs.writeFileSync(file, [
-    L({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't9', name: 'Bash', input: { command: 'make build' } }] } }),
-    ...filler,
-    L({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't9', is_error: true, content: 'build broke' }] } }),
-  ].join('\n') + '\n')
-  try {
-    const out = activityOf(file)
-    assert.match(out, /› Bash: make build {2}\(failed\)/)
-    assert.match(out, /build broke/)
-  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
-})
-
-test("a whole agent file in another script is not marked as cut short", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lb-agent-'))
-  const file = path.join(dir, 'agent-test.jsonl')
-  const L = o => JSON.stringify(o)
-  fs.writeFileSync(file, [
-    L({ type: 'user', message: { role: 'user', content: 'Résumé der Änderungen 日本語' } }),
-    L({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Fertig: 完了' }] } }),
-  ].join('\n') + '\n')
-  try {
-    const out = activityOf(file)
-    assert.doesNotMatch(out, /earlier steps left out/)
-    assert.match(out, /完了/)
-  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
-})
-
 test('an attachment-shaped block from another client is left as written', () => {
   const block = '<attached-file name="example.txt">\nhello\n</attached-file>'
   const other = { type: 'user', entrypoint: 'cli', message: { role: 'user', content: [{ type: 'text', text: block }, { type: 'text', text: 'see above' }] } }
@@ -95,25 +46,6 @@ test('an attachment-shaped block from another client is left as written', () => 
   assert.equal(textOf(here), '📎 example.txt\nsee above')
   const unknown = { type: 'user', message: other.message }
   assert.equal(textOf(unknown), block + '\nsee above')
-})
-
-test("an agent's output keeps a recent failure even with another step between it and its far-back call", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lb-agent-'))
-  const file = path.join(dir, 'agent-test.jsonl')
-  const L = o => JSON.stringify(o)
-  const filler = n => Array.from({ length: n }, (_, k) => L({ type: 'user', isMeta: true, message: { role: 'user', content: 'note ' + k + ' ' + 'y'.repeat(4000) } }))
-  fs.writeFileSync(file, [
-    L({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_far', name: 'Bash', input: { command: 'make build' } }] } }),
-    ...filler(300),
-    L({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'still waiting on the build' }] } }),
-    ...filler(20),
-    L({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_far', is_error: true, content: 'build broke' }] } }),
-  ].join('\n') + '\n')
-  try {
-    const out = activityOf(file)
-    assert.match(out, /› Bash: make build {2}\(failed\)/)
-    assert.match(out, /build broke/)
-  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
 test('a chat file with tool ids named like object properties does not break its summary', () => {
@@ -145,5 +77,40 @@ test('a failed edit whose id is __proto__ still comes off the counts', () => {
     const s = summariseForTest(file)
     assert.equal(s.edits, 0)
     assert.deepEqual(Object.keys(s.files), [])
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('a Codex chat is titled by the first message typed, not the instructions sent ahead of it', () => {
+  const { summariseCodexForTest } = require('../scan.js')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-title-'))
+  try {
+    const file = path.join(dir, 'rollout-2026-01-01T00-00-00-abc.jsonl')
+    const user = text => ({ timestamp: '2026-01-01T00:00:01Z', type: 'response_item',
+      payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } })
+    fs.writeFileSync(file, [
+      { type: 'session_meta', payload: { id: 'abc', cwd: '/tmp/example' } },
+      user('# AGENTS.md instructions for /tmp/example\n\n<INSTRUCTIONS>\nBe brief.\n</INSTRUCTIONS>'),
+      user('<environment_context>\n<cwd>/tmp/example</cwd>\n</environment_context>'),
+      user('Rename the helper in utils'),
+    ].map(l => JSON.stringify(l)).join('\n') + '\n')
+    const s = summariseCodexForTest(file)
+    assert.equal(s.title, 'Rename the helper in utils')
+    assert.equal(s.turns, 1)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('an agent file that grows keeps its head, one replaced by another of the same size does not', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lb-head-'))
+  const file = path.join(dir, 'agent-a.jsonl')
+  try {
+    fs.writeFileSync(file, '{"a":1}\n')
+    const n = fs.statSync(file).size
+    const head = headForTest(file, n)
+    fs.appendFileSync(file, '{"b":2}\n')
+    assert.equal(headForTest(file, n), head)
+    const other = path.join(dir, 'other.jsonl')
+    fs.writeFileSync(other, '{"c":3}\n')
+    fs.renameSync(other, file)
+    assert.notEqual(headForTest(file, n), head)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })

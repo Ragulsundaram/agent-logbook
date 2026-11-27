@@ -20,7 +20,7 @@ function writePrivate (file, data) {
 const mkdirPrivate = dir => { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); try { fs.chmodSync(dir, 0o700) } catch {} }
 // Bump whenever a summary field changes shape. A cache written by an older build is
 // then ignored rather than quietly feeding the new code fields it never wrote.
-const CACHE_V = 18
+const CACHE_V = 19
 const VSDB = path.join(HOME, 'Library', 'Application Support', 'Cursor',
   'User', 'globalStorage', 'state.vscdb')
 
@@ -349,7 +349,7 @@ function codexImported () {
 }
 
 // the harness talks to itself through the user role too
-const CODEX_JUNK = /^\s*<(environment_context|user_instructions|ide_opened_file|permissions instructions|turn_aborted)/
+const CODEX_JUNK = /^\s*(<(environment_context|user_instructions|ide_opened_file|permissions instructions|turn_aborted)|# AGENTS\.md instructions\b)/
 
 /** Every Codex rollout file. Nested year/month/day, so walk rather than list. */
 function codexFiles () {
@@ -2065,9 +2065,25 @@ function agentTranscript (id, agentId) {
   const rec = index().find(s => s.id === id)
   if (!rec) return null
   const file = path.join(agentDir(rec.file), `agent-${agentId}.jsonl`)
-  let raw; try { raw = fs.readFileSync(file, 'utf8') } catch { return null }
-  const { turns, info } = parseTranscript(raw, true)
   const key = id + '#' + agentId
+  // followed live while the agent writes, so only what it added since the last
+  // read is parsed, the way an open chat is; a file rewritten starts over
+  let c = AGENT_PARSED.get(key)
+  // a file replaced rather than appended to, even by one of the same size,
+  // starts with different bytes: read it afresh instead of from the old offset
+  let more = c && c.file === file && headOf(file, c.hn) === c.head ? readFrom(file, c.off) : null
+  if (!more) {
+    c = { file, off: 0, st: parseStart(true) }
+    more = readFrom(file, 0)
+    if (!more) return null
+  }
+  if (more.raw) parseMore(c.st, more.raw)
+  c.off = more.off
+  // only bytes already read are compared next time, so a short file that grows is still an append
+  c.hn = Math.min(512, c.off); c.head = headOf(file, c.hn)
+  AGENT_PARSED.delete(key); AGENT_PARSED.set(key, c)
+  while (AGENT_PARSED.size > PARSED_MAX) AGENT_PARSED.delete(AGENT_PARSED.keys().next().value)
+  const { turns, info } = parseResult(c.st)
   full = { id: key, turns }
   const all = subAgents(id)
   const meta = all.find(a => a.id === agentId) || {}
@@ -2078,81 +2094,6 @@ function agentTranscript (id, agentId) {
     isAgent: true, agents: all, info, turns: slim(turns),
   }
 }
-
-/**
- * A background agent's work so far, as plain lines: each step it took, a few
- * lines of what that step printed, and what it wrote. What the Output button
- * on an agent's card shows while it runs; its own record is the only place
- * this lives, as Claude has no output stream for an agent.
- */
-function agentActivity (id, agentId) {
-  if (!/^[\w-]+$/.test(String(id)) || !/^[\w-]+$/.test(String(agentId))) return null
-  let file = null
-  const rec = index().find(s => s.id === id)
-  if (rec) file = path.join(agentDir(rec.file), `agent-${agentId}.jsonl`)
-  else {
-    // a chat started a moment ago may not be listed yet: its folder is named after it
-    const root = path.join(HOME, '.claude', 'projects')
-    try {
-      for (const d of fs.readdirSync(root)) {
-        const f = path.join(root, d, id, 'subagents', `agent-${agentId}.jsonl`)
-        if (fs.existsSync(f)) { file = f; break }
-      }
-    } catch {}
-  }
-  return file ? activityOf(file) : null
-}
-
-/** The activity lines for one agent file. */
-function activityOf (file) {
-  let st; try { st = fs.statSync(file) } catch { return null }
-  // asked every 2s while its Output is open: read again only once the agent has written more
-  const seen = ACTIVITY.get(file)
-  if (seen && seen.size === st.size && seen.mtime === st.mtimeMs) return seen.text
-  // only the end is shown, so only the end is read: a long-running agent's record can be
-  // large. The window grows until it holds a whole step - the call and what it returned -
-  // so one huge last result (a long failing command's output) is never all that is read
-  let raw = '', win = 512 * 1024, cut = false
-  const MAX = 8 * 1024 * 1024                     // never more than this, however far a step's call is
-  try {
-    for (;;) {
-      if (win >= st.size) { raw = fs.readFileSync(file, 'utf8'); cut = false; break }
-      win = Math.min(win, MAX)
-      cut = true
-      const fd = fs.openSync(file, 'r')
-      const buf = Buffer.alloc(win)
-      fs.readSync(fd, buf, 0, win, st.size - win)
-      fs.closeSync(fd)
-      const s = buf.toString('utf8')
-      const i = s.indexOf('\n')
-      raw = i < 0 ? '' : s.slice(i + 1)              // from the first whole line
-      // every result read must have its call in the window too, or a failure near the end
-      // could not be shown as one: read further back until none is missing its call
-      const calls = new Set([...raw.matchAll(/"id":"([\w-]+)"/g)].map(x => x[1]))
-      const orphan = [...raw.matchAll(/"tool_use_id":"([\w-]+)"/g)].some(x => !calls.has(x[1]))
-      const a = raw.search(/^.*"type":"assistant"/m)
-      if (a >= 0 && (!orphan || win >= MAX)) { raw = raw.slice(a); break }
-      if (win >= MAX) break
-      win *= 4
-    }
-  } catch { return null }
-  const { turns } = parseTranscript(raw, true)
-  const out = cut ? ['… earlier steps left out', ''] : []
-  for (const t of turns) {
-    if (t.role === 'assistant') {
-      for (const x of t.tools) {
-        out.push(`› ${x.name}${x.detail ? ': ' + String(x.detail).split('\n')[0].slice(0, 160) : ''}${x.err ? '  (failed)' : ''}`)
-        if (x.out) out.push(...x.out.split('\n').slice(0, 6).map(l => '    ' + l.slice(0, 200)))
-      }
-      if (t.text) out.push(t.text.trim(), '')
-    } else if (t.role === 'user' && t.text && !out.length && !cut) out.push('Asked to: ' + t.text.replace(/\s+/g, ' ').slice(0, 200) + (t.text.length > 200 ? '…' : ''), '')
-  }
-  const text = out.join('\n').slice(-60000)
-  ACTIVITY.set(file, { size: st.size, mtime: st.mtimeMs, text })
-  if (ACTIVITY.size > 20) ACTIVITY.delete(ACTIVITY.keys().next().value)
-  return text
-}
-const ACTIVITY = new Map()
 
 /**
  * Messages Claude Code writes into the conversation itself, under the user's
@@ -2730,6 +2671,18 @@ function board (live, folders) {
  */
 const PARSED = new Map()          // id -> { file, off, st, signals }
 const PARSED_MAX = 3
+const AGENT_PARSED = new Map()    // 'chat#agent' -> the same, for agent threads, kept apart so they never push an open chat out
+
+/** The file's first `len` bytes and its identity on disk: what an append leaves alone. */
+function headOf (file, len = 512) {
+  let fd
+  try {
+    fd = fs.openSync(file, 'r')
+    const buf = Buffer.alloc(len)
+    const n = fs.readSync(fd, buf, 0, len, 0)
+    return fs.fstatSync(fd).ino + ':' + buf.subarray(0, n).toString('base64')
+  } catch { return '' } finally { if (fd !== undefined) try { fs.closeSync(fd) } catch {} }
+}
 
 /** Whole lines from `off` to the end, and where the next read starts. */
 function readFrom (file, off) {
@@ -3130,5 +3083,6 @@ try {
 } catch {}
 
 module.exports = {
-  writePrivate, mkdirPrivate, board, agentActivity, activityOf, textOf, summariseForTest: summariseFile, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
-  readOnlyCache, saveCacheNow, groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME }
+  writePrivate, mkdirPrivate, board, textOf, summariseForTest: summariseFile, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
+  readOnlyCache, saveCacheNow, groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME,
+  summariseCodexForTest: summariseCodex, headForTest: headOf }

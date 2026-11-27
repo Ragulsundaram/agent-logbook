@@ -132,12 +132,17 @@ const OUTLINE = new Set(['shield', 'info', 'find', 'eye', 'scan', 'diff', 'bell'
 
 // where Resume goes, remembered by the host between windows
 const TARGETS = {
+  logbook: { icon: 'message', label: 'The logbook', hint: 'with its message box' },
   auto: { icon: 'sparkle', label: 'Where it started', hint: 'follows the chat' },
   terminal: { icon: 'terminal', label: 'Terminal', hint: 'inside Cursor' },
   claude: { icon: 'vscode', label: 'Claude Code extension', hint: 'this editor' },
   desktop: { icon: 'desktop', label: 'Claude Desktop', hint: 'app' },
 }
-let TARGET = 'auto'
+let TARGET = 'logbook'
+/** Where Resume really goes: the logbook needs chatting here on, else a chat goes where it started. */
+const resumeKey = () => TARGET === 'logbook' && CFG.chatHere === false ? 'auto' : TARGETS[TARGET] ? TARGET : 'auto'
+const RESUME_TIPS = { logbook: 'Resume here in the logbook', auto: 'Resume where it started', terminal: 'Resume in a terminal',
+  claude: 'Resume in the Claude Code extension', desktop: 'Resume in Claude Desktop' }
 
 // a couple of icons are drawn on a 16 grid rather than 24
 const GRID16 = new Set(['expand', 'collapse'])
@@ -923,11 +928,17 @@ function messageMatches (q) {
 
     // Open sits on the header row - the facts line is for reading, not acting
     // resume straight from a result, without opening the chat first - it goes
-    // wherever Resume is set to, and to a terminal already running it if one is
+    // wherever Resume is set to, and to a terminal already running it if one is.
+    // Set to the logbook, it opens the chat at the match, as Open does
     const resume = el('button', 'fresume')
     resume.appendChild(icon('play', 'fresico'))
     resume.title = 'Resume this chat'
-    resume.onclick = e => { e.stopPropagation(); send({ type: 'resume', id: c.id }) }
+    resume.setAttribute('aria-label', resume.title)
+    resume.onclick = e => {
+      e.stopPropagation()
+      // the host decides where it goes; set to the logbook, it opens at the match
+      send({ type: 'resume', id: c.id, q })
+    }
     const open = el('button', 'fopen', 'Open')
     open.onclick = e => { e.stopPropagation(); openAt(c.id, q) }
     head.append(resume, open)
@@ -1034,13 +1045,16 @@ function chatRow (s) {
     const b = el('button', 'ract')
     b.appendChild(icon(name))
     b.title = tip
+    b.setAttribute('aria-label', tip)
     b.onclick = e => { e.stopPropagation(); fn(e) }
     return b
   }
   acts.append(
     // rename sits where pin was: renaming is the frequent one, pin lives in the right-click menu
     act('pencil', 'Rename', () => renamePrompt(s)),
-    act('play', 'Resume in a terminal', () => send({ type: 'resume', id: s.id, target: 'terminal', open: true })),   // running here: just opens it
+    // wherever Settings says Resume goes; a chat running here just opens
+    act('play', s.provider === 'codex' ? RESUME_TIPS.terminal : RESUME_TIPS[resumeKey()],
+      () => send({ type: 'resume', id: s.id })),
     act('archive', s.archived ? 'Unarchive' : 'Archive', () => send({ type: 'archive', id: s.id })),
     act('trash', 'Delete chat', () => send({ type: 'trash', id: s.id })))
   r.appendChild(acts)
@@ -1367,6 +1381,7 @@ function agentActs (t) {
     const b = el('button', 'btn ico')
     b.appendChild(icon(name))
     b.title = tip
+    b.setAttribute('aria-label', tip)
     if (off) b.disabled = true; else b.onclick = fn
     return b
   }
@@ -1587,7 +1602,17 @@ function updateLive (t) {
   // and the numbers under it: a chat opened as it started read 0 messages until reopened
   const facts = $('#detail .dhead .facts')
   if (facts) facts.textContent = chatFacts(t)
+  const was = CUR
   CUR = t
+  // an agent thread's status and its Copy result move too: it finishes while you watch
+  if (t.isAgent) {
+    const st = $('#detail .dtop .astate')
+    if (st && t.status) { st.textContent = t.status; st.className = 'astate ' + statusClass(t.status) }
+    // rebuilt only when it changed: a live refresh comes every second, and a new
+    // toolbar would take keyboard focus off the button you are on
+    const acts = $('#detail .dhead > .acts')
+    if (acts && (was?.result !== t.result || (was?.agents || []).length !== (t.agents || []).length)) acts.replaceWith(agentActs(t))
+  }
   // the footer numbers and the agents button move with every reply
   const d = $('#detail')
   // The footer's numbers are swapped in place rather than the footer replaced:
@@ -1654,6 +1679,7 @@ function chatMenu (anchor, t) {
   }
   // a one-off: the default for Resume stays what Settings says
   for (const [key, spec] of Object.entries(TARGETS)) {
+    if (key === 'logbook') continue   // it is open here already
     item(spec.icon, key === 'auto' ? 'Resume where it started' : `Resume in ${spec.label}`, '',
       () => send({ type: 'resume', id: t.id, target: key }))
   }
@@ -1808,13 +1834,13 @@ function showDetail (t, live) {
     document.body.appendChild(menu)
 
     const paint = () => {
-      const spec = TARGETS[TARGET] || TARGETS.terminal
-      caret.replaceChildren(icon(spec.icon, 'tgtico'), el('span', 'tcaret', '▾'))
-      caret.title = `Resume in ${spec.label}`
-      run.title = `Resume in ${spec.label}`
-      for (const b of menu.children) b.classList.toggle('on', b.dataset.target === TARGET)
+      const key = resumeKey()
+      caret.replaceChildren(icon(TARGETS[key].icon, 'tgtico'), el('span', 'tcaret', '▾'))
+      caret.title = run.title = RESUME_TIPS[key]
+      for (const b of menu.children) b.classList.toggle('on', b.dataset.target === key)
     }
     for (const [key, spec] of Object.entries(TARGETS)) {
+      if (key === 'logbook') continue   // this picker shows only with chatting here off
       const b = el('button', 'menuitem')
       b.dataset.target = key
       b.append(icon(spec.icon, 'mico'), el('span', '', spec.label), el('em', '', spec.hint))
@@ -3351,7 +3377,7 @@ window.addEventListener('message', e => {
   }
   if (CHAT_ONLY && m.type === 'session' && m.data && m.data.id !== CHAT_ONLY && m.data.sessionId !== CHAT_ONLY) return
   // Resume on a chat running here: open it, as a click on its row would
-  if (m.type === 'openHere' && m.id) { PERF = { id: m.id, t0: performance.now() }; send({ type: 'session', id: m.id }) }
+  if (m.type === 'openHere' && m.id) { JUMP = typeof m.q === 'string' ? m.q : ''; PERF = { id: m.id, t0: performance.now() }; send({ type: 'session', id: m.id }) }
   if (m.type === 'env' && BOARD_MODE && m.cfg) send({ type: 'board' })
   if (m.type === 'env') {
     // partial env messages (a group edit, a settings snapshot) leave it alone
@@ -4771,8 +4797,9 @@ function renderSettings () {
     ['locale', 'Your computer\'s date style'], ['iso', 'Year first']])
 
   const resume = section('play', 'Resuming', 'Where a chat reopens when you pick it up again.')
-  pick(resume, 'resumeTarget', 'Resume opens in', 'Codex chats always go to a terminal', [
-    ['auto', 'Wherever it was first opened'], ['terminal', 'A terminal in the editor'],
+  pick(resume, 'resumeTarget', 'Resume opens in',
+    CFG.chatHere === false ? 'Codex chats always go to a terminal. With "Chat here" off, the logbook sends a chat where it started' : 'Codex chats always go to a terminal', [
+    ['logbook', 'Here in the logbook'], ['auto', 'Wherever it was first opened'], ['terminal', 'A terminal in the editor'],
     ['claude', 'The Claude Code extension'], ['desktop', 'Claude Desktop']])
   toggle(resume, 'skipPermissions', 'Skip permission prompts',
     'Claude runs every tool without asking first', false)

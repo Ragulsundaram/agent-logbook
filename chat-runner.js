@@ -816,12 +816,9 @@ function stopTask (id, taskId) {
 function taskOutput (id, taskId, done) {
   const r = RUNS.get(id)
   const t = r?.bg.find(x => x.id === taskId)
-  if (!t) return done(null)
-  // an agent has no output stream: its work is read from its own record
-  if (/agent/i.test(t.kind)) {
-    if (!OPTS.agentOutput) return done(null)
-    return OPTS.agentOutput(r.id, taskId).then(text => done(text == null ? null : { output: text, truncated: false }), () => done(null))
-  }
+  // a local agent has no output stream: the view opens its thread instead.
+  // A remote one keeps no thread here, so it is asked for its output like a command
+  if (!t || (/agent/i.test(t.kind) && !/remote/i.test(t.kind))) return done(null)
   control(r, { subtype: 'get_task_output', task_id: taskId }, res => done(res && {
     output: String(res.output || ''), truncated: !!res.truncated,
   }))

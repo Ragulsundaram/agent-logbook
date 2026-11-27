@@ -23,10 +23,17 @@ const settingsSnapshot = () => {
 }
 const skipFlag = () => cfg('skipPermissions', false) ? ' --dangerously-skip-permissions' : ''
 
-/** "auto" sends a chat back where it was started. */
+/** Where Resume can open a chat. "logbook" is the logbook's own chat, with its message box. */
+const TARGET_KEYS = ['logbook', 'auto', 'terminal', 'claude', 'desktop']
+
+/** "auto" sends a chat back where it was started; "logbook" needs chatting here on. */
 function resolveTarget (s, asked) {
   if (s.provider === 'codex') return 'terminal'   // nothing else can open one
-  const want = asked || cfg('resumeTarget', 'auto')
+  let want = TARGET_KEYS.includes(asked) ? asked : cfg('resumeTarget', 'logbook')
+  if (!TARGET_KEYS.includes(want)) want = 'auto'
+  // where the logbook cannot chat - chatting here off, an untrusted folder - it would only
+  // show the chat, so Resume goes where it started instead
+  if (want === 'logbook' && (!cfg('chatHere', true) || !folderTrusted(s.cwd))) want = 'auto'
   if (want !== 'auto') return want
   const from = s.entrypoint || ''
   if (from === 'claude-vscode' || from === 'vscode') return 'claude'
@@ -56,6 +63,7 @@ function watchTranscripts (ctx) {
   // stopped refreshing until the chat was opened again
   let timer = null, lastRun = 0
   const open = new Map()
+  const opened = new WeakMap()  // view -> how many times a chat was opened in it, so a slow live read never lands over a newer open
   const touched = new Set()
   const dirty = new Set()       // chat ids known to have changed, whatever noticed it
   const files = new Map()       // open chat id -> its transcript and how it last looked
@@ -84,10 +92,16 @@ function watchTranscripts (ctx) {
     touched.clear(); dirty.clear()
     const fresh = new Map()
     for (const [post, id] of open) {
-      if (!ids.has(id)) continue
-      if (!fresh.has(id)) fresh.set(id, liveCall('transcript', id))
+      // an agent's thread is open as "chat#agent", and its file is named agent-<agent>;
+      // its finish is written to the parent chat, so a change there refreshes it too
+      const [sid, aid] = id.split('#')
+      if (!ids.has(id) && !(aid && (ids.has('agent-' + aid) || ids.has(sid)))) continue
+      const gen = opened.get(post)
+      if (!fresh.has(id)) fresh.set(id, aid ? liveCall('agentTranscript', sid, aid) : liveCall('transcript', id))
       const data = await fresh.get(id)
       if (open.get(post) !== id) continue        // moved to another chat meanwhile
+      // reopened meanwhile: that read is newer than this one, so this one stays unposted
+      if (opened.get(post) !== gen) continue
       post({ type: 'session', data, live: true })
       const f = files.get(id)
       if (f) f.seen = stamp(f.file)
@@ -125,16 +139,19 @@ function watchTranscripts (ctx) {
   // start the search worker now, so it has indexed before anyone types
   try { searcher() } catch {}
   return {
-    setOpen: (post, id) => {
+    // an agent's thread passes its own file, as the index lists only chats
+    setOpen: (post, id, agentFile) => {
       if (!post) return
+      opened.set(post, (opened.get(post) || 0) + 1)
       if (!id) { open.delete(post); return }
       open.set(post, id)
       if (!files.has(id)) {
-        const file = scan.index().find(s => s.id === id)?.file
+        const file = agentFile || scan.index().find(s => s.id === id)?.file
         if (file) files.set(id, { file, seen: stamp(file) })
       }
       for (const k of files.keys()) if (![...open.values()].includes(k)) files.delete(k)
     },
+    openOf: post => open.get(post),
     // Refresh redraws the chats on screen too, not only the list behind them
     refreshOpen: () => { for (const id of open.values()) dirty.add(id); clearTimeout(timer); flush().catch(() => {}) },
     // a chat run from the logbook says when it has written, rather than
@@ -151,6 +168,7 @@ function watchTranscripts (ctx) {
  * query's result is delivered - anything older has been typed past.
  */
 let SEARCHER = null, searchSeq = 0
+const searchLatest = new WeakMap()     // who asked -> its newest search id; one asker never supersedes another
 const searchWaiting = new Map()
 
 function searcher () {
@@ -231,10 +249,11 @@ function callOn (lane, fn, args) {
 const chatCall = (fn, ...args) => callOn('main', fn, args)
 const liveCall = (fn, ...args) => callOn('live', fn, args)
 
-function runSearch (q, post, limit) {
+function runSearch (q, post, limit, who = post) {
   // the webview asks for more chats 60 at a time; it is still a message, so bound it
   limit = Math.min(5000, Math.max(60, Math.floor(+limit) || 60))
   const id = ++searchSeq
+  searchLatest.set(who, id)
   let w
   try { w = searcher() } catch {
     post({ type: 'results', q, data: scan.search(q, { limit }) })    // no worker, do it here
@@ -251,7 +270,7 @@ function runSearch (q, post, limit) {
   searchWaiting.set(id, m => {
     if (m.chat) { found.push(m.chat); last = m.at || last }
     else { clearTimeout(watchdog); searchWaiting.delete(id) }
-    if (id !== searchSeq) return                          // typed past this one
+    if (id !== searchLatest.get(who)) return              // typed past this one
     if (m.error) {
       const qq = String(q).trim().toLowerCase()
       post({ type: 'results', q: qq, data: { q: qq, chats: found, matches: last.matches || 0,
@@ -269,6 +288,7 @@ function runSearch (q, post, limit) {
 const hereNames = () => (vscode.workspace.workspaceFolders || []).map(f => scan.projectName(f.uri.fsPath))
 
 let WATCH = null
+const AGENT_NAV = new WeakMap()        // view -> its newest agent request, so an older read cannot land over it
 // every open view - the sidebar and any editor tabs - so a refresh reaches all of them
 const VIEWS = new Set()
 const broadcast = m => { for (const post of VIEWS) post(m) }
@@ -1928,7 +1948,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               groups: scan.groupsFor()
                 .map(g => g.name),
               here: hereNames(),
-              target: cfg('resumeTarget', 'auto'),
+              target: cfg('resumeTarget', 'logbook'),
               pageSize: cfg('pageSize', 8),
               sort: cfg('sort', 'recent'),
               dateFormat: cfg('dateFormat', 'locale'),
@@ -1967,12 +1987,17 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
               if (/^[\w-]+$/.test(String(msg.id || ''))) openChatTab(ctx, msg.id, true)
               break
             }
+            // choosing a chat outdates any agent thread still being read for this view
+            AGENT_NAV.set(post, (AGENT_NAV.get(post) || 0) + 1)
             seenChat(msg.id)
             WATCH?.setOpen(post, msg.id)
             // clicked again while the whole chat is still being read: wait for that
             // read rather than queueing another behind it
             const whole = WHOLE.get(msg.id)
             const data = whole ? await whole : await transcriptSoon(msg.id)
+            // an agent thread or another chat opened here meanwhile: that one stays on screen
+            const still = () => !WATCH || WATCH.openOf(post) === msg.id
+            if (!still()) break
             post({ type: 'session', data })
             if (opts.onTitle && data?.id === opts.chat) opts.onTitle(data.title)
             // the end of a long chat came first; the whole of it follows and is
@@ -1985,7 +2010,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
                 p.finally(() => WHOLE.delete(msg.id))
               }
               const full = await p
-              if (full) post({ type: 'session', data: full, live: true })
+              if (full && still()) post({ type: 'session', data: full, live: true })
             }
             break
           }
@@ -2006,8 +2031,21 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           case 'agent':
             // a sub-agent's thread renders through the same view as a session; the
             // parent chat's live refresh would draw over it, so stop that until back
-            WATCH?.setOpen(post, null)
-            post({ type: 'session', data: await chatCall('agentTranscript', msg.id, msg.agentId) })
+            {
+              const was = WATCH?.openOf(post)
+              const tok = (AGENT_NAV.get(post) || 0) + 1
+              AGENT_NAV.set(post, tok)
+              const data = await chatCall('agentTranscript', msg.id, msg.agentId)
+              // a later agent was asked for meanwhile: only the newest request lands
+              if (AGENT_NAV.get(post) !== tok) break
+              // another chat opened in this view while it was read: that one stays
+              if (WATCH && WATCH.openOf(post) !== was) break
+              // no thread to show yet: the chat stays as it is, refresh and all
+              if (!data) { post({ type: 'chatNotice', id: msg.id, soft: true, text: "That agent's steps could not be opened yet." }); break }
+              // the thread refreshes as the agent writes, the way a running chat does
+              WATCH?.setOpen(post, data.id, data.file)
+              post({ type: 'session', data })
+            }
             break
           case 'perf':
             break
@@ -2053,15 +2091,8 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             const tab = CHAT_TABS.get(id)
             if (tab) { tab.reveal(); break }
             const sleeping = sleepingTabs().find(x => x.id === id)
-            const GROUPS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth']
             // past the eighth group there is no way to show it from here; a second tab would split the chat
-            if (sleeping && !GROUPS[sleeping.column - 1]) break
-            if (sleeping) {
-              // showing it is what wakes it: its group, then its place in that group
-              await vscode.commands.executeCommand(`workbench.action.focus${GROUPS[sleeping.column - 1]}EditorGroup`)
-              await vscode.commands.executeCommand('workbench.action.openEditorAtIndex', sleeping.index)
-              break
-            }
+            if (sleeping) { await wakeTab(sleeping); break }
             const view = [...SHOWING.values()].find(v => v.id === id)
             if (view?.mode === 'sidebar') await vscode.commands.executeCommand('claudeHistory.focus')
             else if (view?.reveal) view.reveal()
@@ -2137,6 +2168,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
 
           case 'setTarget':
             // the picker writes the setting, so it is visible and editable in Settings
+            if (!TARGET_KEYS.includes(msg.target)) break
             await vscode.workspace.getConfiguration('claudeHistory')
               .update('resumeTarget', msg.target, vscode.ConfigurationTarget.Global)
             break
@@ -2188,6 +2220,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             // the Settings tab writes the same settings the editor's own
             // settings page does, so the two can never drift apart
             if (!SETTINGS.includes(msg.key)) return
+            if (msg.key === 'resumeTarget' && !TARGET_KEYS.includes(msg.value)) return
             const now = vscode.workspace.getConfiguration('claudeHistory').get(msg.key)
             if (now !== undefined && now !== null && typeof msg.value !== typeof now) return
             if (msg.key === 'skipPermissions' && msg.value === true) {
@@ -2584,12 +2617,23 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             if (!s) return
             // a chat running here is already open for business: Resume just shows it.
             // A named place (a terminal, the app) is a move, and asks to stop it first.
-            if (runner.has(s.id) && (!msg.target || msg.open)) {
-              if (CHAT_TABS.has(s.id) || mode === 'board' || mode === 'chat') openChatTab(ctx, s.id, false)
-              else post({ type: 'openHere', id: s.id })
+            // Resume set to the logbook opens it the same way, with its message box ready
+            const target = resolveTarget(s, msg.target)
+            // the default is the logbook, but a chat already running in one of
+            // this window's terminals is that terminal: show it rather than a copy
+            if (target === 'logbook' && !msg.target && live[s.id] && !runner.has(s.id)) {
+              const term = await terminalForSession(s.id, false)
+              if (term) { resumeInTerminal(s, false, term); break }
+            }
+            if (target === 'logbook' || (runner.has(s.id) && (!msg.target || msg.open))) {
+              const q = typeof msg.q === 'string' ? msg.q.slice(0, 200) : ''
+              if (CHAT_TABS.has(s.id) || mode === 'board' || mode === 'chat') {
+                const tab = openChatTab(ctx, s.id, false)
+                // from a search result: the tab shows the chat at the match, as a list would
+                if (q && tab?.webview) tab.webview.postMessage({ type: 'openHere', id: s.id, q })
+              } else post({ type: 'openHere', id: s.id, q })
               break
             }
-            const target = resolveTarget(s, msg.target)
             // two Claudes writing one chat would tangle it, so the logbook's lets go first
             if (runner.has(s.id)) {
               const pick = await vscode.window.showWarningMessage(
@@ -3017,15 +3061,178 @@ function chatTabTitle (id) {
   const t = s?.title || 'Chat'
   return shortTitle(t)
 }
+const GROUPS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth']
+// a tab restored by a reload stays asleep until shown: showing it is what wakes
+// it, its group first, then its place in that group
+async function wakeTab (sleeping) {
+  if (!GROUPS[sleeping.column - 1]) return
+  await vscode.commands.executeCommand(`workbench.action.focus${GROUPS[sleeping.column - 1]}EditorGroup`)
+  await vscode.commands.executeCommand('workbench.action.openEditorAtIndex', sleeping.index)
+}
 function openChatTab (ctx, id, beside) {
   const open = CHAT_TABS.get(id)
   if (open) { open.reveal(); return open }
+  // already in a tab from before a reload: show that one, never a second copy
+  const sleeping = sleepingTabs().find(x => x.id === id)
+  if (sleeping && GROUPS[sleeping.column - 1]) { wakeTab(sleeping).catch(() => {}); return null }
   const panel = vscode.window.createWebviewPanel('claudeHistory.chat', chatTabTitle(id),
     beside ? vscode.ViewColumn.Beside : vscode.ViewColumn.Active,
     { enableScripts: true, retainContextWhenHidden: true })
   fillChatTab(ctx, panel, id)
   return panel
 }
+/** "3h ago" for the search box: enough to tell this week's chat from last month's. */
+function agoText (ts) {
+  if (!ts) return ''                        // no time recorded: say nothing rather than 1970
+  const m = Math.max(0, Math.round((Date.now() - (ts || 0)) / 6e4))
+  if (m < 60) return m <= 1 ? 'just now' : `${m}m ago`
+  const h = Math.round(m / 60)
+  if (h < 48) return `${h}h ago`
+  const d = Math.round(h / 24)
+  return d < 60 ? `${d}d ago` : new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+}
+const LIVE_WORDS = { busy: 'working', waiting: 'needs you', idle: 'open' }
+
+// which day-group a chat falls in, by the calendar rather than hours ago
+function dayGroup (ts) {
+  const start = new Date(); start.setHours(0, 0, 0, 0)
+  const day = 864e5, t = ts || 0
+  if (t >= start.getTime()) return 'Today'
+  if (t >= start.getTime() - day) return 'Yesterday'
+  if (t >= start.getTime() - 6 * day) return 'This week'
+  if (t >= start.getTime() - 29 * day) return 'This month'
+  return 'Older'
+}
+// a title or folder is shown as text: "$(name)" would otherwise draw an icon
+const noIcons = t => String(t || '').replace(/\$\(/g, '$​(')
+const plainLabel = t => noIcons(t || '(untitled)')
+
+/**
+ * Cursor's own search box over every chat, so an older one is a shortcut away
+ * with the sidebar closed. Running chats first, then the rest by day; each row
+ * carries its agent's logo. Typing matches title or folder, and from three
+ * letters on also finds chats that mention the words, under their own heading.
+ * A Claude chat opens in its own tab, a Codex one goes back to its terminal.
+ */
+async function findChat (ctx) {
+  const chats = scan.sessionList(live).sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))
+  if (!chats.length) { vscode.window.showInformationMessage('No chats yet.'); return }
+  const side = { iconPath: new vscode.ThemeIcon('split-horizontal'), tooltip: 'Open to the side' }
+  const logo = {
+    claude: vscode.Uri.joinPath(ctx.extensionUri, 'media', 'pick-claude.svg'),
+    codex: vscode.Uri.joinPath(ctx.extensionUri, 'media', 'pick-codex.svg'),
+  }
+  // the folder is noise on every row when it is the one this window has open
+  const here = new Set((vscode.workspace.workspaceFolders || []).map(f => f.name))
+  const row = (s, extra) => ({
+    label: plainLabel(s.title),
+    iconPath: logo[s.provider === 'codex' ? 'codex' : 'claude'],
+    description: [LIVE_WORDS[s.live] || '', here.has(s.project) ? '' : noIcons(s.project),
+      s.archived ? 'archived' : '', agoText(s.lastTs)].filter(Boolean).join(' · '),
+    buttons: s.provider === 'codex' ? [] : [side],
+    s,
+    ...extra,
+  })
+  const sep = label => ({ label, kind: vscode.QuickPickItemKind.Separator })
+  // running first, then by day; `extra` marks rows the editor must not filter out
+  const grouped = (list, extra) => {
+    const out = []
+    const running = list.filter(s => s.live)
+    if (running.length) out.push(sep('Running now'), ...running.map(s => row(s, extra)))
+    let group = ''
+    for (const s of list) {
+      if (s.live) continue
+      const g = dayGroup(s.lastTs)
+      if (g !== group) { out.push(sep(g)); group = g }
+      out.push(row(s, extra))
+    }
+    return out
+  }
+  const base = grouped(chats)
+
+  const qp = vscode.window.createQuickPick()
+  qp.title = 'Find a chat'
+  qp.placeholder = 'Type a title, a folder, or words from inside a chat'
+  // the matching is done here, not by the editor: its loose letter-by-letter
+  // match turns "sap" into "SuperPay Add", and it re-sorts by how well a title
+  // matches, so a chat from months ago could sit above this morning's
+  qp.matchOnDescription = false
+  qp.matchOnDetail = false
+  qp.sortByLabel = false
+  qp.items = base
+
+  // words from inside chats: the same search the logbook's search box runs
+  const byId = new Map(chats.map(s => [s.id, s]))
+  let typed = '', timer = null, found = [], paintTimer = null
+  // a new word puts the top result under the cursor; results arriving later keep it where it is
+  const paint = (hold = false) => {
+    const keep = hold && qp.activeItems[0]?.s?.id
+    if (!typed) qp.items = base
+    else {
+      // every word typed must appear in the title or the folder, in any order
+      const words = typed.toLowerCase().split(/\s+/).filter(Boolean)
+      const hit = s => { const t = `${s.title || ''} ${s.project || ''}`.toLowerCase(); return words.every(w => t.includes(w)) }
+      const titled = chats.filter(hit)
+      const shown = new Set(titled.map(s => s.id))
+      const show = { alwaysShow: true }
+      const mentions = found
+        .filter(c => byId.has(c.id) && !shown.has(c.id))
+        .slice(0, 30)
+        .map(c => row(byId.get(c.id), {
+          ...show,
+          detail: '$(search) ' + plainLabel((c.hits?.[0]?.text || 'mentions it').replace(/\s+/g, ' ').trim().slice(0, 160)),
+        }))
+      qp.items = [...grouped(titled, show), ...(mentions.length ? [sep('Mentioned in'), ...mentions] : [])]
+    }
+    const again = keep && qp.items.find(i => i.s?.id === keep)
+    if (again) qp.activeItems = [again]
+  }
+  const schedule = () => { clearTimeout(paintTimer); paintTimer = setTimeout(() => paint(true), 120) }
+  qp.onDidChangeValue(v => {
+    clearTimeout(timer)
+    typed = v.trim()
+    found = []
+    paint()                                    // titles at once, no flash of the editor's own matching
+    if (typed.length < 3) { qp.busy = false; return }
+    const q = typed
+    timer = setTimeout(() => {
+      qp.busy = true
+      runSearch(q, m => {
+        if (typed !== q || m.type !== 'results') return
+        if (m.chat) found.push(m.chat)
+        else if (m.data) { found = m.data.chats || found; qp.busy = false }
+        schedule()
+      }, 60, qp)
+    }, 250)
+  })
+  const go = async (item, beside) => {
+    qp.hide()
+    if (!item) return
+    const s = scan.index().find(x => x.id === item.s.id)
+    if (!s) return
+    seenChat(s.id)
+    if (s.provider !== 'codex') {
+      openChatTab(ctx, s.id, beside)
+      // hand focus to the tab the editor's own way: left to the closing search
+      // box, focus sits nowhere the editor tracks and the next shortcut is lost
+      setTimeout(() => vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup'), 150)
+      return
+    }
+    // a Codex chat only continues in a terminal: the one already running it, if there is one
+    const attached = await terminalForSession(s.id, false)
+    if (live[s.id] && !attached) {
+      const pick = await vscode.window.showWarningMessage(
+        'This chat is running outside this window. Codex will not attach twice.', 'Open anyway', 'Cancel')
+      if (pick !== 'Open anyway') return
+    }
+    resumeInTerminal(s, false, attached)
+  }
+  qp.onDidAccept(() => go(qp.selectedItems[0], false))
+  qp.onDidTriggerItemButton(e => go(e.item, true))
+  qp.onDidHide(() => { typed = '\0'; clearTimeout(timer); clearTimeout(paintTimer); qp.dispose() })
+  qp.show()
+}
+
 // the tab says whether its chat is working or waiting on you, so a row of chat
 // tabs reads like the list: a coloured dot icon, and a mark before the name
 const TAB_STATE = new WeakMap()          // panel -> { base, state }
@@ -3220,7 +3427,6 @@ function activate (ctx) {
     },
     onHook: chatHook,
     // a background agent's Output: its steps so far, from its own record
-    agentOutput: (id, agentId) => chatCall('agentActivity', id, agentId),
     onWrite: id => WATCH?.poke(id),
     // started, finished or waiting on you: the list and the board show it now
     // what the logbook's own Claude is doing is known here: no need to ask the CLI
@@ -3266,7 +3472,7 @@ function activate (ctx) {
       broadcast({
         type: 'env',
         here: hereNames(),
-        target: cfg('resumeTarget', 'auto'),
+        target: cfg('resumeTarget', 'logbook'),
         pageSize: cfg('pageSize', 8),
         sort: cfg('sort', 'recent'),
         dateFormat: cfg('dateFormat', 'locale'),
@@ -3281,6 +3487,7 @@ function activate (ctx) {
       vscode.commands.executeCommand('claudeHistory.view.focus')),
     vscode.commands.registerCommand('claudeHistory.openInEditor', () => openInEditor(ctx, false)),
     vscode.commands.registerCommand('claudeHistory.board', () => openBoard(ctx)),
+    vscode.commands.registerCommand('claudeHistory.findChat', () => findChat(ctx)),
     // forget which windows were already announced, then check again now
     vscode.commands.registerCommand('claudeHistory.testUsageAlerts', async () => {
       await ctx.globalState.update('limitAlertsSeen', {})

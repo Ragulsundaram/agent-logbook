@@ -12,9 +12,20 @@ uploaded, and no account is needed.
 conversation rendered the way you saw it: markdown, images, tool calls, and the
 file diffs each edit made. Search across every transcript, not just titles.
 
-**Pick one back up.** Resume opens the chat in a terminal, the Claude Code
-extension or Claude Desktop, and reveals the terminal already running it rather
-than starting a second one. "New chat from this one" forks a session with its
+**Find one fast.** Ctrl+Cmd+H (Ctrl+Alt+H on Windows and Linux), or "Agent
+Logbook: Find a Chat…" in the Command Palette, opens a search box over every
+chat, even with the sidebar closed. Running chats come first, then the rest under
+Today, Yesterday and older headings, each with its agent's logo. Typing matches a
+chat's title or folder, and from three letters on also finds chats that mention
+the words, with the line that matched. Enter opens the chat in its
+own tab; the button on a row opens it to the side. A Codex chat goes back to its
+terminal.
+
+**Pick one back up.** Resume opens the chat here in the logbook, with its
+message box ready, by default. Settings can send it to a terminal, the Claude Code
+extension or Claude Desktop instead, and Resume reveals the terminal already running it rather
+than starting a second one. With chatting in the logbook turned off, or in a folder
+you have not trusted, a chat goes back where it was started. Codex chats always resume in a terminal. "New chat from this one" forks a session with its
 full history, like /branch; "New chat from a summary" starts a fresh one from a
 written handover instead. A chat running elsewhere says where, with "Show it"
 for a terminal in this window.
@@ -50,7 +61,9 @@ folder's own settings file cannot change them.
 **See the sub-agents.** Background agents keep their own transcripts. Each one
 appears as a card where it was launched, with the brief it was given and what it
 reported, and opens as its own readable thread. Nested agents are shown as a
-tree, since an agent can spawn its own.
+tree, since an agent can spawn its own. While a chat here has agents or commands
+running in the background, the strip above the message box lists them: Open
+shows an agent's steps as its thread, and Output shows what a command printed.
 
 **Know what it cost.** A dashboard over your whole history - tokens, spend,
 cache efficiency, models, projects, files, working hours - plus per-chat stats
