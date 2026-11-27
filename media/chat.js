@@ -43,6 +43,7 @@ const CHAT = {
   editor: { label: '', file: '' },   // what the editor has open, which goes with your message
   skipCtx: new Set(),    // chats whose next message goes without the editor's file
   files: new Map(),      // chat id -> attached PDFs and text files waiting to go
+  drops: new Map(),      // request key -> the read slot of files dropped from the Explorer, while the extension reads them
   thoughtOpen: new Set(), // chats whose live thinking you opened
   stopping: new Set(),
   limitsSaid: new Set(),  // usage-limit notices already shown, by chat, limit, reset time and level   // "chat id|task id": Stop pressed, until the task goes
@@ -63,7 +64,7 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 const FALLBACK_MODELS = [
   { value: 'opus', label: 'Opus' }, { value: 'sonnet', label: 'Sonnet' }, { value: 'haiku', label: 'Haiku' },
 ]
-const MAX_IMAGE = 5 * 1024 * 1024
+const MAX_IMAGE = sharedRules.LIMITS.picture
 
 /** The Settings switch: off keeps the logbook read-only, the way it was. */
 const chatOn = () => CFG.chatHere !== false
@@ -113,8 +114,8 @@ function whereRunning (id) {
 function chatMount () {
   if (BOARD_MODE) return
   if (!chatOn()) {
-    // the mode, status and live area were moved out of the box: they go too
-    if (COMPOSER) { for (const n of [COMPOSER.root, COMPOSER.live, COMPOSER.mode, COMPOSER.status]) n.remove(); COMPOSER = null }
+    // the status, model, mode and live area were moved out of the box: they go too
+    if (COMPOSER) { for (const n of [COMPOSER.root, COMPOSER.live, COMPOSER.status, COMPOSER.model, COMPOSER.mode]) n.remove(); COMPOSER = null }
     return
   }
   const t = chatTarget()
@@ -143,7 +144,7 @@ function chatMount () {
 
 function setMode (c, value, keep = true) {
   picksFor(c.id).mode = value
-  c.mode.value = value
+  paintPickers(c)
   send({ type: 'chatMode', id: c.id, value })
   // and every new chat after it - except bypass, which is picked chat by chat
   if (keep && value !== 'bypassPermissions') setCfg('chatPermissionMode', value)
@@ -159,10 +160,21 @@ function cycleMode (c) {
   setMode(c, list[(i + 1) % list.length][0], false)
 }
 
-/** The mode and status join the "Claude" numbers under the box; a new chat has none yet, so they get their own line. */
+/**
+ * The line under the box: the reply's status joins the chat's details on its left,
+ * the model and mode sit on its right. A new chat has no footer yet, so they get a
+ * line of their own under the box.
+ */
 function placeStatusLine (foot) {
-  const host = foot?.querySelector('.fgroup') || COMPOSER.root
-  for (const n of [COMPOSER.mode, COMPOSER.status]) if (n.parentNode !== host) host.appendChild(n)
+  const c = COMPOSER
+  // the footer's own line, not the composer's spare one inside the same footer
+  const details = foot?.querySelector(':scope > .fmeta > .fnums')
+  const ctrls = foot?.querySelector(':scope > .fmeta > .fctrls')
+  c.under.hidden = !!(details && ctrls)
+  const at = details || c.underText
+  if (c.status.parentNode !== at) at.appendChild(c.status)
+  const side = ctrls || c.underCtrls
+  if (c.model.parentNode !== side) side.append(c.model, c.mode)
 }
 
 /** A new chat started here says so, in place of the "started in a terminal" note. */
@@ -573,58 +585,268 @@ const toolWord = t => ({ Bash: 'a command', Read: 'a file read', Edit: 'an edit'
 
 // ------------------------------------------------------------ the box
 
+// ------------------------------------------------------------ the message box's text
+// The box is an editable line of plain text, not a textarea, so a picture or file
+// added after the first can sit inside the sentence as a chip, where it was pasted.
+// It answers to value, selectionStart/End, setSelectionRange and placeholder the
+// way a textarea does, so the rest of this file reads and writes it as before.
+// A chip counts as no text at all in those; the message Claude gets has the chips
+// taken out (see messageText).
+
+const CHIP = '\uFFFC'                  // where a chip stood, while the message's text is worked out
+const CHIP_ITEM = new WeakMap()        // chip element -> the picture or file it stands for
+const isChip = n => n?.nodeType === 1 && n.classList.contains('cchip')
+// a zero-width space after a chip that ends a line gives the caret somewhere to sit;
+// it is never part of the text
+const ZW = '\u200B'
+const bare = t => t.replace(/\u200B/g, '')
+
+/**
+ * The text under root. A line break is "\n"; the editor's own last <br>, which
+ * the browser adds only to show an empty last line, is not. A chip is nothing,
+ * or the mark given.
+ */
+function textOf (root, top, mark = '') {
+  let s = ''
+  const kids = root.childNodes
+  for (let i = 0; i < kids.length; i++) {
+    const n = kids[i]
+    if (n.nodeType === 3) s += bare(n.data)
+    else if (n.nodeType !== 1) continue
+    else if (isChip(n)) s += mark
+    else if (n.nodeName === 'BR') { if (!(top && i === kids.length - 1)) s += '\n' }
+    else {
+      // a line the browser wrapped in its own block starts on a new line
+      if (n.nodeName === 'DIV' && s && !s.endsWith('\n')) s += '\n'
+      s += textOf(n, false, mark)
+    }
+  }
+  return s
+}
+
+/** The text with the chips taken out, and the gap a chip left closed up to one space. */
+function messageText (ed) {
+  // between two words a chip leaves one space, so "at<chip>please" reads "at please"
+  return textOf(ed, true, CHIP).replace(/[ \t]*(?:\uFFFC[ \t]*)+/g, (m, at, all) =>
+    at === 0 || at + m.length === all.length ? '' : ' ')
+}
+
+/** How far into the text a point in the box is. */
+function offsetAt (ed, node, off) {
+  const r = document.createRange()
+  r.setStart(ed, 0)
+  try { r.setEnd(node, off) } catch { return textOf(ed, true).length }
+  return textOf(r.cloneContents(), false).length
+}
+
+/** The point in the box that far into the text. */
+function pointAt (ed, n) {
+  const kids = ed.childNodes
+  for (let i = 0; i < kids.length; i++) {
+    const k = kids[i]
+    if (k.nodeType === 3) {
+      const len = bare(k.data).length
+      if (n <= len) {
+        // count past zero-width spaces, which take no room in the text
+        let i = 0
+        for (let left = n; i < k.data.length && (left > 0 || k.data[i] === ZW); i++) if (k.data[i] !== ZW) left--
+        return [k, i]
+      }
+      n -= len
+      continue
+    }
+    if (k.nodeType !== 1 || isChip(k)) continue
+    if (k.nodeName === 'BR') { if (n === 0) return [ed, i]; if (i !== kids.length - 1) n--; continue }
+    const len = textOf(k, false).length
+    if (n <= len) return [ed, n ? i + 1 : i]
+    n -= len
+  }
+  return [ed, kids.length]
+}
+
+/** A caret just after what the box holds, before the browser's last <br>. */
+function caretToEnd (ed) {
+  const sel = getSelection()
+  const r = document.createRange()
+  const last = ed.lastChild
+  if (last?.nodeName === 'BR') r.setStartBefore(last); else r.selectNodeContents(ed)
+  r.collapse(last?.nodeName === 'BR')
+  sel.removeAllRanges()
+  sel.addRange(r)
+}
+
+/** Where the caret is in the box, as a collapsed range; null when the box does not have it. */
+function caretRange (ed) {
+  const sel = getSelection()
+  if (document.activeElement !== ed || !sel.rangeCount) return null
+  const r = sel.getRangeAt(0).cloneRange()
+  if (!ed.contains(r.endContainer)) return null
+  r.collapse(false)
+  return r
+}
+
+/** Plain text typed in at the caret, the way the keyboard would, so Undo takes it back. */
+function typeIn (ed, text) {
+  if (!text) return
+  if (document.activeElement !== ed) ed.focus()
+  if (!document.execCommand('insertText', false, text)) {
+    const r = caretRange(ed)
+    if (!r) return
+    r.insertNode(document.createTextNode(text))
+    r.collapse(false)
+    ed.dispatchEvent(new Event('input'))
+  }
+}
+
+function makeEditor () {
+  const ed = el('div', 'cinput')
+  // plain text only: a paste or drop of formatted text comes in as its words
+  try { ed.contentEditable = 'plaintext-only' } catch {}
+  if (ed.contentEditable !== 'plaintext-only') ed.contentEditable = 'true'
+  ed.spellcheck = true
+  ed.setAttribute('role', 'textbox')
+  ed.setAttribute('aria-multiline', 'true')
+  ed.setAttribute('aria-label', 'Message')
+  const focus = ed.focus
+  Object.defineProperties(ed, {
+    value: {
+      get () { return textOf(ed, true) },
+      // the words are replaced; the chips stay, after them
+      set (v) {
+        const chips = [...ed.childNodes].filter(isChip)
+        ed.replaceChildren(...(String(v) ? [document.createTextNode(String(v))] : []), ...chips)
+        if (document.activeElement === ed) this.setSelectionRange(String(v).length, String(v).length)
+        ed.classList.toggle('blank', !String(v) && !chips.length)
+      },
+    },
+    selectionStart: { get () { return this.selection().start } },
+    selectionEnd: { get () { return this.selection().end } },
+    placeholder: {
+      get () { return ed.dataset.placeholder || '' },
+      set (v) { ed.dataset.placeholder = v; ed.setAttribute('aria-placeholder', v) },
+    },
+  })
+  ed.selection = () => {
+    const sel = getSelection()
+    if (!sel.rangeCount || !ed.contains(sel.anchorNode)) { const n = textOf(ed, true).length; return { start: n, end: n } }
+    const r = sel.getRangeAt(0)
+    const a = offsetAt(ed, r.startContainer, r.startOffset)
+    return { start: a, end: r.collapsed ? a : offsetAt(ed, r.endContainer, r.endOffset) }
+  }
+  ed.setSelectionRange = (a, b) => {
+    const r = document.createRange()
+    r.setStart(...pointAt(ed, a))
+    r.setEnd(...pointAt(ed, b))
+    const sel = getSelection()
+    sel.removeAllRanges()
+    sel.addRange(r)
+  }
+  // focus puts the caret at the end, as clicking into a textarea's empty space does
+  ed.focus = function () {
+    focus.call(ed)
+    const sel = getSelection()
+    if (!sel.rangeCount || !ed.contains(sel.anchorNode)) caretToEnd(ed)
+  }
+  return ed
+}
+
+/**
+ * Backspace or Delete right beside a chip takes the chip out whole, with what
+ * it stands for. Returns whether one went.
+ */
+function chipKey (ed, e) {
+  if ((e.key !== 'Backspace' && e.key !== 'Delete') || e.isComposing || e.altKey || e.metaKey || e.ctrlKey) return false
+  const sel = getSelection()
+  if (!sel.rangeCount || !sel.isCollapsed || !ed.contains(sel.anchorNode)) return false
+  const back = e.key === 'Backspace'
+  let node = sel.anchorNode, off = sel.anchorOffset, next
+  if (node.nodeType === 3) {
+    // only zero-width spaces between the caret and the chip still count as beside it
+    if (bare(back ? node.data.slice(0, off) : node.data.slice(off))) return false
+    next = back ? node.previousSibling : node.nextSibling
+  } else next = back ? node.childNodes[off - 1] : node.childNodes[off]
+  // an empty text node left between is skipped over
+  while (next?.nodeType === 3 && !bare(next.data)) next = back ? next.previousSibling : next.nextSibling
+  if (!isChip(next)) return false
+  e.preventDefault()
+  next.remove()
+  ed.dispatchEvent(new Event('input'))
+  return true
+}
+
 function buildComposer (id) {
   const root = el('div', 'composer')
   const asks = el('div', 'casks')
+  // the first picture as a thumbnail on top; every later picture or file is a chip in the text
   const imgs = el('div', 'cimgs')
   const block = el('div', 'cblock')
-  const ta = el('textarea', 'cinput')
-  ta.rows = 1
+  const ta = makeEditor()
   ta.value = CHAT.drafts.get(id) || ''
   const slash = el('div', 'cslash')
   slash.hidden = true
   const bar = el('div', 'cbar')
-  // the box holds only the text and the send button. The mode and the reply's
-  // status sit with the chat's numbers below it, the way Claude Code's own
-  // status line does; model and effort are changed with /model and /effort
-  const mode = el('select', 'cpick cmode')
-  mode.title = 'What Claude may do without asking. Shift+Tab in the box switches it for this chat; new chats start on the last one you pick here'
+  // one box, as a chat app's reads: the text on top, attach on the left of the row
+  // under it, and the model, mode and send button on the right. The reply's status
+  // sits with the chat's numbers below the box; model and effort change with /model and /effort
+  // the model and effort, and the permission mode: plain words, each opening its own menu
+  const model = el('button', 'cpick cmodel')
+  model.title = 'Model'
+  model.setAttribute('aria-haspopup', 'menu')
+  model.setAttribute('aria-expanded', 'false')
+  const mode = el('button', 'cpick cmode')
+  mode.title = 'Permissions (Shift+Tab)'
+  mode.setAttribute('aria-haspopup', 'menu')
+  mode.setAttribute('aria-expanded', 'false')
   const status = el('span', 'cstatus')
   const go = el('button', 'cgo')
-  // while Claude works and a message is being typed, Stop stays beside Queue
-  const halt = el('button', 'cgo stop')
-  halt.appendChild(el('span', 'cstopico'))
-  halt.title = 'Stop (Escape)'
-  halt.setAttribute('aria-label', 'Stop')
-  halt.hidden = true
-  halt.onclick = () => send({ type: 'chatStop', id })
   // attach a picture, a PDF or a text file
   const clip = el('button', 'cattach')
-  clip.appendChild(icon('plus'))
-  clip.title = 'Attach a picture, PDF or text file (or paste or drop one in)'
+  clip.appendChild(icon('clip'))
+  // the editor gives a drag from Finder or its Explorer to the page only while Shift is held
+  clip.title = 'Attach files: pictures, PDFs or text files. You can also paste them, or hold Shift while dragging them onto the chat'
+  clip.setAttribute('aria-label', 'Attach files')
   const pickFile = document.createElement('input')
   pickFile.type = 'file'; pickFile.multiple = true; pickFile.hidden = true
-  pickFile.accept = 'image/png,image/jpeg,image/gif,image/webp,application/pdf,text/*,' + TEXT_EXT.map(x => '.' + x).join(',')
+  pickFile.accept = 'image/png,image/jpeg,image/gif,image/webp,application/pdf,' + TEXT_EXT.map(x => '.' + x).join(',')
+  // where the caret was when you reached for the button: the files go there
+  clip.onmousedown = () => { c.insertAt = caretRange(ta) }
   clip.onclick = () => pickFile.click()
-  bar.append(clip, pickFile, halt, go)
+  // closed without a pick: that spot is not kept for a later paste or drop
+  pickFile.addEventListener('cancel', () => { c.insertAt = null })
+  const right = el('div', 'cright')
+  right.append(go)
+  bar.append(clip, pickFile, right)
   // what the editor has open goes with the message: said here, and can be left out
   const ctxLine = el('div', 'cctx')
   const live = el('div', 'chatlive')
-  // the text and its pickers share one box, the way a chat app's input reads
   const box = el('div', 'cbox')
   box.append(imgs, ta, bar)
-  box.onclick = e => { if (e.target === box || e.target === bar) ta.focus() }
+  box.onclick = e => { if (e.target === box || e.target === bar || e.target === right) ta.focus() }
   // once, the first time anyone sees the box: what it is and where to turn it off
   const tip = el('div', 'ctip')
-  root.append(asks, block, tip, ctxLine, box, slash)
-  const c = { id, root, asks, imgs, block, tip, ta, slash, bar, mode, status, go, halt, live, slashAt: 0, ctxLine, mention: null }
-  pickFile.onchange = () => { for (const f of pickFile.files) addAny(c, f); pickFile.value = '' }
+  // the line under the box for a chat with no footer yet (a new one): status left, model and mode right
+  const under = el('div', 'cunder')
+  const underText = el('div', 'fnums')
+  const underCtrls = el('div', 'fctrls')
+  under.append(underText, underCtrls)
+  root.append(asks, block, tip, ctxLine, box, under, slash)
+  // chipOf: each later picture or file -> its chip in the text; insertAt: where the next ones go
+  const c = { id, root, asks, imgs, block, tip, ta, slash, bar, mode, model, status, go, live, slashAt: 0, ctxLine, mention: null, under, underText, underCtrls,
+    chipOf: new Map(), insertAt: null, thumb: null }
+  pickFile.onchange = () => { addMany(c, [...pickFile.files]); pickFile.value = ''; c.insertAt = null }
 
-  const fit = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 220) + 'px' }
+  // the box grows with its text up to a height set in the stylesheet; this only
+  // says whether it is empty, which shows the placeholder
+  const fit = () => ta.classList.toggle('blank', !ta.value && !ta.querySelector('.cchip'))
   c.fit = fit
-  ta.oninput = () => { CHAT.drafts.set(id, ta.value); fit(); askMention(c); paintSlash(c); paintGo(c) }
+  ta.oninput = () => {
+    // a chip deleted by hand takes its picture or file with it
+    if (chipsGone(c)) { paintImages(c); placeLive() }
+    CHAT.drafts.set(id, ta.value); fit(); askMention(c); paintSlash(c); paintGo(c)
+  }
   ta.onkeydown = e => {
     if (!c.slash.hidden && slashKey(c, e)) return
+    if (chipKey(ta, e)) return
     if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); cycleMode(c); return }
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && !e.isComposing &&
       recall(c, e.key === 'ArrowUp' ? -1 : 1)) { e.preventDefault(); return }
@@ -640,31 +862,24 @@ function buildComposer (id) {
   ta.onblur = () => setTimeout(() => { c.slash.hidden = true }, 150)
   ta.onpaste = e => {
     const files = [...(e.clipboardData?.items || [])].filter(i => i.kind === 'file').map(i => i.getAsFile()).filter(Boolean)
-    if (!files.length) return
     e.preventDefault()
-    files.forEach(f => addAny(c, f))
-  }
-  root.ondragover = e => { if ([...(e.dataTransfer?.items || [])].some(i => i.kind === 'file')) e.preventDefault() }
-  root.ondrop = e => {
-    const files = [...(e.dataTransfer?.files || [])]
-    if (!files.length) return
-    e.preventDefault()
-    files.forEach(f => addAny(c, f))
+    // text comes in as plain words, never as formatting
+    if (!files.length) { typeIn(ta, e.clipboardData?.getData('text/plain') || ''); return }
+    addMany(c, files, caretRange(ta))
   }
   go.onclick = () => {
     const st = CHAT.state.get(id)
     if (st?.busy && !ta.value.trim() && !(CHAT.images.get(id) || []).length && !(CHAT.files.get(id) || []).length) send({ type: 'chatStop', id })
     else submit(c)
   }
-  mode.onchange = () => setMode(c, mode.value)
-  requestAnimationFrame(fit)
+  model.onclick = e => { e.stopPropagation(); pickMenu(c, 'model', model) }
+  mode.onclick = e => { e.stopPropagation(); pickMenu(c, 'mode', mode) }
+  fit()
   return c
 }
 
-// text files Claude can read as they are, by extension when the type is not given
-const TEXT_EXT = 'txt md csv tsv json yaml yml xml html css js ts jsx tsx py rb go rs java kt swift c h cpp cs php sh sql log diff patch toml ini env conf'.split(' ')
-const MAX_PDF = 18 * 1024 * 1024        // the host takes up to 25 MB of base64, about 18.7 MB
-const MAX_TEXT = 390 * 1024
+// which files can be attached and how big each kind may be: shared with the extension (shared-rules.js)
+const TEXT_EXT = sharedRules.TEXT_EXT
 // reads under way and /clear moves: see chat-moves.js
 const readStart = id => chatMoves.readStart(CHAT, id)
 const moveChatState = (id, to) => chatMoves.moveChatState(CHAT, id, to)
@@ -674,77 +889,363 @@ function readDone (slot) {
   if (chatMoves.readDone(CHAT, slot) && COMPOSER?.id === slot.id) submit(COMPOSER)
 }
 
-/** A picture goes as a picture; a PDF or a text file is attached by name. */
-function addAny (c, file) {
-  if (file.type.startsWith('image/')) return addImage(c, file)
-  const ext = (/\.([\w]+)$/.exec(file.name) || [])[1]?.toLowerCase() || ''
-  const pdf = file.type === 'application/pdf' || ext === 'pdf'
-  const text = !pdf && (file.type.startsWith('text/') || /json|xml|yaml|javascript|sql/.test(file.type) || TEXT_EXT.includes(ext))
-  if (!pdf && !text) { note(c.id, `${file.name} can't be attached: only pictures, PDFs and text files can.`, true); return }
-  if (file.size > (pdf ? MAX_PDF : MAX_TEXT)) { note(c.id, `${file.name} is too big to attach (${pdf ? '18 MB' : '390 KB'} at most).`, true); return }
+// where each picture or file read from a paste, drop or the attach button goes in the
+// text: the caret at that moment. Kept per item, so reads that finish out of order
+// still land where each was put
+const PLACE_AT = new WeakMap()
+
+/**
+ * Files that could not be attached, all named in one note. An Enter waiting for
+ * them does not go without them: the note stays in view and you decide.
+ */
+function notAttached (id, bad) {
+  if (!bad.length) return
+  note(id, `Not attached: ${bad.map(([name, why]) => `${name} (${why})`).join(', ')}.`, true)
+  CHAT.sendWhenRead.delete(id)
+}
+
+/** Why a file of this name cannot be attached, or '' when it can. */
+const refusal = name => sharedRules.extOf(name) === 'env' ? 'may hold secrets'
+  : sharedRules.kindOf(name) ? '' : 'only pictures, PDFs and text files can be attached'
+
+/**
+ * A picture goes as a picture; a PDF or a text file is attached by name. at: where
+ * its chip goes. bad: where a refusal is collected, to be named with the others;
+ * without it the refusal is said at once. Returns whether a read started.
+ */
+function addAny (c, file, at = c.insertAt, bad = null) {
+  const refuse = why => {
+    const entry = [file.name || 'pasted picture', why]
+    if (bad) bad.push(entry); else notAttached(c.id, [entry])
+    return false
+  }
+  if (file.type.startsWith('image/')) return addImage(c, file, at, refuse)
+  // the same rule wherever the file came from (attach, paste, Finder or the Explorer):
+  // its name decides, not the type the system gives it
+  const why = refusal(file.name)
+  if (why) return refuse(why)
+  const kind = sharedRules.kindOf(file.name)
+  // a picture named as one but given no type (some Finder drops): typed from its name
+  if (kind === 'picture') return addImage(c, new File([file], file.name, { type: sharedRules.mediaTypeOf(file.name) }), at, refuse)
+  const pdf = kind === 'pdf'
+  if (file.size > sharedRules.LIMITS[kind]) return refuse(`too big, ${sharedRules.LIMIT_WORDS[kind]} at most`)
   const r = new FileReader()
   const slot = readStart(c.id)
   const done = () => readDone(slot)
-  r.onerror = () => { note(slot.id, `${file.name} could not be read.`, true); done() }
+  r.onerror = () => { notAttached(slot.id, [[file.name, 'could not be read']]); done() }
   r.onload = () => {
     const id = slot.id               // the chat may have moved to a new id while this was read
     const item = { name: file.name, mediaType: pdf ? 'application/pdf' : 'text/plain' }
     if (pdf) item.data = String(r.result).replace(/^data:[^,]*,/, '')
     else item.text = String(r.result)
     // a message carries at most 8: one past that is named, not dropped quietly
+    if (at) PLACE_AT.set(item, at)
     if (chatMoves.readPlace(CHAT, slot, 'files', item) === 'over') overLimit(id, file.name, 'files')
     if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
     done()
   }
   if (pdf) r.readAsDataURL(file); else r.readAsText(file)
+  return true
 }
 
-function addImage (c, file) {
-  if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) { note(c.id, 'Only PNG, JPEG, GIF and WebP pictures can be sent.', true); return }
-  if (file.size > MAX_IMAGE) { note(c.id, 'That picture is over 5 MB.', true); return }
+function addImage (c, file, at, refuse) {
+  if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) return refuse('only PNG, JPEG, GIF and WebP pictures can be sent')
+  if (file.size > MAX_IMAGE) return refuse(`too big, ${sharedRules.LIMIT_WORDS.picture} at most`)
   const r = new FileReader()
   const slot = readStart(c.id)
   const done = () => readDone(slot)
-  r.onerror = () => { note(slot.id, 'That picture could not be read.', true); done() }
+  const name = file.name || 'pasted picture'
+  r.onerror = () => { notAttached(slot.id, [[name, 'could not be read']]); done() }
   r.onload = () => {
     const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(String(r.result))
-    if (!m) { done(); return }
+    if (!m) { notAttached(slot.id, [[name, 'could not be read']]); done(); return }
     const id = slot.id               // the chat may have moved to a new id while this was read
-    if (chatMoves.readPlace(CHAT, slot, 'pictures', { mediaType: m[1], data: m[2], url: String(r.result) }) === 'over') {
-      overLimit(id, file.name || 'pasted picture', 'pictures')
-    }
+    // the name and size are for the chip only: submit sends the type and data alone
+    const item = { mediaType: m[1], data: m[2], url: String(r.result), name: file.name || '', size: file.size }
+    if (at) PLACE_AT.set(item, at)
+    if (chatMoves.readPlace(CHAT, slot, 'pictures', item) === 'over') overLimit(id, name, 'pictures')
     if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
     done()
   }
   r.readAsDataURL(file)
+  return true
 }
 
-function paintImages (c) {
-  const list = CHAT.images.get(c.id) || []
-  c.imgs.replaceChildren()
-  list.forEach((im, i) => {
-    const chip = el('div', 'cimg')
-    const img = el('img')
-    img.src = im.url
-    img.alt = 'Pasted picture'
-    const x = el('button', 'cimgx', '×')
-    x.title = 'Remove'
-    x.onclick = () => { list.splice(i, 1); clearOver(c.id, 'pictures'); paintImages(c); paintGo(c); placeLive() }
-    chip.append(img, x)
-    c.imgs.appendChild(chip)
-  })
+/** Several files from one attach, paste or drop: each read as usual, the refusals named together. */
+function addMany (c, files, at = c.insertAt) {
+  const bad = []
+  for (const f of files) addAny(c, f, at, bad)
+  notAttached(c.id, bad)
+}
+
+// ------------------------------------------------------------ dropping files in
+
+/** The file links a drop carries, from whichever of VS Code's and the system's lists it has. */
+function dropUris (dt) {
+  const out = []
+  const lines = t => String(t || '').split(/\r?\n/)
+  out.push(...lines(dt.getData('application/vnd.code.uri-list')))
+  try { const r = JSON.parse(dt.getData('resourceurls') || '[]'); if (Array.isArray(r)) out.push(...r) } catch {}
+  out.push(...lines(dt.getData('text/uri-list')))
+  return [...new Set(out.map(x => String(x).trim()).filter(x => x && !x.startsWith('#')))]
+}
+const uriName = u => {
+  const last = String(u).replace(/[?#].*$/, '').replace(/\/+$/, '').split('/').pop() || String(u)
+  try { return decodeURIComponent(last) } catch { return last }
+}
+
+/**
+ * Files dropped on the box go the same way as ones attached or pasted. A drop from
+ * VS Code's Explorer carries only links, so the extension reads those files and
+ * hands them back; the same checks and the 8 and 8 limit then apply.
+ */
+function dropIn (c, dt) {
+  const files = [...(dt.files || [])]
+  if (files.length) { addMany(c, files); return }
+  // links to files: on this computer they are read by the extension; anywhere else
+  // (a remote window's files) it says why not. Web addresses are not files
+  const uris = dropUris(dt).filter(u => !/^(https?|mailto|data):/i.test(u))
+  // no file at all (some text): the words go into the box, as a plain drop would put them
+  if (!uris.length) {
+    typeIn(c.ta, dt.getData('text/plain'))
+    return
+  }
+  const bad = []
+  const want = []
+  for (const u of uris) {
+    const name = uriName(u)
+    const why = refusal(name)
+    if (why) bad.push([name, why])
+    else if (want.length >= 16) bad.push([name, 'one drop takes 16 files at most'])
+    else want.push(u)
+  }
+  if (!want.length) { notAttached(c.id, bad); return }
+  // counted as a read under way, so an Enter pressed meanwhile waits for these files;
+  // what was refused here is named with what the extension refuses, in one note
+  const slot = readStart(c.id)
+  const key = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+  CHAT.drops.set(key, { slot, at: c.insertAt, bad })
+  send({ type: 'chatDropRead', key, uris: want })
+}
+// ------------------------------------------------------------ dropping anywhere on the chat
+
+// a drag that carries files (from Finder, VS Code's Explorer or a tab), not a text selection or a link
+const FILE_DRAG = ['files', 'application/vnd.code.uri-list', 'resourceurls']
+const carriesFiles = e => [...(e.dataTransfer?.types || [])].some(t => FILE_DRAG.includes(String(t).toLowerCase()))
+/** A box that can take attachments is on screen: a chat you can talk to here, not blocked. */
+const dropBox = () => COMPOSER && COMPOSER.root.isConnected && chatTarget()?.id === COMPOSER.id && !COMPOSER.ta.parentNode.hidden ? COMPOSER : null
+const DROP = { depth: 0, cover: null, quiet: null }
+/** While files are dragged over the chat, the whole panel says where they go. */
+function dropCover (on) {
+  if (!DROP.cover) {
+    const cover = el('div', 'dropcover')
+    cover.setAttribute('aria-hidden', 'true')
+    const pill = el('div', 'droppill')
+    const words = el('div', 'droptext')
+    // VS Code hands a drop from Finder or its Explorer to the page only while Shift is held
+    words.append(el('b', '', 'Drop files to attach'), el('span', '', 'Keep holding Shift while you drop'))
+    pill.append(icon('clip', 'dropico'), words)
+    cover.appendChild(pill)
+    cover.hidden = true
+    document.body.appendChild(cover)
+    DROP.cover = cover
+  }
+  DROP.cover.hidden = !on
+  clearTimeout(DROP.quiet)
+  if (!on) DROP.depth = 0
+}
+document.addEventListener('dragenter', e => {
+  if (!carriesFiles(e) || !dropBox()) return
+  e.preventDefault()
+  DROP.depth++
+  dropCover(true)
+})
+document.addEventListener('dragover', e => {
+  if (!carriesFiles(e) || !dropBox()) return
+  e.preventDefault()
+  e.dataTransfer.dropEffect = 'copy'
+  if (DROP.cover?.hidden) { DROP.depth = Math.max(DROP.depth, 1); dropCover(true) }
+  // a drag over the page sends this many times a second. When they stop with no
+  // leave or drop (Shift let go, so the editor took the drag back), the cover goes
+  clearTimeout(DROP.quiet)
+  DROP.quiet = setTimeout(() => dropCover(false), 400)
+})
+document.addEventListener('dragleave', e => {
+  if (!DROP.depth) return
+  // out of the window altogether, or the last element left: the cover goes
+  const out = e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight
+  if (out || --DROP.depth <= 0) dropCover(false)
+})
+document.addEventListener('dragend', () => dropCover(false))
+window.addEventListener('blur', () => dropCover(false))
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && DROP.depth) dropCover(false) })
+document.addEventListener('drop', e => {
+  dropCover(false)
+  const c = dropBox()
+  if (!c || !carriesFiles(e)) return
+  e.preventDefault()
+  // dropped on the text: where it landed; anywhere else: at the caret if the box had it, else at the end
+  const at = document.caretRangeFromPoint?.(e.clientX, e.clientY)
+  c.insertAt = at && c.ta.contains(at.startContainer) ? at : caretRange(c.ta)
+  dropIn(c, e.dataTransfer)
+  c.insertAt = null
+})
+
+/** The extension read the dropped files: each goes through the same checks as an attached one. */
+function dropRead (m) {
+  const { slot, at, bad = [] } = CHAT.drops.get(m.key) || {}
+  if (!slot) return
+  CHAT.drops.delete(m.key)
+  for (const it of Array.isArray(m.items) ? m.items : []) {
+    const name = String(it?.name || 'file')
+    if (it?.error || typeof it?.data !== 'string') { bad.push([name, String(it?.error || 'could not be read')]); continue }
+    let bin
+    try { bin = atob(it.data) } catch { bad.push([name, 'could not be read']); continue }
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    // the chat may have moved to a new id (/clear) while the files were read
+    addAny({ id: slot.id }, new File([bytes], name, { type: String(it.mediaType || '') }), at, bad)
+  }
+  // said before this read counts as done, so a waiting Enter is called off rather than sent
+  notAttached(slot.id, bad)
+  readDone(slot)
+}
+
+/** "112 KB", the way a file list says it. */
+function sizeText (n) {
+  if (!(n > 0)) return ''
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+// a file's size, worked out once from what is attached: nothing extra is kept on
+// the file itself, as the file goes to Claude exactly as it is
+const FILE_SIZE = new WeakMap()
+function fileSize (f) {
+  if (!FILE_SIZE.has(f)) {
+    FILE_SIZE.set(f, f.data ? Math.floor(f.data.replace(/=+$/, '').length * 3 / 4)
+      : new TextEncoder().encode(f.text || '').length)
+  }
+  return FILE_SIZE.get(f)
+}
+
+/** Take a picture or file out of what goes with the message. */
+function dropItem (id, item) {
+  for (const [kind, map] of [['pictures', CHAT.images], ['files', CHAT.files]]) {
+    const list = map.get(id) || []
+    const i = list.indexOf(item)
+    if (i >= 0) { list.splice(i, 1); clearOver(id, kind); return true }
+  }
+  return false
+}
+
+/** Chips deleted from the text by hand: their pictures and files go too. Returns whether any did. */
+function chipsGone (c) {
+  let gone = false
+  for (const [item, chip] of c.chipOf) {
+    if (c.ta.contains(chip)) continue
+    c.chipOf.delete(item)
+    if (dropItem(c.id, item)) gone = true
+  }
+  return gone
+}
+
+/** The pictures and files in the order they stand in the text: the thumbnail first, then each chip. */
+function inTextOrder (c) {
+  const pics = CHAT.images.get(c.id) || []
   const files = CHAT.files.get(c.id) || []
-  files.forEach((f, i) => {
-    const chip = el('div', 'cfile')
-    chip.append(el('span', 'cfileext', f.mediaType === 'application/pdf' ? 'PDF' : 'TXT'), el('span', 'cfilename', f.name))
-    chip.title = f.name
-    const x = el('button', 'cimgx', '×')
-    x.title = 'Remove'
-    x.onclick = () => { files.splice(i, 1); clearOver(c.id, 'files'); paintImages(c); paintGo(c); placeLive() }
-    chip.appendChild(x)
-    c.imgs.appendChild(chip)
-  })
-  c.imgs.hidden = !list.length && !files.length
+  const seen = [...c.ta.querySelectorAll('.cchip')].map(ch => CHIP_ITEM.get(ch)).filter(Boolean)
+  // anything without a chip (there should be none) keeps its place after the rest
+  const order = list => [...seen.filter(x => list.includes(x)), ...list.filter(x => !seen.includes(x))]
+  return { pics: pics.length ? [pics[0], ...order(pics.slice(1))] : [], files: order(files) }
+}
+
+function chipFor (c, item, picture) {
+  const name = picture ? item.name || 'pasted picture' : item.name
+  const chip = el('span', 'cchip')
+  chip.contentEditable = 'false'
+  if (picture) {
+    const img = el('img', 'cchipimg')
+    img.src = item.url
+    img.alt = ''
+    chip.appendChild(img)
+  } else chip.appendChild(icon('file', 'cchipico'))
+  chip.append(el('span', 'cchipname', name), el('span', 'cchipsize', sizeText(picture ? item.size : fileSize(item))))
+  const x = el('button', 'cimgx', '×')
+  x.title = `Remove ${name}`
+  x.setAttribute('aria-label', `Remove ${name}`)
+  // the caret stays where it was in the text
+  x.onmousedown = e => e.preventDefault()
+  x.onclick = e => { e.stopPropagation(); if (dropItem(c.id, item)) { paintImages(c); paintGo(c); placeLive() } }
+  chip.appendChild(x)
+  chip.title = picture ? name : `${name} (${item.mediaType === 'application/pdf' ? 'PDF' : 'text file'})`
+  CHIP_ITEM.set(chip, item)
+  return chip
+}
+
+/** A new chip goes where the caret was when it was pasted, dropped or attached; otherwise at the end. */
+function placeChip (c, chip, r) {
+  const ed = c.ta
+  if (r && ed.contains(r.startContainer)) r.insertNode(chip)
+  else {
+    const last = ed.lastChild
+    if (last?.nodeName === 'BR') ed.insertBefore(chip, last); else ed.appendChild(chip)
+  }
+  // nothing is added after the chip: what you type next decides the spacing. Only a chip
+  // with no text after it gets a zero-width space, so the caret can sit after it
+  let after = chip.nextSibling
+  if (after?.nodeType !== 3) { after = document.createTextNode(ZW); chip.after(after) }
+  if (!r || !ed.contains(r.startContainer)) return
+  r.setStart(after, after.data.startsWith(ZW) ? 1 : 0)
+  r.collapse(true)
+  if (document.activeElement === ed) { const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r.cloneRange()) }
+}
+
+/**
+ * The first picture as a thumbnail on top, every later picture and file as a chip
+ * in the text. Only what changed is touched: the text, the caret and Undo stay.
+ */
+function paintImages (c) {
+  chipsGone(c)
+  const list = CHAT.images.get(c.id) || []
+  const files = CHAT.files.get(c.id) || []
+  const first = list[0] || null
+  if (c.thumb !== first || (first && !c.imgs.firstChild)) {
+    c.thumb = first
+    c.imgs.replaceChildren()
+    if (first) {
+      const name = first.name || 'pasted picture'
+      const tile = el('div', 'cimg')
+      const img = el('img')
+      img.src = first.url
+      img.alt = name
+      tile.title = name
+      const x = el('button', 'cimgx', '×')
+      x.title = `Remove ${name}`
+      x.setAttribute('aria-label', `Remove ${name}`)
+      x.onclick = e => { e.stopPropagation(); if (dropItem(c.id, first)) { paintImages(c); paintGo(c); placeLive() } }
+      tile.append(img, x)
+      c.imgs.appendChild(tile)
+    }
+  }
+  c.imgs.hidden = !first
+  const want = new Set([...list.slice(1), ...files])
+  // a chip whose picture or file went (sent, removed, or now the thumbnail) leaves the text
+  for (const ch of [...c.ta.querySelectorAll('.cchip')]) {
+    const item = CHIP_ITEM.get(ch)
+    if (want.has(item) && c.chipOf.get(item) === ch) continue
+    if (c.chipOf.get(item) === ch) c.chipOf.delete(item)
+    ch.remove()
+  }
+  for (const item of want) {
+    if (c.chipOf.has(item)) continue
+    const chip = chipFor(c, item, list.includes(item))
+    c.chipOf.set(item, chip)
+    placeChip(c, chip, PLACE_AT.get(item))
+    // used once: a chip put back later (a message given back) goes to the end, not to an old spot
+    PLACE_AT.delete(item)
+  }
+  c.fit?.()
 }
 
 /** The line above the box: which file goes with the message, and a way to leave it out. */
@@ -785,9 +1286,10 @@ function askMention (c) {
 function pickMention (c, x) {
   const at = c.mention.at
   const end = c.ta.selectionStart
-  c.ta.value = c.ta.value.slice(0, at) + '@' + x.name + ' ' + c.ta.value.slice(end)
-  const pos = at + x.name.length + 2
-  c.ta.setSelectionRange(pos, pos)
+  // typed over the letters after "@", so chips elsewhere in the text stay where they are
+  c.ta.focus()
+  c.ta.setSelectionRange(at, end)
+  typeIn(c.ta, '@' + x.name + ' ')
   c.mention = null
   CHAT.drafts.set(c.id, c.ta.value)
   c.slash.hidden = true
@@ -800,9 +1302,11 @@ function submit (c, only) {
   // a picture pasted a moment ago may still be loading: send once it is in.
   // A message of the logbook's own (only) is sent as it is, draft untouched
   if (!only && CHAT.reading.get(id)) { CHAT.sendWhenRead.add(id); return }
-  const text = only ? only.text : c.ta.value
-  const images = only ? [] : CHAT.images.get(id) || []
-  const files = only ? [] : CHAT.files.get(id) || []
+  // the words with the chips taken out; the pictures and files in the order their chips stand
+  const text = only ? only.text : messageText(c.ta)
+  const order = only ? { pics: [], files: [] } : inTextOrder(c)
+  const images = order.pics
+  const files = order.files
   if (!text.trim() && !images.length && !files.length) return
   if (images.length > 8 || files.length > 8) { note(id, 'A message can carry at most 8 pictures and 8 files. Remove some, then send.', true); return }
   if (!images.length && !files.length && localCommand(c, text)) return
@@ -969,25 +1473,23 @@ function paintComposer () {
       desktop: 'Open in the Claude app.',
       outside: 'Running in a terminal outside this window.',
     }[w?.where]
-    // with a place named, the buttons say the rest
-    c.block.appendChild(el('span', '', place || 'Running elsewhere. Reply there, or:'))
+    // one line, at most one filled button: other ways on are quiet links, and a copy
+    // of the chat is in the chat's menu (Continue here as a copy)
+    c.block.appendChild(el('span', '', place || 'Running elsewhere. Reply there, or continue here as a copy from the chat\'s menu.'))
     if (w?.where === 'terminal') {
-      const show = el('button', 'btn pri', 'Show it')
+      const show = el('button', 'linkbtn', 'Show terminal')
       show.title = 'Bring that terminal to the front'
       show.onclick = () => send({ type: 'chatShow', id })
       c.block.appendChild(show)
     }
     // idle there, waiting for a message: it can be let go there and carried on here
     if (idle) {
-      const take = el('button', 'btn pri', 'Stop it there and continue here')
-      take.title = 'Claude is idle there. It is stopped there and this chat carries on here; nothing it wrote is lost'
+      const take = el('button', 'btn pri', 'Continue here')
+      take.title = w?.where === 'terminal' ? 'Stops it in the terminal and continues the chat here; nothing it wrote is lost'
+        : 'Stops it there and continues the chat here; nothing it wrote is lost'
       take.onclick = () => { take.disabled = true; take.textContent = 'Stopping…'; send({ type: 'chatTakeover', id, idle: true }) }
       c.block.appendChild(take)
     }
-    const b = el('button', 'btn', 'New chat from this one')
-    b.title = 'A new chat here with this one\'s full history. The original keeps running on its own'
-    b.onclick = () => send({ type: 'chatFork', id })
-    c.block.appendChild(b)
   } else if (CHAT.cutoff.has(id) && !CHAT.state.get(id)?.busy) {
     c.block.hidden = false
     c.block.appendChild(el('span', '', 'Claude\'s last reply was cut off when the window reloaded or closed.'))
@@ -998,7 +1500,7 @@ function paintComposer () {
       // sent as its own message, with no pictures: the draft and its pictures stay
       submit(c, { text: 'Your last reply was cut off when the editor window reloaded. Please continue from where you stopped.' })
     }
-    const x = el('button', 'btn', 'Dismiss')
+    const x = el('button', 'linkbtn', 'Dismiss')
     x.onclick = () => { CHAT.cutoff.delete(id); send({ type: 'chatCutoffClear', id }); paintComposer() }
     c.block.append(go, x)
   }
@@ -1048,51 +1550,242 @@ function paintGo (c) {
   c.ta.parentNode.dataset.mode = shell ? 'Shell command · runs in the chat\'s folder' : ''
   if (shell) {
     c.go.replaceChildren(icon('play'))
-    c.go.classList.remove('stop')
+    c.go.classList.remove('stop', 'queue')
     c.go.title = 'Run (Enter)'
+    c.go.setAttribute('aria-label', 'Run')
     c.go.disabled = !c.ta.value.replace(/^\s*!/, '').trim()
-    c.halt.hidden = !st?.busy
     return
   }
-  const stop = !!st?.busy && empty
-  c.go.replaceChildren(stop ? el('span', 'cstopico') : icon('play'))
+  // one button: Stop with nothing typed while Claude works, Queue with something
+  // typed, Send otherwise. Escape stops the reply whichever it shows
+  const busy = !!st?.busy
+  const stop = busy && empty
+  const say = stop ? 'Stop' : busy ? 'Queue this message (sent when Claude finishes)' : 'Send'
+  c.go.replaceChildren(stop ? el('span', 'cstopico') : icon(busy ? 'queue' : 'send'))
   c.go.classList.toggle('stop', stop)
-  c.go.title = stop ? 'Stop (Escape)' : st?.busy ? 'Queue this message (Enter)' : 'Send (Enter)'
+  c.go.classList.toggle('queue', busy && !stop)
+  c.go.title = stop ? 'Stop (Escape)' : `${say} (Enter)`
+  c.go.setAttribute('aria-label', say)
   c.go.disabled = !stop && empty
-  c.halt.hidden = !st?.busy || stop
 }
 
 function paintStatus (c) {
   const st = CHAT.state.get(c.id)
   const done = CHAT.done.get(c.id)
   c.status.textContent = st?.asks?.length ? 'Waiting for you'
-    : st?.busy || st?.bg?.length ? '' : done && Date.now() - done.at < 60000 && done.ms ? `Done in ${secs(done.ms)}` : ''
+    : st?.busy || st?.bg?.length ? ''
+      // "Done in" only when Settings > Footer has Reply time on
+      : done && Date.now() - done.at < 60000 && done.ms && footOn('replyTime') ? `Done in ${secs(done.ms)}` : ''
 }
 
 const secs = ms => ms < 60000 ? Math.max(1, Math.round(ms / 1000)) + 's' : Math.floor(ms / 60000) + 'm ' + Math.round(ms % 60000 / 1000) + 's'
+
+const capWord = w => w ? w[0].toUpperCase() + w.slice(1) : ''
+/** The modes on offer; the one Claude is in shows even when no longer offered (bypass, after the setting went off). */
+function modeList (p) {
+  const list = modes()
+  return list.some(m => m[0] === p.mode) || p.mode !== BYPASS[0] ? list : [...list, BYPASS]
+}
 
 function paintPickers (c) {
   const p = picksFor(c.id)
   const st = CHAT.state.get(c.id)
   // once Claude is running, what it reports wins: plan approval switches the mode
   if (st?.running && st.mode) p.mode = st.mode
-  const opts = (sel, list, value) => {
-    // rebuilt only when the choices change: rebuilding shut a list you had open
-    const sig = JSON.stringify(list) + '|' + value
-    if (sel.dataset.sig === sig) return
-    sel.dataset.sig = sig
-    sel.replaceChildren()
-    for (const [v, label, tip] of list) {
-      const o = el('option', '', label)
-      o.value = v
-      if (tip) o.title = tip
-      sel.appendChild(o)
-    }
-    sel.value = list.some(x => x[0] === value) ? value : list[0][0]
+  const list = modeList(p)
+  const label = (list.find(m => m[0] === p.mode) || list[0])[1]
+  if (c.mode.textContent !== label) {
+    c.mode.textContent = label
+    c.mode.setAttribute('aria-label', `Permission mode: ${label}`)
   }
-  // the mode Claude is in shows even when it is no longer offered (bypass, after the setting went off)
-  const list = modes()
-  opts(c.mode, list.some(m => m[0] === p.mode) || p.mode !== BYPASS[0] ? list : [...list, BYPASS], p.mode)
+  // the model, then its effort in a quieter colour; Claude's default until one is picked
+  const name = p.model ? modelName(p.model) : 'Default model'
+  const effort = capWord(p.effort)
+  const sig = name + '|' + effort
+  if (c.model.dataset.sig !== sig) {
+    c.model.dataset.sig = sig
+    c.model.replaceChildren(el('span', '', name))
+    if (effort) c.model.appendChild(el('span', 'ceffort', effort))
+    c.model.setAttribute('aria-label', `Model: ${name}${effort ? `, effort ${effort}` : ''}`)
+  }
+}
+
+// ------------------------------------------------------------ model and mode menus
+
+/** A model's family and version from its name ("Opus 5.5" -> opus, [5, 5]). */
+function familyOf (m) {
+  const name = String(m.label || modelName(m.value)).replace(/\s*\(1M\)$/i, '')
+  const v = /^(.*?)\s*(\d+(?:\.\d+)*)\s*$/.exec(name)
+  return v ? { fam: v[1].trim().toLowerCase(), ver: v[2].split('.').map(Number) } : { fam: name.toLowerCase(), ver: [] }
+}
+const newerThan = (a, b) => {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) { const d = (a[i] || 0) - (b[i] || 0); if (d) return d > 0 }
+  return false
+}
+const modelKey = v => String(modelName(v) || '').replace(/\s*\(1M\)$/i, '').toLowerCase()
+/** Whether this entry is the model the chat is on: the same id, or the same name ("opus[1m]" is Opus). */
+const isPicked = (m, picked) => !!picked && (m.value === picked || modelKey(m.value) === modelKey(picked) ||
+  String(m.label || '').toLowerCase() === modelKey(picked))
+/**
+ * The newest of each family at the top, the rest under More models. The model the
+ * chat is on stays at the top even when it is an older one, so the choice is in view.
+ */
+function splitModels (list, picked) {
+  const best = new Map()
+  for (const m of list) {
+    const f = familyOf(m)
+    const b = best.get(f.fam)
+    if (!b || newerThan(f.ver, familyOf(b).ver)) best.set(f.fam, m)
+  }
+  const top = list.filter(m => best.get(familyOf(m).fam) === m)
+  const rest = list.filter(m => !top.includes(m))
+  const old = rest.find(m => isPicked(m, picked))
+  return { top: old ? [...top, old] : top, rest }
+}
+
+let PICK_SHUT = { kind: '', at: 0 }
+/**
+ * The menu over the model or the mode: the same choices /model, /effort and
+ * Shift+Tab give. The chosen row carries a tick. Effort and older models open
+ * beside it, or in its place when there is no room. Arrows move, Right and Left
+ * open and close the side menus, Escape closes.
+ */
+function pickMenu (c, kind, anchor) {
+  // the click on its own control that just closed this menu does not open it again
+  if (PICK_SHUT.kind === kind && Date.now() - PICK_SHUT.at < 400) return
+  document.querySelectorAll('body > .pickwrap').forEach(m => m.remove())
+  for (const b of c.root.querySelectorAll('.cpick[aria-expanded="true"]')) b.setAttribute('aria-expanded', 'false')
+  const p = picksFor(c.id)
+  // the panels share one holder, so a click in either one is inside the menu
+  const wrap = el('div', 'pickwrap')
+  const panel = () => { const m = el('div', 'menu pickmenu'); m.setAttribute('role', 'menu'); wrap.appendChild(m); return m }
+  const main = panel()
+  let sub = null
+  const row = (into, label, opts = {}) => {
+    const b = el('button', 'menuitem')
+    b.setAttribute('role', opts.sub ? 'menuitem' : 'menuitemradio')
+    b.appendChild(el('span', '', label))
+    const right = el('span', 'mright')
+    if (opts.value) right.appendChild(el('em', '', opts.value))
+    if (opts.sub) {
+      b.dataset.sub = opts.sub
+      b.setAttribute('aria-haspopup', 'menu')
+      b.setAttribute('aria-expanded', 'false')
+      right.appendChild(icon('chevron', 'mchev'))
+    } else {
+      b.setAttribute('aria-checked', String(!!opts.on))
+      // the tick says which one is chosen; the hover colour only says where the pointer is
+      const tick = icon('check', 'mtick')
+      tick.style.visibility = opts.on ? 'visible' : 'hidden'
+      right.appendChild(tick)
+    }
+    b.appendChild(right)
+    if (opts.tip) b.title = opts.tip
+    b.onclick = e => {
+      e.stopPropagation()
+      if (opts.sub) { openSub(opts.sub, b); return }
+      kill(); opts.pick(); c.ta.focus()
+    }
+    into.appendChild(b)
+    return b
+  }
+  const sep = into => { const d = el('div', 'menusep'); d.setAttribute('role', 'separator'); into.appendChild(d) }
+  const models = chatModels()
+  const split = splitModels(models, p.model)
+
+  function fill (m, what) {
+    if (what === 'effort') {
+      m.appendChild(el('div', 'pnote', 'Higher effort means more thorough responses, but takes longer and uses your limits faster.'))
+      for (const l of effortLevels(c.id)) row(m, capWord(l), { on: l === p.effort, pick: () => setPick(c, 'effort', l) })
+    } else if (what === 'more') {
+      for (const x of split.rest) row(m, x.label || x.value, { on: isPicked(x, p.model), tip: x.note, pick: () => setPick(c, 'model', x.value) })
+    }
+  }
+  function closeSub (focusRow) {
+    if (!sub) return
+    const from = main.querySelector(`.menuitem[data-sub="${sub.dataset.what}"]`)
+    from?.setAttribute('aria-expanded', 'false')
+    sub.remove()
+    sub = null
+    main.hidden = false
+    if (focusRow) from?.focus()
+  }
+  function openSub (what, from) {
+    const again = sub?.dataset.what === what
+    closeSub(false)
+    if (again) return
+    sub = panel()
+    sub.dataset.what = what
+    sub.classList.add('pickside')
+    from.setAttribute('aria-expanded', 'true')
+    const r = main.getBoundingClientRect()
+    fill(sub, what)
+    const w = sub.getBoundingClientRect().width
+    const h = sub.getBoundingClientRect().height
+    const f = from.getBoundingClientRect()
+    const top = Math.max(8, Math.min(f.top - 6, window.innerHeight - h - 8))
+    if (r.left - w - 6 >= 8) { sub.style.left = `${r.left - w - 6}px`; sub.style.top = `${top}px` }
+    else if (r.right + 6 + w <= window.innerWidth - 8) { sub.style.left = `${r.right + 6}px`; sub.style.top = `${top}px` }
+    else {
+      // no room beside it: it takes the menu's place, with a way back
+      const back = el('button', 'menuitem pback')
+      back.setAttribute('role', 'menuitem')
+      back.append(icon('chevron', 'mchev back'), el('span', '', 'Model'))
+      back.setAttribute('aria-label', 'Back to Model')
+      back.onclick = e => { e.stopPropagation(); closeSub(true) }
+      sub.prepend(back)
+      main.hidden = true
+      sub.style.left = `${r.left}px`
+      sub.style.top = `${Math.max(8, r.bottom - sub.getBoundingClientRect().height)}px`
+    }
+    ;(sub.querySelector('.menuitem[aria-checked="true"]') || sub.querySelector('.menuitem:not(.pback)') || sub.querySelector('.menuitem'))?.focus()
+  }
+
+  if (kind === 'model') {
+    main.appendChild(el('div', 'menuhead', 'Model · this chat'))
+    for (const x of split.top) row(main, x.label || x.value, { on: isPicked(x, p.model), tip: x.note, pick: () => setPick(c, 'model', x.value) })
+    sep(main)
+    row(main, 'Effort', { sub: 'effort', value: capWord(p.effort) || 'Default' })
+    if (split.rest.length) { sep(main); row(main, 'More models', { sub: 'more' }) }
+  } else {
+    main.appendChild(el('div', 'menuhead', 'Permissions'))
+    for (const [v, label, tip] of modeList(p)) row(main, label, { on: v === p.mode, tip, pick: () => setMode(c, v) })
+  }
+  wrap.onkeydown = e => {
+    const at = e.target.closest?.('.pickmenu')
+    if (!at) return
+    const items = [...at.querySelectorAll('.menuitem')]
+    const i = items.indexOf(document.activeElement)
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus()
+    } else if (e.key === 'ArrowRight' && document.activeElement?.dataset.sub) {
+      e.preventDefault()
+      if (sub?.dataset.what !== document.activeElement.dataset.sub) document.activeElement.click()
+    } else if (e.key === 'ArrowLeft' && at === sub) { e.preventDefault(); closeSub(true) }
+  }
+  document.body.appendChild(wrap)
+  // the box sits at the bottom: the menu opens above its control
+  const r = anchor.getBoundingClientRect()
+  const m = main.getBoundingClientRect()
+  main.style.left = `${Math.max(8, Math.min(r.right - m.width, window.innerWidth - m.width - 8))}px`
+  // above its control, where the box leaves room; below it when there is more room there
+  const above = r.top - m.height - 4
+  main.style.top = `${above >= 8 || r.top > window.innerHeight - r.bottom ? Math.max(8, above) : r.bottom + 4}px`
+  anchor.setAttribute('aria-expanded', 'true')
+  // no tooltip over its own open menu
+  const tip = anchor.title
+  anchor.removeAttribute('title')
+  const kill = dismissOn(wrap, () => {
+    // closed with Escape or by a choice: the keyboard goes back to the control it came from
+    const inside = wrap.contains(document.activeElement)
+    wrap.remove()
+    if (inside) anchor.focus()
+    anchor.setAttribute('aria-expanded', 'false')
+    if (tip) anchor.title = tip
+    PICK_SHUT = { kind, at: Date.now() }
+  })
+  ;(main.querySelector('.menuitem[aria-checked="true"]') || main.querySelector('.menuitem'))?.focus()
 }
 
 // ------------------------------------------------------------ /model and /effort
@@ -1162,7 +1855,8 @@ function ownCommand (c, kind, arg) {
   return true
 }
 
-function applyLocal (c, kind, arg) {
+/** A model or effort for this chat, from /model, /effort or the menu. What you have typed is left alone. */
+function setPick (c, kind, arg) {
   const p = picksFor(c.id)
   if (kind === 'model') {
     if (!/^[\w.[\]-]{1,60}$/.test(arg)) return false
@@ -1174,13 +1868,19 @@ function applyLocal (c, kind, arg) {
     send({ type: 'chatEffort', id: c.id, value: arg })
     setCfg('chatEffort', arg)
   }
+  paintPickers(c)
+  c.status.textContent = kind === 'model' ? 'Model: ' + modelName(arg) : 'Effort: ' + arg
+  setTimeout(() => { if (c.status.textContent.startsWith(kind === 'model' ? 'Model:' : 'Effort:')) paintStatus(c) }, 2500)
+  return true
+}
+/** "/model opus" typed and sent: the pick is made and the command leaves the box. */
+function applyLocal (c, kind, arg) {
+  if (!setPick(c, kind, arg)) return false
   c.ta.value = ''
   CHAT.drafts.delete(c.id)
   c.slash.hidden = true
   c.fit?.()
   paintGo(c)
-  c.status.textContent = kind === 'model' ? 'Model: ' + modelName(arg) : 'Effort: ' + arg
-  setTimeout(() => { if (c.status.textContent.startsWith(kind === 'model' ? 'Model:' : 'Effort:')) paintGo(c) }, 2500)
   return true
 }
 
@@ -1645,6 +2345,7 @@ if (!BOARD_MODE) {
       return
     }
     if (m.type === 'chatCutoff') { CHAT.cutoff = new Set(m.ids || []); paintComposer(); return }
+    if (m.type === 'chatDropFiles') { dropRead(m); return }
     if (!m.type.startsWith('chat') || !m.id) return
     const id = m.id
     const st = CHAT.state.get(id) || { id, asks: [] }

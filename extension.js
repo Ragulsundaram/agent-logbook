@@ -8,7 +8,7 @@ const runner = require('./chat-runner')
 const cfg = (k, dflt) => vscode.workspace.getConfiguration('claudeHistory').get(k, dflt)
 
 /** Everything the Settings tab edits, sent to the webview with the environment. */
-const SETTINGS = ['topBars', 'sort', 'showLiveFirst', 'pageSize', 'dateFormat',
+const SETTINGS = ['topBars', 'footerItems', 'sort', 'showLiveFirst', 'pageSize', 'dateFormat',
   'resumeTarget', 'skipPermissions', 'exportSourceCopy', 'chatLayout',
   'limitAlerts', 'resetSoonWeeklyHours', 'resetSoonSessionMinutes', 'unusedPercent', 'boardAllWindows',
   'finishAlerts', 'chatHere', 'chatPermissionMode', 'chatEffort', 'chatEditorContext']
@@ -417,7 +417,17 @@ function inThisWindow (x) {
   return !!x.cwd && folders.some(f => x.cwd === f || x.cwd.startsWith(f + path.sep))
 }
 
+// the list shows the same chats as unread: bold, with a blue dot. Sent only when the set changes
+let UNREAD_SENT = ''
+function sendUnread () {
+  const ids = [...FINISHED.keys()].sort()
+  const key = ids.join(',')
+  if (key === UNREAD_SENT) return
+  UNREAD_SENT = key
+  broadcast({ type: 'unread', ids })
+}
 function paintFinished () {
+  sendUnread()
   if (!FINISH_ITEM) return
   if (!FINISHED.size) { FINISH_ITEM.hide(); return }
   const n = FINISHED.size
@@ -1557,6 +1567,62 @@ function pastedNote (id, list) {
   return `\n\n(The user attached ${paths.length === 1 ? 'a picture' : `${paths.length} pictures`} to this answer: ${paths.join(', ')}. Open ${paths.length === 1 ? 'it' : 'them'} with the Read tool.)`
 }
 
+// which files can go with a message and how big each kind may be: the same rules the box uses
+const sharedRules = require('./media/shared-rules.js')
+// Claude's and Codex's own folders hold logins and settings: never read from a drop
+const CONFIG_PLACES = () => {
+  const home = require('node:os').homedir()
+  return { dirs: [path.join(home, '.claude'), path.join(home, '.codex')], files: [path.join(home, '.claude.json')] }
+}
+
+/**
+ * Read files dropped on the message box from the Explorer, for the box to attach
+ * as if they had been picked with its attach button: only files on this computer
+ * (no network share), only the kinds it takes, only regular files, each within its
+ * kind's size limit, and nothing from Claude's or Codex's own folders. A shortcut
+ * is followed to the file it points at; a broken one is refused. Each refusal
+ * comes back with a short reason, which the box names in one note.
+ */
+async function readDropped (uris) {
+  const out = []
+  const places = CONFIG_PLACES()
+  for (const raw of (Array.isArray(uris) ? uris : []).slice(0, 16)) {
+    let uri
+    try { uri = vscode.Uri.parse(String(raw), true) } catch { continue }
+    const name = path.basename(uri.path) || 'file'
+    if (uri.scheme !== 'file' || uri.authority) { out.push({ name, error: 'not a file on this computer' }); continue }
+    const kind = sharedRules.kindOf(name)
+    if (!kind) { out.push({ name, error: 'only pictures, PDFs and text files can be attached' }); continue }
+    const file = real(uri.fsPath)
+    if (!file) { out.push({ name, error: 'could not be read' }); continue }
+    if (places.dirs.some(d => within(d, file)) || places.files.some(f => real(f) === file)) {
+      out.push({ name, error: 'in Claude\'s or Codex\'s own settings folder, so it is not attached' })
+      continue
+    }
+    const max = sharedRules.LIMITS[kind]
+    const tooBig = `too big, ${sharedRules.LIMIT_WORDS[kind]} at most`
+    try {
+      const st = await fs.promises.stat(file)
+      if (!st.isFile()) { out.push({ name, error: 'could not be read' }); continue }
+      if (st.size > max) { out.push({ name, error: tooBig }); continue }
+      const buf = await fs.promises.readFile(file)
+      // it may have grown between the two looks
+      if (buf.length > max) { out.push({ name, error: tooBig }); continue }
+      out.push({ name, mediaType: sharedRules.mediaTypeOf(name), data: buf.toString('base64') })
+    } catch { out.push({ name, error: 'could not be read' }) }
+  }
+  return out
+}
+
+/** The sidebar, brought forward and loaded far enough to take messages; null if it never came. */
+async function sidebarView () {
+  await vscode.commands.executeCommand('claudeHistory.view.focus')
+  // the sidebar may still be loading: wait for its page to say it is ready
+  for (let i = 0; i < 40 && !(SIDEBAR && READY_VIEWS.has(SIDEBAR)); i++) await new Promise(r => setTimeout(r, 100))
+  return SIDEBAR && READY_VIEWS.has(SIDEBAR) ? SIDEBAR : null
+}
+const READY_VIEWS = new WeakSet()   // views whose page has loaded and said so
+
 /** A new chat in the logbook: no Claude yet, it starts with the first message, under this id. */
 function newChatHere (post) {
   const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
@@ -1579,10 +1645,8 @@ async function announceChat (ctx) {
     'Agent Logbook 1.9: chat with Claude right in the logbook. Reply under any chat, or start a new one from +.',
     'Try it', "What's new")
   if (pick === 'Try it') {
-    await vscode.commands.executeCommand('claudeHistory.view.focus')
-    // the sidebar may still be loading: wait for it to say it is ready
-    for (let i = 0; i < 40 && !SIDEBAR; i++) await new Promise(r => setTimeout(r, 100))
-    if (SIDEBAR) newChatHere(SIDEBAR)
+    const to = await sidebarView()
+    if (to) newChatHere(to)
   } else if (pick === "What's new") {
     await vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.joinPath(ctx.extensionUri, 'CHANGELOG.md'))
   }
@@ -1933,6 +1997,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
 <link rel="stylesheet" href="${uri('style.css')}"></head>
 <body${mode ? ` data-mode="${mode}"` : ''}${chatId ? ` data-chat="${chatId}"` : ''}>${fs.readFileSync(path.join(ctx.extensionPath, 'media', 'body.html'), 'utf8')}
 <script nonce="${nonce}" src="${uri('md.js')}"></script>
+<script nonce="${nonce}" src="${uri('shared-rules.js')}"></script>
 <script nonce="${nonce}" src="${uri('main.js')}"></script>
 <script nonce="${nonce}" src="${uri('chat-moves.js')}"></script>
 <script nonce="${nonce}" src="${uri('chat.js')}"></script></body></html>`
@@ -1943,6 +2008,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
       try {
         switch (msg.type) {
           case 'ready':
+            READY_VIEWS.add(post)
             post({
               type: 'env',
               groups: scan.groupsFor()
@@ -1958,6 +2024,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
                   })
             pushLimits(post, 60000)
             post({ type: 'sessions', data: scan.sessionList(live) })
+            post({ type: 'unread', ids: [...FINISHED.keys()] })
             post({ type: 'chatCutoff', ids: Object.keys(cutoffs()) })
             break
           case 'sessions':
@@ -2221,16 +2288,24 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             // settings page does, so the two can never drift apart
             if (!SETTINGS.includes(msg.key)) return
             if (msg.key === 'resumeTarget' && !TARGET_KEYS.includes(msg.value)) return
+            // a list of known items, each once; checked on its own, so a broken stored value never blocks a fix
+            if (msg.key === 'footerItems' && !sharedRules.validFooterItems(msg.value)) return
             const now = vscode.workspace.getConfiguration('claudeHistory').get(msg.key)
-            if (now !== undefined && now !== null && typeof msg.value !== typeof now) return
+            if (msg.key !== 'footerItems' && now !== undefined && now !== null && typeof msg.value !== typeof now) return
             if (msg.key === 'skipPermissions' && msg.value === true) {
               const ok = await vscode.window.showWarningMessage(
                 'Resume and fork chats with --dangerously-skip-permissions, and offer "Bypass permissions" in chats here? Claude will run every tool without asking.',
                 { modal: true }, 'Turn on')
               if (ok !== 'Turn on') { post({ type: 'env', cfg: settingsSnapshot() }); return }
             }
-            await vscode.workspace.getConfiguration('claudeHistory')
-              .update(msg.key, msg.value, vscode.ConfigurationTarget.Global)
+            try {
+              await vscode.workspace.getConfiguration('claudeHistory')
+                .update(msg.key, msg.value, vscode.ConfigurationTarget.Global)
+            } catch (e) {
+              // not saved: the view goes back to what the setting really is, then says why
+              post({ type: 'env', cfg: settingsSnapshot() })
+              throw e
+            }
             break
           }
           case 'fork': {
@@ -2562,6 +2637,10 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             post({ type: 'chatFilesList', id, q, list })
             break
           }
+          case 'chatDropRead':
+            // files dropped on the message box from VS Code's Explorer arrive as links only
+            post({ type: 'chatDropFiles', key: String(msg.key || '').slice(0, 40), items: await readDropped(msg.uris) })
+            break
           case 'chatEditorAsk':
             postEditor()
             break
@@ -2730,7 +2809,8 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           }
           case 'newChat': {
             const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-            if (msg.where === 'logbook') { newChatHere(post); break }
+            // the board shows no chat itself: a new one opens in the sidebar, which comes forward
+            if (msg.where === 'logbook') { const to = mode === 'board' ? await sidebarView() : post; if (to) newChatHere(to); break }
             const bin = claudeBin()
             // the new chat's id is chosen here, so Resume can find its terminal
             // later from the launch itself rather than by asking claude

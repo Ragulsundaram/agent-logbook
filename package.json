@@ -289,6 +289,35 @@
             }
           }
         },
+        "claudeHistory.footerItems": {
+          "scope": "application",
+          "type": "array",
+          "default": [
+            "context",
+            "cost"
+          ],
+          "uniqueItems": true,
+          "markdownDescription": "What the line under a chat's message box shows: the activity graph, context use, cache share, cost, how long the last reply took, and the number of files changed. Easier to set from the Settings tab in the panel.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "graph",
+              "context",
+              "cache",
+              "cost",
+              "replyTime",
+              "files"
+            ],
+            "enumDescriptions": [
+              "The activity graph (context over the chat)",
+              "Context in use",
+              "Share of input served from cache",
+              "Cost at API prices",
+              "How long the last reply took",
+              "Files changed, which opens the list"
+            ]
+          }
+        },
         "claudeHistory.chatLayout": {
           "type": "string",
           "default": "panel",

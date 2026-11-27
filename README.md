@@ -11,6 +11,8 @@ uploaded, and no account is needed.
 **Read your chats.** Every session, grouped by project, with the full
 conversation rendered the way you saw it: markdown, images, tool calls, and the
 file diffs each edit made. Search across every transcript, not just titles.
+A chat in this window that finished a reply you have not opened yet shows in
+bold with a blue dot; hovering a row swaps its age for its actions.
 
 **Find one fast.** Ctrl+Cmd+H (Ctrl+Alt+H on Windows and Linux), or "Agent
 Logbook: Find a Chat…" in the Command Palette, opens a search box over every
@@ -27,8 +29,10 @@ extension or Claude Desktop instead, and Resume reveals the terminal already run
 than starting a second one. With chatting in the logbook turned off, or in a folder
 you have not trusted, a chat goes back where it was started. Codex chats always resume in a terminal. "New chat from this one" forks a session with its
 full history, like /branch; "New chat from a summary" starts a fresh one from a
-written handover instead. A chat running elsewhere says where, with "Show it"
-for a terminal in this window.
+written handover instead. A chat running elsewhere says where, with "Show
+terminal" for a terminal in this window and "Continue here" once it is idle there;
+"Continue here as a copy" in the chat's menu carries it on here while the original
+keeps running.
 Claude Desktop may title a resumed chat with its folder name or a generic title,
 because its `claude://resume` link takes no title; rename the chat in Desktop if
 you want it to match the Agent Logbook title.
@@ -36,10 +40,17 @@ you want it to match the Agent Logbook title.
 **Chat from the logbook.** A box under every Claude chat lets you carry on
 talking to it without a terminal: the reply streams in as it is written, and
 file edits, commands, questions and plans wait for you as cards you approve,
-deny or answer. Pick the model, effort and permission mode per chat (Shift+Tab in
+deny or answer. The box holds your text, attachments (the first picture as a
+thumbnail, later ones as chips in the sentence), the paperclip and one send button
+(Queue while Claude is replying, Stop when the box is empty). The quiet line under
+it shows the chat's details on the left and, on the right, the model with its
+effort and the permission mode: click either to pick for this chat (Shift+Tab in
 the box switches the mode for that chat only; new chats start on the last one picked
-from the menu), stop a
-reply with Escape, paste images and use slash commands. `/mcp` lists the
+from the menu). Stop a
+reply with Escape, paste or drop in pictures, PDFs and text files and use slash
+commands. To drop files from Finder or the Explorer, hold Shift while dragging them
+onto the chat: without it, the editor opens the file instead (this is how VS Code
+and Cursor hand drags to extension views, in the sidebar and in tabs alike). `/mcp` lists the
 chat's MCP servers and, as in the terminal, can turn one off or on for the
 folder, reconnect one that failed, or sign in to one. The + button starts a
 new chat here or in a terminal. This runs your own installed Claude Code in the
@@ -94,7 +105,10 @@ found them rather than read them here.
 `~/.claude/**/memory` and `~/.codex/memories` for notes, and your Claude OAuth
 token from where Claude Code keeps it (the macOS Keychain, or its credentials file elsewhere) so it can ask Anthropic for your current plan
 usage - the same request Claude Code itself makes. The token is never stored or
-sent anywhere else.
+sent anywhere else. A file you drop on the message box from VS Code's Explorer is
+read only to attach it to your message, as the attach button would; files inside
+`~/.claude`, `~/.codex` or `~/.claude.json`, which hold logins and settings, are
+never read this way.
 
 **Writes** its own cache and flags under `~/.claude`, and appends a
 `custom-title` line to a Claude transcript when you rename a chat, which is how
@@ -129,6 +143,9 @@ file you have open with unsaved changes, the logbook saves it (reading one
 never saves it; Claude reads what is on disk), and after an
 edit it passes on any new errors the editor reports in that file. Files you
 attach go to Claude with the message: PDFs as they are, text files as their text.
+What counts as a text file goes by its extension (Markdown, code, JSON, CSV, logs
+and the like), the same whether it is attached, pasted or dropped; `.env` files
+are not attached, as they usually hold secrets.
 A message carries up to 8 pictures and 8 files; anything past that is named in a
 note rather than dropped silently.
 
@@ -138,6 +155,14 @@ The Settings tab covers the quota bars across the top of the panel - which
 windows they show, in what order, in what colour - along with list ordering,
 where Resume opens, and what an export contains. Every control writes the same
 setting the editor's own settings page does.
+
+**Footer** picks what the line under a chat's message box shows
+(`claudeHistory.footerItems`): the activity graph, context in use, cache share,
+cost, reply time ("Done in…") and files changed. Context and cost are on by
+default. Files changed is a link that opens the chat's list of changed files; the
+list is also in the chat's menu (the … on its title row), and a chat without that
+menu always shows the link. A chat using a lot of memory or processor adds a
+"Laptop" figure to the line, whatever is picked.
 
 ## Contributing
 
