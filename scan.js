@@ -2071,15 +2071,16 @@ function agentTranscript (id, agentId) {
   let c = AGENT_PARSED.get(key)
   // a file replaced rather than appended to, even by one of the same size,
   // starts with different bytes: read it afresh instead of from the old offset
-  const head = headOf(file)
-  let more = c && c.file === file && c.head === head ? readFrom(file, c.off) : null
+  let more = c && c.file === file && headOf(file, c.hn) === c.head ? readFrom(file, c.off) : null
   if (!more) {
-    c = { file, head, off: 0, st: parseStart(true) }
+    c = { file, off: 0, st: parseStart(true) }
     more = readFrom(file, 0)
     if (!more) return null
   }
   if (more.raw) parseMore(c.st, more.raw)
   c.off = more.off
+  // only bytes already read are compared next time, so a short file that grows is still an append
+  c.hn = Math.min(512, c.off); c.head = headOf(file, c.hn)
   AGENT_PARSED.delete(key); AGENT_PARSED.set(key, c)
   while (AGENT_PARSED.size > PARSED_MAX) AGENT_PARSED.delete(AGENT_PARSED.keys().next().value)
   const { turns, info } = parseResult(c.st)
@@ -2672,13 +2673,13 @@ const PARSED = new Map()          // id -> { file, off, st, signals }
 const PARSED_MAX = 3
 const AGENT_PARSED = new Map()    // 'chat#agent' -> the same, for agent threads, kept apart so they never push an open chat out
 
-/** The file's first bytes and its identity on disk: what an append leaves alone. */
-function headOf (file) {
+/** The file's first `len` bytes and its identity on disk: what an append leaves alone. */
+function headOf (file, len = 512) {
   let fd
   try {
     fd = fs.openSync(file, 'r')
-    const buf = Buffer.alloc(512)
-    const n = fs.readSync(fd, buf, 0, 512, 0)
+    const buf = Buffer.alloc(len)
+    const n = fs.readSync(fd, buf, 0, len, 0)
     return fs.fstatSync(fd).ino + ':' + buf.subarray(0, n).toString('base64')
   } catch { return '' } finally { if (fd !== undefined) try { fs.closeSync(fd) } catch {} }
 }
@@ -3084,4 +3085,4 @@ try {
 module.exports = {
   writePrivate, mkdirPrivate, board, textOf, summariseForTest: summariseFile, setBin, index, rescan, search, warmSearch, liveSessionsAsync, resourcesAsync, sessionForPid, livePids, editAt, rename, agents: subAgents, agentTranscript, streaks, analytics, dashboard, branchMap, brief, isFlagged, livePid,
   readOnlyCache, saveCacheNow, groups, groupsFor, editGroups, projectName, refreshUsage, setFlag, trash, trashedList, restore, transcriptQuick, codexLiveAsync, imageAt, liveSessions, memories, transcript, sessionList, stats, trend, limits, toMarkdown, HOME,
-  summariseCodexForTest: summariseCodex }
+  summariseCodexForTest: summariseCodex, headForTest: headOf }

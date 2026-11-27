@@ -1995,6 +1995,9 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             // read rather than queueing another behind it
             const whole = WHOLE.get(msg.id)
             const data = whole ? await whole : await transcriptSoon(msg.id)
+            // an agent thread or another chat opened here meanwhile: that one stays on screen
+            const still = () => !WATCH || WATCH.openOf(post) === msg.id
+            if (!still()) break
             post({ type: 'session', data })
             if (opts.onTitle && data?.id === opts.chat) opts.onTitle(data.title)
             // the end of a long chat came first; the whole of it follows and is
@@ -2007,7 +2010,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
                 p.finally(() => WHOLE.delete(msg.id))
               }
               const full = await p
-              if (full) post({ type: 'session', data: full, live: true })
+              if (full && still()) post({ type: 'session', data: full, live: true })
             }
             break
           }
@@ -3071,7 +3074,7 @@ function openChatTab (ctx, id, beside) {
   if (open) { open.reveal(); return open }
   // already in a tab from before a reload: show that one, never a second copy
   const sleeping = sleepingTabs().find(x => x.id === id)
-  if (sleeping && GROUPS[sleeping.column - 1]) { wakeTab(sleeping); return null }
+  if (sleeping && GROUPS[sleeping.column - 1]) { wakeTab(sleeping).catch(() => {}); return null }
   const panel = vscode.window.createWebviewPanel('claudeHistory.chat', chatTabTitle(id),
     beside ? vscode.ViewColumn.Beside : vscode.ViewColumn.Active,
     { enableScripts: true, retainContextWhenHidden: true })
@@ -3080,6 +3083,7 @@ function openChatTab (ctx, id, beside) {
 }
 /** "3h ago" for the search box: enough to tell this week's chat from last month's. */
 function agoText (ts) {
+  if (!ts) return ''                        // no time recorded: say nothing rather than 1970
   const m = Math.max(0, Math.round((Date.now() - (ts || 0)) / 6e4))
   if (m < 60) return m <= 1 ? 'just now' : `${m}m ago`
   const h = Math.round(m / 60)
@@ -3099,8 +3103,9 @@ function dayGroup (ts) {
   if (t >= start.getTime() - 29 * day) return 'This month'
   return 'Older'
 }
-// a title is shown as text: "$(name)" would otherwise draw an icon
-const plainLabel = t => String(t || '(untitled)').replace(/\$\(/g, '$​(')
+// a title or folder is shown as text: "$(name)" would otherwise draw an icon
+const noIcons = t => String(t || '').replace(/\$\(/g, '$​(')
+const plainLabel = t => noIcons(t || '(untitled)')
 
 /**
  * Cursor's own search box over every chat, so an older one is a shortcut away
@@ -3122,7 +3127,7 @@ async function findChat (ctx) {
   const row = (s, extra) => ({
     label: plainLabel(s.title),
     iconPath: logo[s.provider === 'codex' ? 'codex' : 'claude'],
-    description: [LIVE_WORDS[s.live] || '', here.has(s.project) ? '' : s.project,
+    description: [LIVE_WORDS[s.live] || '', here.has(s.project) ? '' : noIcons(s.project),
       s.archived ? 'archived' : '', agoText(s.lastTs)].filter(Boolean).join(' · '),
     buttons: s.provider === 'codex' ? [] : [side],
     s,

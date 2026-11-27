@@ -24,8 +24,8 @@ terminal.
 **Pick one back up.** Resume opens the chat here in the logbook, with its
 message box ready, by default. Settings can send it to a terminal, the Claude Code
 extension or Claude Desktop instead, and Resume reveals the terminal already running it rather
-than starting a second one. With chatting in the logbook turned off, a chat goes
-back where it was started. Codex chats always resume in a terminal. "New chat from this one" forks a session with its
+than starting a second one. With chatting in the logbook turned off, or in a folder
+you have not trusted, a chat goes back where it was started. Codex chats always resume in a terminal. "New chat from this one" forks a session with its
 full history, like /branch; "New chat from a summary" starts a fresh one from a
 written handover instead. A chat running elsewhere says where, with "Show it"
 for a terminal in this window.

@@ -4,7 +4,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { textOf, summariseForTest } = require('../scan.js')
+const { textOf, summariseForTest, headForTest } = require('../scan.js')
 const msg = (...texts) => ({ entrypoint: 'sdk-cli', message: { role: 'user', content: texts.map(text => ({ type: 'text', text })) } })
 
 test('shows the editor context and attachments sent beside a message as short chips', () => {
@@ -96,5 +96,21 @@ test('a Codex chat is titled by the first message typed, not the instructions se
     const s = summariseCodexForTest(file)
     assert.equal(s.title, 'Rename the helper in utils')
     assert.equal(s.turns, 1)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('an agent file that grows keeps its head, one replaced by another of the same size does not', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lb-head-'))
+  const file = path.join(dir, 'agent-a.jsonl')
+  try {
+    fs.writeFileSync(file, '{"a":1}\n')
+    const n = fs.statSync(file).size
+    const head = headForTest(file, n)
+    fs.appendFileSync(file, '{"b":2}\n')
+    assert.equal(headForTest(file, n), head)
+    const other = path.join(dir, 'other.jsonl')
+    fs.writeFileSync(other, '{"c":3}\n')
+    fs.renameSync(other, file)
+    assert.notEqual(headForTest(file, n), head)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })

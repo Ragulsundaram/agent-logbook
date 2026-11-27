@@ -933,6 +933,7 @@ function messageMatches (q) {
     const resume = el('button', 'fresume')
     resume.appendChild(icon('play', 'fresico'))
     resume.title = 'Resume this chat'
+    resume.setAttribute('aria-label', resume.title)
     resume.onclick = e => {
       e.stopPropagation()
       // the host decides where it goes; set to the logbook, it opens at the match
@@ -1044,6 +1045,7 @@ function chatRow (s) {
     const b = el('button', 'ract')
     b.appendChild(icon(name))
     b.title = tip
+    b.setAttribute('aria-label', tip)
     b.onclick = e => { e.stopPropagation(); fn(e) }
     return b
   }
@@ -1379,6 +1381,7 @@ function agentActs (t) {
     const b = el('button', 'btn ico')
     b.appendChild(icon(name))
     b.title = tip
+    b.setAttribute('aria-label', tip)
     if (off) b.disabled = true; else b.onclick = fn
     return b
   }
@@ -1599,13 +1602,16 @@ function updateLive (t) {
   // and the numbers under it: a chat opened as it started read 0 messages until reopened
   const facts = $('#detail .dhead .facts')
   if (facts) facts.textContent = chatFacts(t)
+  const was = CUR
   CUR = t
   // an agent thread's status and its Copy result move too: it finishes while you watch
   if (t.isAgent) {
     const st = $('#detail .dtop .astate')
     if (st && t.status) { st.textContent = t.status; st.className = 'astate ' + statusClass(t.status) }
+    // rebuilt only when it changed: a live refresh comes every second, and a new
+    // toolbar would take keyboard focus off the button you are on
     const acts = $('#detail .dhead > .acts')
-    if (acts) acts.replaceWith(agentActs(t))
+    if (acts && (was?.result !== t.result || (was?.agents || []).length !== (t.agents || []).length)) acts.replaceWith(agentActs(t))
   }
   // the footer numbers and the agents button move with every reply
   const d = $('#detail')
