@@ -289,9 +289,12 @@ const TABICON = { chats: 'message', usage: 'card', digest: 'calendar', memory: '
 const TABNAME = { chats: 'Chats', usage: 'Card', digest: 'Digest', memory: 'Memory', agents: 'Agents', settings: 'Settings' }
 let TAB = 'chats'
 let UNREAD = new Set()     // chats that finished a reply in this window you have not opened since
+// whether this view is on screen: the extension says so when it changes, as a page in
+// a hidden tab or a collapsed sidebar still reports itself visible
+let VIEW_SHOWN = true
 /** The chat on screen finished while you look at it, or while its tab was hidden and you came back: it is seen. */
 function seenIfShown () {
-  if (!BOARD_MODE && CUR && UNREAD.has(CUR.id) && !$('#detail').hidden && document.visibilityState === 'visible') send({ type: 'markSeen', id: CUR.id })
+  if (!BOARD_MODE && VIEW_SHOWN && document.visibilityState === 'visible' && CUR && UNREAD.has(CUR.id) && !$('#detail').hidden) send({ type: 'markSeen', id: CUR.id })
 }
 document.addEventListener('visibilitychange', seenIfShown)
 const IMGS_OPEN = new Set()   // messages whose pictures were all shown with "+N", by chat, time and count
@@ -3499,6 +3502,7 @@ window.addEventListener('message', e => {
   if (m.type === 'pendingChat' && !BOARD_MODE) showPending(m.id)
   if (m.type === 'pendingGone' && PENDING_CHAT === m.id) { PENDING_CHAT = null; if (!CUR) closeDetail() }
   if (m.type === 'seen') { READ_AT[m.id] = m.at; if (BOARD_MODE) paintSeen() }
+  if (m.type === 'shown') { VIEW_SHOWN = !!m.visible; seenIfShown() }
   if (m.type === 'unread') {
     UNREAD = new Set(m.ids || [])
     seenIfShown()

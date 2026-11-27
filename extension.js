@@ -1607,7 +1607,12 @@ async function readDropped (uris) {
     const tooBig = `too big, ${sharedRules.LIMIT_WORDS[kind]} at most`
     let fh
     try {
-      fh = await fs.promises.open(file, 'r')
+      // looked at before opening: opening a named pipe would wait for a writer that never comes
+      const pre = await fs.promises.stat(file)
+      if (!pre.isFile()) { out.push({ name, error: 'could not be read' }); continue }
+      if (pre.size > max) { out.push({ name, error: tooBig }); continue }
+      // without waiting either, in case it was swapped for one in between; then checked again on the handle
+      fh = await fs.promises.open(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0))
       const st = await fh.stat()
       if (!st.isFile()) { out.push({ name, error: 'could not be read' }); continue }
       if (st.size > max) { out.push({ name, error: tooBig }); continue }
@@ -1635,6 +1640,7 @@ async function sidebarView () {
   return SIDEBAR && READY_VIEWS.has(SIDEBAR) ? SIDEBAR : null
 }
 const READY_VIEWS = new WeakSet()   // views whose page has loaded and said so
+let SIDEBAR_ASKING = false           // a new chat from the board is waiting on the sidebar, or on its "Try again"
 
 /** A new chat in the logbook: no Claude yet, it starts with the first message, under this id. */
 function newChatHere (post) {
@@ -1707,7 +1713,7 @@ function chatSend (msg, post) {
   // pasted pictures: a known type and a sane size, nothing else goes through
   const images = (Array.isArray(msg.images) ? msg.images : []).slice(0, 8)
     .filter(im => im && /^image\/(png|jpeg|gif|webp)$/.test(im.mediaType) &&
-      typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < 7e6)
+      typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < sharedRules.PAYLOAD.imageBase64)
   // attached files: PDFs as they are, text files as text; nothing else goes through
   const files = (Array.isArray(msg.files) ? msg.files : []).slice(0, 8).map(f => ({
     name: String(f?.name || 'file').replace(/[\r\n<>"]/g, '').slice(0, 120),
@@ -2022,6 +2028,8 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
         switch (msg.type) {
           case 'ready':
             READY_VIEWS.add(post)
+            // a page loaded in a hidden tab starts out told so, not assumed on screen
+            post({ type: 'shown', visible: !!isVisible() })
             post({
               type: 'env',
               groups: scan.groupsFor()
@@ -2826,13 +2834,16 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             if (msg.where === 'logbook') {
               if (mode !== 'board') { newChatHere(post); break }
               // the sidebar can take a moment, or fail, to come up: say so, with a way to try again
+              // one warning at a time: clicks while it is up, or while the sidebar is still coming, add nothing
+              if (SIDEBAR_ASKING) break
+              SIDEBAR_ASKING = true
               const startInSidebar = async () => {
                 const to = await sidebarView()
                 if (to) { newChatHere(to); return }
                 const again = await vscode.window.showWarningMessage('The logbook sidebar did not open, so the new chat could not start there.', 'Try again')
                 if (again === 'Try again') await startInSidebar()
               }
-              await startInSidebar()
+              try { await startInSidebar() } finally { SIDEBAR_ASKING = false }
               break
             }
             const bin = claudeBin()
@@ -3009,7 +3020,11 @@ class HistoryView {
     this.view = view
     view.onDidDispose(() => { SIDEBAR = null })
     wire(this.ctx, view.webview, fn => view.onDidDispose(fn), 'sidebar', () => view.visible)
-    view.onDidChangeVisibility(() => { if (view.visible) pollLive().catch(() => {}) })
+    view.onDidChangeVisibility(() => {
+      if (view.visible) pollLive().catch(() => {})
+      // a hidden view's page cannot tell for itself: it is told, to mark what it shows as seen
+      view.webview.postMessage({ type: 'shown', visible: view.visible })
+    })
   }
 }
 
@@ -3144,6 +3159,15 @@ function openBoard (ctx) {
   return BOARD
 }
 
+/**
+ * Tell an editor tab's page when it is shown or hidden. A page in a hidden tab
+ * still thinks it is visible, so it is told: a chat that finished while you were
+ * away is marked seen only once you can see it.
+ */
+function tellShown (panel) {
+  panel.onDidChangeViewState(e => { e.webviewPanel.webview.postMessage({ type: 'shown', visible: e.webviewPanel.visible }) })
+}
+
 /** Open the same UI as an editor tab, so it can sit beside anything. */
 function openInEditor (ctx, beside) {
   const panel = vscode.window.createWebviewPanel(
@@ -3153,6 +3177,7 @@ function openInEditor (ctx, beside) {
   )
   panel.iconPath = tabIcon(ctx)
   wire(ctx, panel.webview, fn => panel.onDidDispose(fn), undefined, () => panel.visible, { reveal: () => panel.reveal() })
+  tellShown(panel)
   return panel
 }
 
@@ -3411,6 +3436,7 @@ function sleepingTabs (idx = new Map(scan.index().map(x => [x.id, x]))) {
 }
 
 function fillChatTab (ctx, panel, id) {
+  tellShown(panel)
   CHAT_TABS.set(id, panel)
   EXT_CTX = ctx
   TAB_STATE.set(panel, { base: panel.title, state: '' })

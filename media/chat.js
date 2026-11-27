@@ -894,12 +894,15 @@ function buildComposer (id) {
   // says whether it is empty, which shows the placeholder
   const fit = () => ta.classList.toggle('blank', !ta.value && !ta.querySelector('.cchip'))
   c.fit = fit
-  ta.oninput = () => {
+  ta.oninput = e => {
     // a chip deleted by hand takes its picture or file with it
     if (chipsGone(c)) { paintImages(c); placeLive() }
-    dropSpacers(ta)
+    // not while a word is being composed (Japanese, Chinese, Korean input): changing the
+    // text under the composition breaks it. It is done once the word is in
+    if (!e?.isComposing) dropSpacers(ta)
     CHAT.drafts.set(id, ta.value); saveLayout(c); fit(); askMention(c); paintSlash(c); paintGo(c)
   }
+  ta.addEventListener('compositionend', () => { dropSpacers(ta); CHAT.drafts.set(id, ta.value); saveLayout(c) })
   ta.onkeydown = e => {
     if (!c.slash.hidden && slashKey(c, e)) return
     if (chipKey(ta, e)) return
@@ -1421,6 +1424,9 @@ function submit (c, only) {
     CHAT.shell.set(id, [...(CHAT.shell.get(id) || []), { key, cmd, out: '', running: true, code: null }])
     CHAT.sentLog.set(id, [...(CHAT.sentLog.get(id) || []), text].slice(-50))
     send({ type: 'chatShell', id, key, cmd })
+    // the command has gone: it does not come back as the draft when you return to this chat
+    CHAT.drafts.delete(id)
+    CHAT.layout.delete(id)
     c.ta.value = ''
     c.fit()
     c.slash.hidden = true
