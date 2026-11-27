@@ -4,6 +4,8 @@ const path = require('node:path')
 const scan = require('./scan')
 const mcp = require('./mcp-setup')
 const runner = require('./chat-runner')
+// which files can go with a message, how big each kind may be, and the footer's items: the same rules the box uses
+const sharedRules = require('./media/shared-rules.js')
 
 const cfg = (k, dflt) => vscode.workspace.getConfiguration('claudeHistory').get(k, dflt)
 
@@ -1550,7 +1552,7 @@ function prunePastes () {
 function pastedNote (id, list) {
   const pics = (Array.isArray(list) ? list : []).slice(0, 4)
     .filter(im => im && /^image\/(png|jpeg|gif|webp)$/.test(im.mediaType) &&
-      typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < 7e6)
+      typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < sharedRules.PAYLOAD.imageBase64)
   if (!pics.length || !/^[\w-]+$/.test(String(id))) return ''
   const paths = []
   try {
@@ -1567,8 +1569,6 @@ function pastedNote (id, list) {
   return `\n\n(The user attached ${paths.length === 1 ? 'a picture' : `${paths.length} pictures`} to this answer: ${paths.join(', ')}. Open ${paths.length === 1 ? 'it' : 'them'} with the Read tool.)`
 }
 
-// which files can go with a message and how big each kind may be: the same rules the box uses
-const sharedRules = require('./media/shared-rules.js')
 // Claude's and Codex's own folders hold logins and settings: never read from a drop
 const CONFIG_PLACES = () => {
   const home = require('node:os').homedir()
@@ -1591,25 +1591,38 @@ async function readDropped (uris) {
     try { uri = vscode.Uri.parse(String(raw), true) } catch { continue }
     const name = path.basename(uri.path) || 'file'
     if (uri.scheme !== 'file' || uri.authority) { out.push({ name, error: 'not a file on this computer' }); continue }
-    const kind = sharedRules.kindOf(name)
-    if (!kind) { out.push({ name, error: 'only pictures, PDFs and text files can be attached' }); continue }
     const file = real(uri.fsPath)
     if (!file) { out.push({ name, error: 'could not be read' }); continue }
+    // the name dropped and the file it leads to must both pass: a shortcut named
+    // notes.md that points at a .env, or at a program, is refused
+    const why = sharedRules.refusal(name) || sharedRules.refusal(path.basename(file))
+    if (why) { out.push({ name, error: why }); continue }
     if (places.dirs.some(d => within(d, file)) || places.files.some(f => real(f) === file)) {
       out.push({ name, error: 'in Claude\'s or Codex\'s own settings folder, so it is not attached' })
       continue
     }
+    // the file itself decides what it is read as
+    const kind = sharedRules.kindOf(path.basename(file))
     const max = sharedRules.LIMITS[kind]
     const tooBig = `too big, ${sharedRules.LIMIT_WORDS[kind]} at most`
+    let fh
     try {
-      const st = await fs.promises.stat(file)
+      fh = await fs.promises.open(file, 'r')
+      const st = await fh.stat()
       if (!st.isFile()) { out.push({ name, error: 'could not be read' }); continue }
       if (st.size > max) { out.push({ name, error: tooBig }); continue }
-      const buf = await fs.promises.readFile(file)
-      // it may have grown between the two looks
-      if (buf.length > max) { out.push({ name, error: tooBig }); continue }
-      out.push({ name, mediaType: sharedRules.mediaTypeOf(name), data: buf.toString('base64') })
-    } catch { out.push({ name, error: 'could not be read' }) }
+      // at most one byte past the limit is read, so a file that grows meanwhile is still caught
+      const buf = Buffer.alloc(max + 1)
+      let got = 0
+      for (;;) {
+        const { bytesRead } = await fh.read(buf, got, buf.length - got, got)
+        if (!bytesRead) break
+        got += bytesRead
+        if (got >= buf.length) break
+      }
+      if (got > max) { out.push({ name, error: tooBig }); continue }
+      out.push({ name, mediaType: sharedRules.mediaTypeOf(path.basename(file)), data: buf.subarray(0, got).toString('base64') })
+    } catch { out.push({ name, error: 'could not be read' }) } finally { await fh?.close().catch(() => {}) }
   }
   return out
 }
@@ -1699,8 +1712,8 @@ function chatSend (msg, post) {
   const files = (Array.isArray(msg.files) ? msg.files : []).slice(0, 8).map(f => ({
     name: String(f?.name || 'file').replace(/[\r\n<>"]/g, '').slice(0, 120),
     mediaType: f?.mediaType === 'application/pdf' ? 'application/pdf' : 'text/plain',
-    data: typeof f?.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(f.data) && f.data.length < 2.5e7 ? f.data : '',
-    text: typeof f?.text === 'string' ? f.text.slice(0, 400000) : null,
+    data: typeof f?.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(f.data) && f.data.length < sharedRules.PAYLOAD.pdfBase64 ? f.data : '',
+    text: typeof f?.text === 'string' ? f.text.slice(0, sharedRules.PAYLOAD.textChars) : null,
   })).filter(f => f.mediaType === 'application/pdf' ? f.data : typeof f.text === 'string')
   // a file that could not go is said, not dropped quietly
   if (Array.isArray(msg.files) && files.length < Math.min(8, msg.files.length)) return fail('A file was too big or could not be read, so nothing was sent. Remove it and send again.')
@@ -2810,7 +2823,18 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           case 'newChat': {
             const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
             // the board shows no chat itself: a new one opens in the sidebar, which comes forward
-            if (msg.where === 'logbook') { const to = mode === 'board' ? await sidebarView() : post; if (to) newChatHere(to); break }
+            if (msg.where === 'logbook') {
+              if (mode !== 'board') { newChatHere(post); break }
+              // the sidebar can take a moment, or fail, to come up: say so, with a way to try again
+              const startInSidebar = async () => {
+                const to = await sidebarView()
+                if (to) { newChatHere(to); return }
+                const again = await vscode.window.showWarningMessage('The logbook sidebar did not open, so the new chat could not start there.', 'Try again')
+                if (again === 'Try again') await startInSidebar()
+              }
+              await startInSidebar()
+              break
+            }
             const bin = claudeBin()
             // the new chat's id is chosen here, so Resume can find its terminal
             // later from the launch itself rather than by asking claude

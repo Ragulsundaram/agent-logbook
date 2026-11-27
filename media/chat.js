@@ -43,6 +43,7 @@ const CHAT = {
   editor: { label: '', file: '' },   // what the editor has open, which goes with your message
   skipCtx: new Set(),    // chats whose next message goes without the editor's file
   files: new Map(),      // chat id -> attached PDFs and text files waiting to go
+  layout: new Map(),     // chat id -> the draft as text and the pictures and files between it, so chips keep their places
   drops: new Map(),      // request key -> the read slot of files dropped from the Explorer, while the extension reads them
   thoughtOpen: new Set(), // chats whose live thinking you opened
   stopping: new Set(),
@@ -143,7 +144,12 @@ function chatMount () {
 }
 
 function setMode (c, value, keep = true) {
-  picksFor(c.id).mode = value
+  const p = picksFor(c.id)
+  p.mode = value
+  // a running Claude reports its mode back once it has switched: until then your pick
+  // shows, not the mode it still reports (kept with the mode it reported when asked)
+  const st = CHAT.state.get(c.id)
+  p.modeAsk = st?.running ? { value, was: st.mode || '' } : null
   paintPickers(c)
   send({ type: 'chatMode', id: c.id, value })
   // and every new chat after it - except bypass, which is picked chat by chat
@@ -593,75 +599,123 @@ const toolWord = t => ({ Bash: 'a command', Read: 'a file read', Edit: 'an edit'
 // A chip counts as no text at all in those; the message Claude gets has the chips
 // taken out (see messageText).
 
-const CHIP = '\uFFFC'                  // where a chip stood, while the message's text is worked out
 const CHIP_ITEM = new WeakMap()        // chip element -> the picture or file it stands for
 const isChip = n => n?.nodeType === 1 && n.classList.contains('cchip')
-// a zero-width space after a chip that ends a line gives the caret somewhere to sit;
-// it is never part of the text
+// A zero-width space after a chip that ends a line gives the caret somewhere to
+// sit. Only the ones the box put there are left out of the text (they are kept in
+// SPACERS): the same character typed or pasted by you is text like any other
 const ZW = '\u200B'
-const bare = t => t.replace(/\u200B/g, '')
+const SPACERS = new WeakSet()
+const lead = t => SPACERS.has(t) && t.data.startsWith(ZW) ? 1 : 0
+const dataOf = t => t.data.slice(lead(t))
 
 /**
- * The text under root. A line break is "\n"; the editor's own last <br>, which
- * the browser adds only to show an empty last line, is not. A chip is nothing,
- * or the mark given.
+ * What the box holds, in order, as the text counts it: runs of text, line breaks
+ * and chips. A <br> that ends its line (the editor's or a line block's last, which
+ * the browser adds only to show an empty line) is no character; a line the browser
+ * wrapped in its own block starts with one. Every reading of the text goes through
+ * this, so offsets and the text always agree.
  */
-function textOf (root, top, mark = '') {
-  let s = ''
-  const kids = root.childNodes
-  for (let i = 0; i < kids.length; i++) {
-    const n = kids[i]
-    if (n.nodeType === 3) s += bare(n.data)
-    else if (n.nodeType !== 1) continue
-    else if (isChip(n)) s += mark
-    else if (n.nodeName === 'BR') { if (!(top && i === kids.length - 1)) s += '\n' }
-    else {
-      // a line the browser wrapped in its own block starts on a new line
-      if (n.nodeName === 'DIV' && s && !s.endsWith('\n')) s += '\n'
-      s += textOf(n, false, mark)
+function pieces (ed) {
+  const out = []
+  let last = ''
+  const walk = root => {
+    const kids = root.childNodes
+    for (let i = 0; i < kids.length; i++) {
+      const n = kids[i]
+      if (n.nodeType === 3) {
+        const text = dataOf(n)
+        out.push({ node: n, text, skip: lead(n) })
+        if (text) last = text
+      } else if (n.nodeType !== 1) continue
+      else if (isChip(n)) out.push({ node: n, chip: true, text: '' })
+      else if (n.nodeName === 'BR') {
+        const text = i === kids.length - 1 ? '' : '\n'
+        out.push({ node: n, br: true, text })
+        if (text) last = text
+      } else {
+        if (n.nodeName === 'DIV' && last && !last.endsWith('\n')) { out.push({ node: n, block: true, text: '\n' }); last = '\n' }
+        walk(n)
+      }
     }
   }
-  return s
+  walk(ed)
+  return out
 }
 
-/** The text with the chips taken out, and the gap a chip left closed up to one space. */
+/** The text in the box; a chip is nothing in it. */
+const textOf = ed => pieces(ed).map(p => p.text).join('')
+
+/**
+ * The text Claude gets: the chips taken out, and the gap a chip left closed up to
+ * one space, so "at<chip>please" reads "at please". Worked out from the chips
+ * themselves, not from any character, so what you typed goes as you typed it.
+ */
 function messageText (ed) {
-  // between two words a chip leaves one space, so "at<chip>please" reads "at please"
-  return textOf(ed, true, CHIP).replace(/[ \t]*(?:\uFFFC[ \t]*)+/g, (m, at, all) =>
-    at === 0 || at + m.length === all.length ? '' : ' ')
+  let s = ''
+  let gap = false
+  for (const p of pieces(ed)) {
+    if (p.chip) { gap = true; continue }
+    if (!p.text) continue
+    if (gap) {
+      s = s.replace(/[ \t]+$/, '')
+      const t = p.text.replace(/^[ \t]+/, '')
+      if (s && t && !s.endsWith('\n') && !t.startsWith('\n')) s += ' '
+      s += t
+      gap = !t
+      continue
+    }
+    s += p.text
+  }
+  return gap ? s.replace(/[ \t]+$/, '') : s
 }
 
 /** How far into the text a point in the box is. */
 function offsetAt (ed, node, off) {
-  const r = document.createRange()
-  r.setStart(ed, 0)
-  try { r.setEnd(node, off) } catch { return textOf(ed, true).length }
-  return textOf(r.cloneContents(), false).length
+  const at = document.createRange()
+  try { at.setStart(node, off) } catch { return textOf(ed).length }
+  let n = 0
+  for (const p of pieces(ed)) {
+    if (p.node === node && p.node.nodeType === 3) return n + Math.max(0, Math.min(off, p.node.data.length) - p.skip)
+    // a piece counts once the point is past its start; a line block's break counts at its very start too
+    const where = at.comparePoint(p.node, 0)
+    if (where > 0 || (where === 0 && !p.block)) break
+    if (p.node.nodeType === 3 && at.comparePoint(p.node, p.node.data.length) > 0) return n
+    n += p.text.length
+  }
+  return n
 }
 
 /** The point in the box that far into the text. */
 function pointAt (ed, n) {
-  const kids = ed.childNodes
-  for (let i = 0; i < kids.length; i++) {
-    const k = kids[i]
-    if (k.nodeType === 3) {
-      const len = bare(k.data).length
-      if (n <= len) {
-        // count past zero-width spaces, which take no room in the text
-        let i = 0
-        for (let left = n; i < k.data.length && (left > 0 || k.data[i] === ZW); i++) if (k.data[i] !== ZW) left--
-        return [k, i]
-      }
-      n -= len
+  for (const p of pieces(ed)) {
+    if (p.chip) continue
+    if (p.node.nodeType === 3) {
+      if (n <= p.text.length) return [p.node, n + p.skip]
+      n -= p.text.length
       continue
     }
-    if (k.nodeType !== 1 || isChip(k)) continue
-    if (k.nodeName === 'BR') { if (n === 0) return [ed, i]; if (i !== kids.length - 1) n--; continue }
-    const len = textOf(k, false).length
-    if (n <= len) return [ed, n ? i + 1 : i]
-    n -= len
+    if (!p.text) continue
+    // at a break: the end of the line before it
+    const parent = p.node.parentNode
+    if (n === 0) return [parent, [...parent.childNodes].indexOf(p.node)]
+    n -= 1
   }
-  return [ed, kids.length]
+  const last = ed.lastChild
+  return last?.nodeName === 'BR' ? [ed, ed.childNodes.length - 1] : [ed, ed.childNodes.length]
+}
+
+/** Spacers the box put after a chip go once text follows the chip: they were only there for the caret. */
+function dropSpacers (ed) {
+  const sel = getSelection()
+  for (const p of pieces(ed)) {
+    const t = p.node
+    if (t.nodeType !== 3 || !p.skip || !p.text) continue
+    const at = sel.rangeCount && sel.anchorNode === t ? sel.anchorOffset : -1
+    t.deleteData(0, 1)
+    SPACERS.delete(t)
+    if (at > 0) { const r = document.createRange(); r.setStart(t, at - 1); r.collapse(true); sel.removeAllRanges(); sel.addRange(r) }
+  }
 }
 
 /** A caret just after what the box holds, before the browser's last <br>. */
@@ -710,7 +764,7 @@ function makeEditor () {
   const focus = ed.focus
   Object.defineProperties(ed, {
     value: {
-      get () { return textOf(ed, true) },
+      get () { return textOf(ed) },
       // the words are replaced; the chips stay, after them
       set (v) {
         const chips = [...ed.childNodes].filter(isChip)
@@ -728,7 +782,7 @@ function makeEditor () {
   })
   ed.selection = () => {
     const sel = getSelection()
-    if (!sel.rangeCount || !ed.contains(sel.anchorNode)) { const n = textOf(ed, true).length; return { start: n, end: n } }
+    if (!sel.rangeCount || !ed.contains(sel.anchorNode)) { const n = textOf(ed).length; return { start: n, end: n } }
     const r = sel.getRangeAt(0)
     const a = offsetAt(ed, r.startContainer, r.startOffset)
     return { start: a, end: r.collapsed ? a : offsetAt(ed, r.endContainer, r.endOffset) }
@@ -762,11 +816,11 @@ function chipKey (ed, e) {
   let node = sel.anchorNode, off = sel.anchorOffset, next
   if (node.nodeType === 3) {
     // only zero-width spaces between the caret and the chip still count as beside it
-    if (bare(back ? node.data.slice(0, off) : node.data.slice(off))) return false
+    if (back ? node.data.slice(lead(node), off) : node.data.slice(Math.max(off, lead(node)))) return false
     next = back ? node.previousSibling : node.nextSibling
   } else next = back ? node.childNodes[off - 1] : node.childNodes[off]
   // an empty text node left between is skipped over
-  while (next?.nodeType === 3 && !bare(next.data)) next = back ? next.previousSibling : next.nextSibling
+  while (next?.nodeType === 3 && !dataOf(next)) next = back ? next.previousSibling : next.nextSibling
   if (!isChip(next)) return false
   e.preventDefault()
   next.remove()
@@ -833,6 +887,7 @@ function buildComposer (id) {
   // chipOf: each later picture or file -> its chip in the text; insertAt: where the next ones go
   const c = { id, root, asks, imgs, block, tip, ta, slash, bar, mode, model, status, go, live, slashAt: 0, ctxLine, mention: null, under, underText, underCtrls,
     chipOf: new Map(), insertAt: null, thumb: null }
+  restoreLayout(c)
   pickFile.onchange = () => { addMany(c, [...pickFile.files]); pickFile.value = ''; c.insertAt = null }
 
   // the box grows with its text up to a height set in the stylesheet; this only
@@ -842,7 +897,8 @@ function buildComposer (id) {
   ta.oninput = () => {
     // a chip deleted by hand takes its picture or file with it
     if (chipsGone(c)) { paintImages(c); placeLive() }
-    CHAT.drafts.set(id, ta.value); fit(); askMention(c); paintSlash(c); paintGo(c)
+    dropSpacers(ta)
+    CHAT.drafts.set(id, ta.value); saveLayout(c); fit(); askMention(c); paintSlash(c); paintGo(c)
   }
   ta.onkeydown = e => {
     if (!c.slash.hidden && slashKey(c, e)) return
@@ -904,9 +960,8 @@ function notAttached (id, bad) {
   CHAT.sendWhenRead.delete(id)
 }
 
-/** Why a file of this name cannot be attached, or '' when it can. */
-const refusal = name => sharedRules.extOf(name) === 'env' ? 'may hold secrets'
-  : sharedRules.kindOf(name) ? '' : 'only pictures, PDFs and text files can be attached'
+// why a file of this name cannot be attached, or '' when it can: the extension asks the same
+const refusal = sharedRules.refusal
 
 /**
  * A picture goes as a picture; a PDF or a text file is attached by name. at: where
@@ -1186,7 +1241,13 @@ function chipFor (c, item, picture) {
 /** A new chip goes where the caret was when it was pasted, dropped or attached; otherwise at the end. */
 function placeChip (c, chip, r) {
   const ed = c.ta
-  if (r && ed.contains(r.startContainer)) r.insertNode(chip)
+  const sel = getSelection()
+  const placed = r && ed.contains(r.startContainer)
+  // the caret follows the chip only if it is still where the file was added: a
+  // caret or selection you have moved since is left alone
+  const caretThere = placed && document.activeElement === ed && sel.rangeCount && sel.isCollapsed &&
+    sel.getRangeAt(0).compareBoundaryPoints(Range.START_TO_START, r) === 0
+  if (placed) r.insertNode(chip)
   else {
     const last = ed.lastChild
     if (last?.nodeName === 'BR') ed.insertBefore(chip, last); else ed.appendChild(chip)
@@ -1194,11 +1255,50 @@ function placeChip (c, chip, r) {
   // nothing is added after the chip: what you type next decides the spacing. Only a chip
   // with no text after it gets a zero-width space, so the caret can sit after it
   let after = chip.nextSibling
-  if (after?.nodeType !== 3) { after = document.createTextNode(ZW); chip.after(after) }
-  if (!r || !ed.contains(r.startContainer)) return
-  r.setStart(after, after.data.startsWith(ZW) ? 1 : 0)
+  if (after?.nodeType !== 3) { after = document.createTextNode(ZW); SPACERS.add(after); chip.after(after) }
+  if (!placed) return
+  // the next file from the same paste or drop goes after this one
+  r.setStart(after, lead(after))
   r.collapse(true)
-  if (document.activeElement === ed) { const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r.cloneRange()) }
+  if (caretThere) { sel.removeAllRanges(); sel.addRange(r.cloneRange()) }
+}
+
+/**
+ * The draft as it stands in the box: runs of text with the pictures and files in
+ * between, kept with the chat so its chips come back where they were when you
+ * come back to it.
+ */
+function saveLayout (c) {
+  const parts = []
+  for (const p of pieces(c.ta)) {
+    if (p.chip) { const item = CHIP_ITEM.get(p.node); if (item) parts.push(item); continue }
+    if (!p.text) continue
+    if (typeof parts[parts.length - 1] === 'string') parts[parts.length - 1] += p.text
+    else parts.push(p.text)
+  }
+  CHAT.layout.set(c.id, parts)
+}
+/**
+ * A rebuilt box puts the saved draft back as it was. Only when that saved draft is
+ * still the draft: anything that rewrote the text since (a message given back, a
+ * command) wins, and its chips go at the end as before.
+ */
+function restoreLayout (c) {
+  const parts = CHAT.layout.get(c.id)
+  if (!parts || parts.filter(x => typeof x === 'string').join('') !== (CHAT.drafts.get(c.id) || '')) return
+  const pics = CHAT.images.get(c.id) || []
+  const files = CHAT.files.get(c.id) || []
+  const nodes = []
+  for (const x of parts) {
+    if (typeof x === 'string') { nodes.push(document.createTextNode(x)); continue }
+    // only what is still attached, and not the picture shown as the thumbnail
+    if (!(pics.includes(x) && x !== pics[0]) && !files.includes(x)) continue
+    const chip = chipFor(c, x, pics.includes(x))
+    c.chipOf.set(x, chip)
+    nodes.push(chip)
+    if (typeof parts[parts.indexOf(x) + 1] !== 'string') { const z = document.createTextNode(ZW); SPACERS.add(z); nodes.push(z) }
+  }
+  c.ta.replaceChildren(...nodes)
 }
 
 /**
@@ -1246,6 +1346,7 @@ function paintImages (c) {
     PLACE_AT.delete(item)
   }
   c.fit?.()
+  saveLayout(c)
 }
 
 /** The line above the box: which file goes with the message, and a way to leave it out. */
@@ -1590,8 +1691,13 @@ function modeList (p) {
 function paintPickers (c) {
   const p = picksFor(c.id)
   const st = CHAT.state.get(c.id)
-  // once Claude is running, what it reports wins: plan approval switches the mode
-  if (st?.running && st.mode) p.mode = st.mode
+  // once Claude is running, what it reports wins (plan approval switches the mode),
+  // except while a pick of yours is on its way: that shows until Claude reports it,
+  // or reports some other change of its own
+  if (st?.running && st.mode) {
+    const ask = p.modeAsk
+    if (!ask || st.mode === ask.value || st.mode !== ask.was) { p.mode = st.mode; p.modeAsk = null }
+  }
   const list = modeList(p)
   const label = (list.find(m => m[0] === p.mode) || list[0])[1]
   if (c.mode.textContent !== label) {
@@ -2443,6 +2549,8 @@ if (!BOARD_MODE) {
         break
       }
       case 'chatNotice':
+        // Claude turned a mode down (chat-runner's setMode): the mode it reports shows again
+        if (/^Claude did not switch to that mode/.test(String(m.text || ''))) picksFor(id).modeAsk = null
         if (m.soft && CHAT.notes.get(id)?.action) break   // a passing word never covers one you can act on
         note(id, m.text, false, m.action === 'terminal' ? { label: 'Open Claude in a terminal', msg: { type: 'chatTerminal' } } : undefined)
         break

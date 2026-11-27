@@ -177,6 +177,11 @@ svg.outline { fill: none; stroke: currentColor; stroke-width: 1.7;
 .row.on { background: var(--clay-dim); color: var(--vscode-foreground) }
 .row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 13px; font-weight: 400 }
+/* a chat row's title is its button, drawn as plain text */
+.row button.t { padding: 0; border: 0; background: none; font-family: inherit; color: inherit; text-align: left;
+  cursor: pointer; line-height: inherit }
+.row button.t:focus-visible { outline: none }
+.row:has(> button.t:focus-visible) { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px }
 .row.unread .t { font-weight: 700; color: var(--vscode-foreground) }
 .row .age { font-size: 11px; color: var(--vscode-descriptionForeground);
   font-variant-numeric: tabular-nums; flex: none }
@@ -554,6 +559,10 @@ mark.on { background: var(--amber); color: #000 }
 .foot .fnums > :not([hidden]):not(:empty) ~ :not([hidden]):not(:empty)::before,
 .cunder .fnums > :not([hidden]):not(:empty) ~ :not([hidden]):not(:empty)::before { content: ' · '; opacity: .7 }
 .fctrls { flex: none; display: flex; align-items: center; gap: 2px; margin-left: auto }
+/* "N files" never gets cut: the details before it give way instead */
+.ffileslot { flex: none; font-size: 11px; white-space: nowrap; color: var(--vscode-descriptionForeground) }
+.fnums:has(> :not([hidden]):not(:empty)) + .ffileslot::before { content: '\00a0·\00a0'; opacity: .7 }
+.foot .fnums:has(+ .ffileslot) { flex: 0 1 auto }
 .fctrls:empty { display: none }
 .fstat { white-space: nowrap; font-weight: normal }
 /* close to the limit: a touch brighter, not a colour */

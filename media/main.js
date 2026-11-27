@@ -289,6 +289,11 @@ const TABICON = { chats: 'message', usage: 'card', digest: 'calendar', memory: '
 const TABNAME = { chats: 'Chats', usage: 'Card', digest: 'Digest', memory: 'Memory', agents: 'Agents', settings: 'Settings' }
 let TAB = 'chats'
 let UNREAD = new Set()     // chats that finished a reply in this window you have not opened since
+/** The chat on screen finished while you look at it, or while its tab was hidden and you came back: it is seen. */
+function seenIfShown () {
+  if (!BOARD_MODE && CUR && UNREAD.has(CUR.id) && !$('#detail').hidden && document.visibilityState === 'visible') send({ type: 'markSeen', id: CUR.id })
+}
+document.addEventListener('visibilitychange', seenIfShown)
 const IMGS_OPEN = new Set()   // messages whose pictures were all shown with "+N", by chat, time and count
 
 document.querySelectorAll('.tab').forEach(b => {
@@ -1038,7 +1043,11 @@ function chatRow (s) {
   // a reply that finished while you were not looking reads bold, with a blue dot
   const unread = UNREAD.has(s.id) && s.live !== 'busy' && s.live !== 'waiting'
   if (unread) r.classList.add('unread')
-  r.append(el('span', 't', s.title))
+  // the title is the row's button: Tab reaches the row, Enter opens it as a click
+  // does, and with the row focused its actions come into view and into the tab order
+  const open = el('button', 't', s.title)
+  open.setAttribute('aria-label', `${s.title}${unread ? ', new reply' : ''}${s.live === 'waiting' ? ', waiting for you' : ''}`)
+  r.appendChild(open)
   const rb = resBadge(s.id)
   if (rb) r.appendChild(rb)
   r.appendChild(el('span', 'age', ago(s.lastTs) + ' ago'))
@@ -2677,16 +2686,20 @@ const FOOT_ITEMS = sharedRules.FOOTER_ITEMS
 // a missing or broken setting reads as the default, so a switch can always be turned
 const footItems = () => sharedRules.validFooterItems(CFG.footerItems) ? CFG.footerItems : sharedRules.FOOTER_DEFAULT
 const footOn = k => footItems().includes(k)
-/** Whether this chat's title row has the menu that lists its changed files. */
-const hasChatMenu = t => !t.isAgent && CFG.chatHere !== false && t.provider !== 'codex'
+/** Whether the chat's title row on screen has the menu that lists its changed files. */
+const headerHasMenu = () => !!$('#detail .dhead .moremenu')
 
-/** Open or close the list of files this chat changed, from the footer link or the chat's menu. */
+/**
+ * Open or close the list of files this chat changed, from the footer link or the
+ * chat's menu. Opened by you, it is scrolled into view; kept open through a live
+ * refresh (open given), it stays where it is.
+ */
 function toggleFiles (open) {
   const list = $('#detail .foot > .ftree')
   if (!list) return
   list.hidden = open === undefined ? !list.hidden : !open
   $('#detail .foot > .fmeta .ffiles')?.setAttribute('aria-expanded', String(!list.hidden))
-  if (!list.hidden) list.scrollIntoView({ block: 'nearest' })
+  if (open === undefined && !list.hidden) list.scrollIntoView({ block: 'nearest' })
 }
 
 /**
@@ -2739,6 +2752,7 @@ function footer (t) {
   facts.appendChild(rs)
 
   let list = null
+  let filesSlot = null
   if (i.files.length) {
     list = el('div', 'ftree')
     list.hidden = true
@@ -2754,19 +2768,21 @@ function footer (t) {
     }
     // the count as a quiet link; with it turned off the chat's menu opens the list.
     // A chat with no such menu (Codex, chatting here off) always has the link
-    if (footOn('files') || !hasChatMenu(t)) {
+    if (footOn('files') || !headerHasMenu()) {
       const n = i.files.length
       const link = el('button', 'linkbtn ffiles', `${n} file${n === 1 ? '' : 's'}`)
       link.title = `Files this chat changed (+${i.adds.toLocaleString()} -${i.dels.toLocaleString()}). Click to list them`
       link.setAttribute('aria-expanded', 'false')
       link.onclick = () => toggleFiles()
-      // in a span of its own, so the dot before it stays outside the link
-      const item = el('span', 'fstat')
-      item.appendChild(link)
-      facts.appendChild(item)
+      // a slot of its own after the details, so a narrow panel cuts the figures
+      // before it ever cuts this; the dot before it stays outside the link
+      filesSlot = el('span', 'ffileslot')
+      filesSlot.appendChild(link)
     }
   }
-  top.append(facts, el('div', 'fctrls'))
+  top.appendChild(facts)
+  if (filesSlot) top.appendChild(filesSlot)
+  top.appendChild(el('div', 'fctrls'))
   bar.appendChild(top)
   if (list) bar.appendChild(list)
   return bar
@@ -3485,8 +3501,7 @@ window.addEventListener('message', e => {
   if (m.type === 'seen') { READ_AT[m.id] = m.at; if (BOARD_MODE) paintSeen() }
   if (m.type === 'unread') {
     UNREAD = new Set(m.ids || [])
-    // the chat you are reading finished: you saw it, so it is not unread
-    if (!BOARD_MODE && CUR && UNREAD.has(CUR.id) && !$('#detail').hidden && document.visibilityState === 'visible') send({ type: 'markSeen', id: CUR.id })
+    seenIfShown()
     if (!BOARD_MODE && $('#detail').hidden) liveRender()
   }
   if (m.type === 'board') {
@@ -4376,9 +4391,11 @@ const setCfg = (key, value) => {
 const el2 = (tag, cls, txt) => el(tag, cls, txt)
 
 /** A styled on/off switch, rather than the platform's own checkbox. */
-function switchEl (on, onChange) {
+/** name: what it switches, said to a screen reader (the words beside it are outside the label). */
+function switchEl (on, onChange, name) {
   const w = el('label', 'swrap')
   const i = el('input'); i.type = 'checkbox'; i.checked = on
+  if (name) i.setAttribute('aria-label', name)
   i.onchange = () => onChange(i.checked)
   w.append(i, el('i', 'sw'))
   return w
@@ -4672,7 +4689,7 @@ function paintMcp () {
   r.append(txt, switchEl(!!MCP.projectOnly, on => {
     MCP.projectOnly = on
     if (MCP.claude || MCP.codex) send({ type: 'mcpConnect', projectOnly: on })
-  }))
+  }, 'This project only'))
   host.appendChild(r)
   if (MCP.claude || MCP.codex) host.appendChild(el('p', 'agnote', 'New chats pick this up. A chat that was already running needs a restart.'))
 }
@@ -4683,10 +4700,14 @@ function renderSettings () {
   // drawn afresh after every change: the page stays where it was scrolled, and the
   // control you changed keeps the keyboard (found again by its key, data-setkey)
   const top = box.scrollTop
-  const had = box.contains(document.activeElement) ? document.activeElement.dataset.setkey : ''
+  const active = box.contains(document.activeElement) ? document.activeElement : null
+  const had = active?.dataset.setkey || ''
+  // a number being typed and not saved yet is kept, unless that setting itself changed meanwhile
+  const typing = active?.classList.contains('stepval') && active.value !== active.dataset.shown
+    ? { value: active.value, shown: active.dataset.shown, a: active.selectionStart, b: active.selectionEnd } : null
   box.replaceChildren()
   const keyed = (n, k) => { n.dataset.setkey = k; return n }
-  const switchFor = (k, on, change) => { const w = switchEl(on, change); keyed(w.querySelector('input'), k); return w }
+  const switchFor = (k, on, change, name) => { const w = switchEl(on, change, name); keyed(w.querySelector('input'), k); return w }
 
   // each group is a card: icon, title, a line on what it covers, then its rows
   const section = (ico, title, note, control) => {
@@ -4709,7 +4730,7 @@ function renderSettings () {
       ? [{ key: 'session', color: SWATCHES[0] }, { key: 'weekly_all', color: SWATCHES[1] }]
       : [])
     renderSettings(); drawLimits(LIMITS)
-  })
+  }, 'Quota bars')
   const sec = section('chart', 'Quota bars',
     'Bars along the top of the panel, one per usage window you pick, that shrink as you use it up. Point at one for exact figures.',
     master)
@@ -4739,6 +4760,7 @@ function renderSettings () {
 
       const right = el('div', 'segright')
       const sel = keyed(el('select', 'segsel'), `topBars:key:${i}`)
+      sel.setAttribute('aria-label', `Segment ${i + 1}`)
       for (const spec of BARS) {
         const now = live.get(spec.key)
         const o = el('option', '', spec.name + (now ? (now.stale ? ' · last known' : ` · ${Math.max(0, 100 - now.percent)}% left`) : ' · not reported'))
@@ -4787,6 +4809,7 @@ function renderSettings () {
     const txt = el('div', 'settxt')
     txt.append(el('b', '', label), el('em', '', note))
     const sel = keyed(el('select'), key)
+    sel.setAttribute('aria-label', label)
     for (const [value, name] of options) {
       const o = el('option', '', name); o.value = value
       if ((CFG[key] ?? options[0][0]) === value) o.selected = true
@@ -4800,7 +4823,7 @@ function renderSettings () {
     const row = el('div', 'setrow')
     const txt = el('div', 'settxt')
     txt.append(el('b', '', label), el('em', '', note))
-    row.append(txt, switchFor(key, CFG[key] ?? dflt, on => setCfg(key, on)))
+    row.append(txt, switchFor(key, CFG[key] ?? dflt, on => setCfg(key, on), label))
     host.appendChild(row)
   }
   // a stepper rather than a number input: the platform's spinner arrows are the
@@ -4814,6 +4837,8 @@ function renderSettings () {
     let value = clamp(Number(CFG[key] ?? dflt) || dflt)
     const inp = keyed(el('input', 'stepval'), key)
     inp.type = 'text'; inp.inputMode = 'numeric'; inp.value = String(value)
+    inp.dataset.shown = String(value)
+    inp.setAttribute('aria-label', label)
     const commit = n => {
       value = clamp(n)
       inp.value = String(value)
@@ -4822,6 +4847,7 @@ function renderSettings () {
     const step = (by, sign) => {
       const b = keyed(el('button', 'stepbtn', sign), `${key}:${by > 0 ? 'up' : 'down'}`)
       b.title = by > 0 ? 'More' : 'Fewer'
+      b.setAttribute('aria-label', `${label}: ${by > 0 ? 'more' : 'fewer'}`)
       b.onclick = () => commit(value + by)
       return b
     }
@@ -4863,7 +4889,7 @@ function renderSettings () {
       const now = FOOT_ITEMS.filter(x => x === k ? on : footOn(x))
       setCfg('footerItems', now)
       if (CUR && !$('#detail').hidden) swapFooter(CUR)
-    }))
+    }, `Footer: ${FOOT_NAMES[k][0]}`))
     foot.appendChild(row)
   }
 
@@ -4964,5 +4990,10 @@ function renderSettings () {
       'a .source.jsonl beside the markdown, with every tool result in full - secrets a tool printed included', false)
   }
   box.scrollTop = top
-  if (had) [...box.querySelectorAll('[data-setkey]')].find(n => n.dataset.setkey === had)?.focus({ preventScroll: true })
+  const back = had ? [...box.querySelectorAll('[data-setkey]')].find(n => n.dataset.setkey === had) : null
+  if (back && typing && back.dataset.shown === typing.shown) {
+    back.value = typing.value
+    back.setSelectionRange(typing.a, typing.b)
+  }
+  back?.focus({ preventScroll: true })
 }
