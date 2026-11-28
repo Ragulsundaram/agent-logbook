@@ -46,11 +46,12 @@ const CHAT = {
   layout: new Map(),     // chat id -> the draft as text and the pictures and files between it, so chips keep their places
   drops: new Map(),      // request key -> the read slot of files dropped from the Explorer, while the extension reads them
   thoughtOpen: new Set(), // chats whose live thinking you opened
-  stopping: new Set(),
-  limitsSaid: new Set(),  // usage-limit notices already shown, by chat, limit, reset time and level   // "chat id|task id": Stop pressed, until the task goes
+  stopping: new Set(),    // "chat id|task id": Stop pressed, until the task goes
   todosFold: new Map(),  // chat id -> true/false: you folded or opened its to-do list (a finished one folds by itself)
 }
 let COMPOSER = null
+// the usage-limit notice the extension says to show, one for every view (null: none)
+let LIMIT_NOTICE = null
 
 const MODES = [
   ['default', 'Ask first', 'Claude asks before editing files or running commands'],
@@ -116,15 +117,16 @@ function chatMount () {
   if (BOARD_MODE) return
   if (!chatOn()) {
     // the status, model, mode and live area were moved out of the box: they go too
-    if (COMPOSER) { for (const n of [COMPOSER.root, COMPOSER.live, COMPOSER.status, COMPOSER.model, COMPOSER.mode]) n.remove(); COMPOSER = null }
+    if (COMPOSER) { refreshPoints(COMPOSER); for (const n of [COMPOSER.root, COMPOSER.live, COMPOSER.status, COMPOSER.model, COMPOSER.mode]) n.remove(); COMPOSER = null }
     return
   }
   const t = chatTarget()
   if (!t) return
   const d = $('#detail')
   const fresh = !COMPOSER || COMPOSER.id !== t.id
-  // another chat on screen: an Enter the last one left waiting for its files does not go unseen
-  if (COMPOSER && fresh) callOffSend(COMPOSER.id)
+  // another chat on screen: an Enter the last one left waiting for its files does not go
+  // unseen, and files still on their way keep their places for when you come back
+  if (COMPOSER && fresh) { callOffSend(COMPOSER.id); refreshPoints(COMPOSER) }
   if (fresh) {
     COMPOSER = buildComposer(t.id)
     send({ type: 'chatState', id: t.id })
@@ -148,12 +150,13 @@ function chatMount () {
 function setMode (c, value, keep = true) {
   const p = picksFor(c.id)
   p.mode = value
-  // a running Claude reports its mode back once it has switched: until then your pick
-  // shows, not the mode it still reports (kept with the mode it reported when asked)
+  // a running Claude answers each pick (chatModeDone, by this number): until the answer
+  // to the latest one comes, your pick shows, not the mode Claude still reports
   const st = CHAT.state.get(c.id)
-  p.modeAsk = st?.running ? { value, was: st.mode || '' } : null
+  const req = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+  p.modeAsk = st?.running ? { value, req } : null
   paintPickers(c)
-  send({ type: 'chatMode', id: c.id, value })
+  send({ type: 'chatMode', id: c.id, value, req })
   // and every new chat after it - except bypass, which is picked chat by chat
   if (keep && value !== 'bypassPermissions') setCfg('chatPermissionMode', value)
 }
@@ -570,15 +573,28 @@ setInterval(() => {
 
 /** A message that did not go (taken back, or refused): its words, pictures and files back in the box. */
 function giveBack (id, e) {
+  const box = COMPOSER?.id === id ? COMPOSER : null
   if (e.text) {
     const now = CHAT.drafts.get(id) || ''
-    CHAT.drafts.set(id, now.trim() ? `${e.text}\n${now}` : e.text)
+    // put in front of what is there now; the chips already in the draft keep their places
+    const add = now.trim() ? `${e.text}\n` : e.text
+    if (box) {
+      if (now.trim()) box.ta.insertBefore(document.createTextNode(add), box.ta.firstChild)
+      else box.ta.value = add
+    } else {
+      const parts = CHAT.layout.get(id)
+      if (parts && parts.filter(x => typeof x === 'string').join('') === now) {
+        const kept = now.trim() ? parts : parts.filter(x => typeof x !== 'string')
+        CHAT.layout.set(id, typeof kept[0] === 'string' ? [add + kept[0], ...kept.slice(1)] : [add, ...kept])
+      }
+    }
+    CHAT.drafts.set(id, now.trim() ? add + now : e.text)
   }
   if (e.pics?.length) CHAT.images.set(id, [...e.pics, ...(CHAT.images.get(id) || [])])
   if (e.docs?.length) CHAT.files.set(id, [...e.docs, ...(CHAT.files.get(id) || [])])
   // left out of the editor's file before: still left out when it is sent again
   if (e.noContext) CHAT.skipCtx.add(id)
-  if (COMPOSER?.id === id) { COMPOSER.ta.value = CHAT.drafts.get(id) || ''; COMPOSER.fit(); paintImages(COMPOSER); paintGo(COMPOSER) }
+  if (box) { box.fit(); paintImages(box); paintGo(box) }
 }
 
 const FALLBACK_WHY = {
@@ -741,7 +757,26 @@ function caretToEnd (ed) {
  */
 function insertPoint (ed, range = caretRange(ed)) {
   if (!range) return null
-  return { range, offset: offsetAt(ed, range.startContainer, range.startOffset) }
+  const at = { range, offset: offsetAt(ed, range.startContainer, range.startOffset) }
+  POINTS.add(at)
+  return at
+}
+// insertion points whose files may still be on their way, so a box about to be
+// replaced can bring their places in the text up to date first (refreshPoints)
+const POINTS = new Set()
+/**
+ * The box is going away (another chat, /clear, chatting turned off): each point in it
+ * keeps its place in the text as it is now, edits made since included, for the box
+ * that replaces it.
+ */
+function refreshPoints (c) {
+  for (const at of POINTS) {
+    if (at.range && c.ta.contains(at.range.startContainer)) {
+      at.offset = offsetAt(c.ta, at.range.startContainer, at.range.startOffset)
+      at.range = null
+    }
+    if (!at.range) POINTS.delete(at)
+  }
 }
 
 /** Where the caret is in the box, as a collapsed range; null when the box does not have it. */
@@ -882,7 +917,7 @@ function buildComposer (id) {
   clip.onmousedown = () => { c.insertAt = insertPoint(ta) }
   clip.onclick = () => pickFile.click()
   // closed without a pick: that spot is not kept for a later paste or drop
-  pickFile.addEventListener('cancel', () => { c.insertAt = null })
+  pickFile.addEventListener('cancel', () => { POINTS.delete(c.insertAt); c.insertAt = null })
   const right = el('div', 'cright')
   right.append(go)
   bar.append(clip, pickFile, right)
@@ -894,14 +929,16 @@ function buildComposer (id) {
   box.onclick = e => { if (e.target === box || e.target === bar || e.target === right) ta.focus() }
   // once, the first time anyone sees the box: what it is and where to turn it off
   const tip = el('div', 'ctip')
+  // a usage-limit notice sits just above the box, where you are about to send
+  const limit = el('div', 'climit')
   // the line under the box for a chat with no footer yet (a new one): status left, model and mode right
   const under = el('div', 'cunder')
   const underText = el('div', 'fnums')
   const underCtrls = el('div', 'fctrls')
   under.append(underText, underCtrls)
-  root.append(asks, block, tip, ctxLine, box, under, slash)
+  root.append(limit, asks, block, tip, ctxLine, box, under, slash)
   // chipOf: each later picture or file -> its chip in the text; insertAt: where the next ones go
-  const c = { id, root, asks, imgs, block, tip, ta, slash, bar, mode, model, status, go, live, slashAt: 0, ctxLine, mention: null, under, underText, underCtrls,
+  const c = { id, root, asks, imgs, block, tip, ta, slash, bar, mode, model, status, go, live, slashAt: 0, ctxLine, mention: null, under, underText, underCtrls, limit,
     chipOf: new Map(), insertAt: null, thumb: null }
   restoreLayout(c)
   pickFile.onchange = () => { addMany(c, [...pickFile.files]); pickFile.value = ''; c.insertAt = null }
@@ -960,6 +997,17 @@ const readStart = id => chatMoves.readStart(CHAT, id)
 const moveChatState = (id, to) => chatMoves.moveChatState(CHAT, id, to)
 /** One picture or file finished reading: once none are left, an Enter that waited for them goes. */
 function readDone (slot) {
+  try { return readFinished(slot) } finally { prunePoints() }
+}
+/**
+ * Insertion points are only needed while files are on their way: once no chat has
+ * a read under way, they go (all but the one kept for the attach button's picker).
+ */
+function prunePoints () {
+  if (CHAT.reading.size || CHAT.drops.size) return
+  for (const at of POINTS) if (at !== COMPOSER?.insertAt) POINTS.delete(at)
+}
+function readFinished (slot) {
   // the box may have been rebuilt since (you switched chats and back): send from the current one
   if (chatMoves.readDone(CHAT, slot) && COMPOSER?.id === slot.id) submit(COMPOSER)
 }
@@ -993,7 +1041,7 @@ const refusal = sharedRules.refusal
  * its chip goes. bad: where a refusal is collected, to be named with the others;
  * without it the refusal is said at once. Returns whether a read started.
  */
-function addAny (c, file, at = c.insertAt, bad = null, known = '') {
+function addAny (c, file, at = c.insertAt, bad = null, known = '', batch = newBatch()) {
   const refuse = why => {
     const entry = [file.name || 'pasted picture', why]
     if (bad) bad.push(entry); else notAttached(c.id, [entry])
@@ -1001,22 +1049,23 @@ function addAny (c, file, at = c.insertAt, bad = null, known = '') {
   }
   // known: the kind the extension found for a file dropped from the Explorer, which may
   // be a shortcut whose own name says less than the file it leads to (checked there)
-  if (known === 'picture') return addImage(c, file, at, refuse)
-  if (!known && file.type.startsWith('image/')) return addImage(c, file, at, refuse)
+  if (known === 'picture') return addImage(c, file, at, refuse, batch)
+  if (!known && file.type.startsWith('image/')) return addImage(c, file, at, refuse, batch)
   // otherwise the same rule wherever the file came from (attach, paste, Finder):
   // its name decides, not the type the system gives it
   const why = known ? '' : refusal(file.name)
   if (why) return refuse(why)
   const kind = known || sharedRules.kindOf(file.name)
   // a picture named as one but given no type (some Finder drops): typed from its name
-  if (kind === 'picture') return addImage(c, new File([file], file.name, { type: sharedRules.mediaTypeOf(file.name) }), at, refuse)
+  if (kind === 'picture') return addImage(c, new File([file], file.name, { type: sharedRules.mediaTypeOf(file.name) }), at, refuse, batch)
   const pdf = kind === 'pdf'
   if (file.size > sharedRules.LIMITS[kind]) return refuse(`too big, ${sharedRules.LIMIT_WORDS[kind]} at most`)
   const r = new FileReader()
   const slot = readStart(c.id)
   const done = () => readDone(slot)
-  r.onerror = () => { notAttached(slot.id, [[file.name, 'could not be read']]); done() }
-  r.onload = () => {
+  const turn = takeTurn(batch)
+  r.onerror = () => inTurn(batch, turn, () => { notAttached(slot.id, [[file.name, 'could not be read']]); done() })
+  r.onload = () => inTurn(batch, turn, () => {
     const id = slot.id               // the chat may have moved to a new id while this was read
     const item = { name: file.name, mediaType: pdf ? 'application/pdf' : 'text/plain' }
     if (pdf) item.data = String(r.result).replace(/^data:[^,]*,/, '')
@@ -1026,20 +1075,21 @@ function addAny (c, file, at = c.insertAt, bad = null, known = '') {
     if (chatMoves.readPlace(CHAT, slot, 'files', item) === 'over') overLimit(id, file.name, 'files')
     if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
     done()
-  }
+  })
   if (pdf) r.readAsDataURL(file); else r.readAsText(file)
   return true
 }
 
-function addImage (c, file, at, refuse) {
+function addImage (c, file, at, refuse, batch = newBatch()) {
   if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) return refuse('only PNG, JPEG, GIF and WebP pictures can be sent')
   if (file.size > MAX_IMAGE) return refuse(`too big, ${sharedRules.LIMIT_WORDS.picture} at most`)
   const r = new FileReader()
   const slot = readStart(c.id)
   const done = () => readDone(slot)
   const name = file.name || 'pasted picture'
-  r.onerror = () => { notAttached(slot.id, [[name, 'could not be read']]); done() }
-  r.onload = () => {
+  const turn = takeTurn(batch)
+  r.onerror = () => inTurn(batch, turn, () => { notAttached(slot.id, [[name, 'could not be read']]); done() })
+  r.onload = () => inTurn(batch, turn, () => {
     const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(String(r.result))
     if (!m) { notAttached(slot.id, [[name, 'could not be read']]); done(); return }
     const id = slot.id               // the chat may have moved to a new id while this was read
@@ -1049,15 +1099,28 @@ function addImage (c, file, at, refuse) {
     if (chatMoves.readPlace(CHAT, slot, 'pictures', item) === 'over') overLimit(id, name, 'pictures')
     if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
     done()
-  }
+  })
   r.readAsDataURL(file)
   return true
 }
 
-/** Several files from one attach, paste or drop: each read as usual, the refusals named together. */
+/**
+ * Files from one attach, paste or drop are added in the order they were given,
+ * however their reads finish: each takes a turn when its read starts, and a read
+ * that finishes early waits for the ones before it.
+ */
+const newBatch = () => ({ queue: [] })
+function takeTurn (batch) { const turn = { then: null }; batch.queue.push(turn); return turn }
+function inTurn (batch, turn, then) {
+  turn.then = then
+  while (batch.queue[0]?.then) batch.queue.shift().then()
+}
+
+/** Several files from one attach, paste or drop: each read as usual, in order, the refusals named together. */
 function addMany (c, files, at = c.insertAt) {
   const bad = []
-  for (const f of files) addAny(c, f, at, bad)
+  const batch = newBatch()
+  for (const f of files) addAny(c, f, at, bad, '', batch)
   notAttached(c.id, bad)
 }
 
@@ -1118,7 +1181,8 @@ function dropIn (c, dt) {
 const FILE_DRAG = ['files', 'application/vnd.code.uri-list', 'resourceurls']
 const carriesFiles = e => [...(e.dataTransfer?.types || [])].some(t => FILE_DRAG.includes(String(t).toLowerCase()))
 /** A box that can take attachments is on screen: a chat you can talk to here, not blocked. */
-const dropBox = () => COMPOSER && COMPOSER.root.isConnected && chatTarget()?.id === COMPOSER.id && !COMPOSER.ta.parentNode.hidden ? COMPOSER : null
+// and only while the Chats page is the one up: a box under a page in the background takes nothing
+const dropBox = () => TAB === 'chats' && COMPOSER && COMPOSER.root.isConnected && chatTarget()?.id === COMPOSER.id && !COMPOSER.ta.parentNode.hidden ? COMPOSER : null
 const DROP = { depth: 0, cover: null, quiet: null }
 /** While files are dragged over the chat, the whole panel says where they go. */
 function dropCover (on) {
@@ -1178,11 +1242,15 @@ document.addEventListener('drop', e => {
 
 /** The extension read the dropped files: each goes through the same checks as an attached one. */
 function dropRead (m) {
-  const { slot, at, bad = [] } = CHAT.drops.get(m.key) || {}
+  const { slot, at, bad = [], retried = false } = CHAT.drops.get(m.key) || {}
   if (!slot) return
   CHAT.drops.delete(m.key)
+  const full = []
+  const taken = { picture: 0, file: 0 }
+  const batch = newBatch()             // added in the order they were dropped
   for (const it of Array.isArray(m.items) ? m.items : []) {
     const name = String(it?.name || 'file')
+    if (it?.full && typeof it.uri === 'string') { full.push(it); continue }
     if (it?.error || typeof it?.data !== 'string') { bad.push([name, String(it?.error || 'could not be read')]); continue }
     let bin
     try { bin = atob(it.data) } catch { bad.push([name, 'could not be read']); continue }
@@ -1193,7 +1261,23 @@ function dropRead (m) {
     const known = ['picture', 'pdf', 'text'].includes(it.kind) ? it.kind : ''
     const type = known === 'picture' ? String(it.mediaType || '') : known === 'pdf' ? 'application/pdf' : 'text/plain'
     if (!known || (known === 'picture' && !/^image\/(png|jpeg|gif|webp)$/.test(type))) { bad.push([name, 'could not be read']); continue }
-    addAny({ id: slot.id }, new File([bytes], name, { type }), at, bad, known)
+    if (addAny({ id: slot.id }, new File([bytes], name, { type }), at, bad, known, batch)) taken[known === 'picture' ? 'picture' : 'file']++
+  }
+  // files there was no room for when the drop was sent: room may have opened since
+  // (an attachment removed), so they are asked for once more, with the room there is now
+  const room = {
+    pictures: 8 - (CHAT.images.get(slot.id) || []).length - taken.picture,
+    files: 8 - (CHAT.files.get(slot.id) || []).length - taken.file,
+  }
+  const again = retried ? [] : full.filter(it => (it.kind === 'picture' ? room.pictures : room.files) > 0)
+  for (const it of full) if (!again.includes(it)) bad.push([String(it.name || 'file'), String(it.error)])
+  if (again.length) {
+    const next = readStart(slot.id)
+    const key = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+    CHAT.drops.set(key, { slot: next, at, bad, retried: true })
+    send({ type: 'chatDropRead', key, uris: again.map(it => it.uri), room })
+    readDone(slot)
+    return
   }
   // said before this read counts as done, so a waiting Enter is called off rather than sent
   notAttached(slot.id, bad)
@@ -1284,6 +1368,7 @@ function placeChip (c, chip, at) {
     r.setStart(...pointAt(ed, at.offset))
     r.collapse(true)
     at.range = r
+    POINTS.add(at)
   }
   const placed = !!r && ed.contains(r.startContainer)
   // the caret follows the chip only if it is still where the file was added: a
@@ -1658,6 +1743,7 @@ function paintComposer () {
     : where === 'here' || CHAT.here.has(id) ? 'Message Claude… (/ for commands, ! for a shell command)'
       : 'Continue here… (/ for commands, ! for a shell command)'
   paintTip(c)
+  paintLimit(c)
   paintCtx(c)
   // a chat running here shows its status under the reply, not the walking figure:
   // the room kept for that figure under the last message is not needed
@@ -1667,6 +1753,29 @@ function paintComposer () {
   paintImages(c)
   paintGo(c)
   paintStatus(c)
+}
+
+/** The usage-limit notice above the box: one for every view, dismissed for all of them at once. */
+function paintLimit (c) {
+  const n = LIMIT_NOTICE
+  const sig = n ? `${n.kind}|${n.status}|${n.resetsAt}` : ''
+  if (c.limit.dataset.sig === sig) return
+  c.limit.dataset.sig = sig
+  c.limit.replaceChildren()
+  c.limit.hidden = !n
+  if (!n) return
+  const when = n.resetsAt ? new Date(n.resetsAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''
+  const which = { five_hour: 'five-hour', seven_day: 'weekly', seven_day_opus: 'weekly', seven_day_sonnet: 'weekly' }[n.kind] || ''
+  const hit = n.status === 'rejected'
+  c.limit.className = 'climit chatnote' + (hit ? ' err' : '')
+  c.limit.appendChild(el('span', '', hit
+    ? `You've hit your ${which ? which + ' ' : ''}usage limit.${when ? ` It resets at ${when}.` : ''}`
+    : `You're close to your ${which ? which + ' ' : ''}usage limit.${when ? ` It resets at ${when}.` : ''}`))
+  const x = el('button', 'iconbtn', '×')
+  x.title = 'Hide for now, in every chat. It comes back sooner if you are using it up quickly, and at once if you reach the limit'
+  x.setAttribute('aria-label', 'Hide the usage-limit notice for now')
+  x.onclick = () => send({ type: 'limitDismiss', kind: n.kind })
+  c.limit.appendChild(x)
 }
 
 function paintTip (c) {
@@ -1739,12 +1848,8 @@ function paintPickers (c) {
   const p = picksFor(c.id)
   const st = CHAT.state.get(c.id)
   // once Claude is running, what it reports wins (plan approval switches the mode),
-  // except while a pick of yours is on its way: that shows until Claude reports it,
-  // or reports some other change of its own
-  if (st?.running && st.mode) {
-    const ask = p.modeAsk
-    if (!ask || st.mode === ask.value || st.mode !== ask.was) { p.mode = st.mode; p.modeAsk = null }
-  }
+  // except while a pick of yours waits for its answer
+  if (st?.running && st.mode && !p.modeAsk) p.mode = st.mode
   const list = modeList(p)
   const label = (list.find(m => m[0] === p.mode) || list[0])[1]
   if (c.mode.textContent !== label) {
@@ -1816,6 +1921,7 @@ function pickMenu (c, kind, anchor) {
   let sub = null
   const row = (into, label, opts = {}) => {
     const b = el('button', 'menuitem')
+    b.tabIndex = -1
     b.setAttribute('role', opts.sub ? 'menuitem' : 'menuitemradio')
     b.appendChild(el('span', '', label))
     const right = el('span', 'mright')
@@ -1873,6 +1979,8 @@ function pickMenu (c, kind, anchor) {
     from.setAttribute('aria-expanded', 'true')
     const r = main.getBoundingClientRect()
     fill(sub, what)
+    // never taller than the window: it scrolls inside instead
+    sub.style.maxHeight = `${Math.max(0, window.innerHeight - 16)}px`
     const w = sub.getBoundingClientRect().width
     const h = sub.getBoundingClientRect().height
     const f = from.getBoundingClientRect()
@@ -1882,6 +1990,7 @@ function pickMenu (c, kind, anchor) {
     else {
       // no room beside it: it takes the menu's place, with a way back
       const back = el('button', 'menuitem pback')
+      back.tabIndex = -1
       back.setAttribute('role', 'menuitem')
       back.append(icon('chevron', 'mchev back'), el('span', '', 'Model'))
       back.setAttribute('aria-label', 'Back to Model')
@@ -1907,6 +2016,9 @@ function pickMenu (c, kind, anchor) {
   wrap.onkeydown = e => {
     const at = e.target.closest?.('.pickmenu')
     if (!at) return
+    // Tab leaves the menu: it closes, focus goes back to its control, and Tab carries on
+    // from there (the rows are not tab stops; arrows move between them)
+    if (e.key === 'Tab') { kill(); return }
     const items = [...at.querySelectorAll('.menuitem')]
     const i = items.indexOf(document.activeElement)
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -1922,9 +2034,14 @@ function pickMenu (c, kind, anchor) {
   const r = anchor.getBoundingClientRect()
   const m = main.getBoundingClientRect()
   main.style.left = `${Math.max(8, Math.min(r.right - m.width, window.innerWidth - m.width - 8))}px`
-  // above its control, where the box leaves room; below it when there is more room there
-  const above = r.top - m.height - 4
-  main.style.top = `${above >= 8 || r.top > window.innerHeight - r.bottom ? Math.max(8, above) : r.bottom + 4}px`
+  // above its control when it fits there or there is more room there, else below; on
+  // that side it is never taller than the room, and scrolls inside when it must
+  const roomAbove = r.top - 4 - 8
+  const roomBelow = window.innerHeight - r.bottom - 4 - 8
+  const up = m.height <= roomAbove || roomAbove >= roomBelow
+  const h = Math.max(0, Math.min(m.height, up ? roomAbove : roomBelow))
+  main.style.maxHeight = `${h}px`
+  main.style.top = `${up ? r.top - 4 - h : r.bottom + 4}px`
   anchor.setAttribute('aria-expanded', 'true')
   // no tooltip over its own open menu
   const tip = anchor.title
@@ -2498,6 +2615,12 @@ if (!BOARD_MODE) {
       return
     }
     if (m.type === 'chatCutoff') { CHAT.cutoff = new Set(m.ids || []); paintComposer(); return }
+    if (m.type === 'limitNotice') {
+      const n = m.notice
+      LIMIT_NOTICE = n && typeof n.kind === 'string' && typeof n.status === 'string' ? { kind: n.kind, status: n.status, resetsAt: Number(n.resetsAt) || 0 } : null
+      if (COMPOSER) paintLimit(COMPOSER)
+      return
+    }
     if (m.type === 'chatDropFiles') { dropRead(m); return }
     if (!m.type.startsWith('chat') || !m.id) return
     const id = m.id
@@ -2505,6 +2628,8 @@ if (!BOARD_MODE) {
     switch (m.type) {
       case 'chatState':
         if (m.state.busy && !st.busy) CHAT.busySince.set(id, Date.now())
+        // Claude stopped: no answer will come to a pick still waiting, which then simply stands
+        if (!m.state.running && CHAT.picks.get(id)?.modeAsk) CHAT.picks.get(id).modeAsk = null
         // a task that has gone takes its open output and its "Stopping…" with it
         for (const k of [...CHAT.taskOut.keys(), ...CHAT.stopping]) {
           if (k.startsWith(id + '|') && !(m.state.bg || []).some(t => k === id + '|' + t.id)) { CHAT.taskOut.delete(k); CHAT.stopping.delete(k) }
@@ -2595,24 +2720,17 @@ if (!BOARD_MODE) {
         if (m.state === 'cancelled') giveBack(id, e)
         break
       }
+      case 'chatModeDone': {
+        // the answer to the latest pick: from here on the mode Claude reports shows.
+        // An answer to an older pick leaves the newer one waiting for its own
+        const p = picksFor(id)
+        if (p.modeAsk?.req === m.req) { p.modeAsk = null; if (COMPOSER?.id === id) paintPickers(COMPOSER) }
+        break
+      }
       case 'chatNotice':
-        // Claude turned a mode down (chat-runner's setMode): the mode it reports shows again
-        if (/^Claude did not switch to that mode/.test(String(m.text || ''))) picksFor(id).modeAsk = null
         if (m.soft && CHAT.notes.get(id)?.action) break   // a passing word never covers one you can act on
         note(id, m.text, false, m.action === 'terminal' ? { label: 'Open Claude in a terminal', msg: { type: 'chatTerminal' } } : undefined)
         break
-      case 'chatLimit': {
-        // said once per limit and reset time: every reply carries it again, and a dismissed one stays dismissed
-        const said = `${id}|${m.kind}|${m.resetsAt}|${m.status}`
-        if (CHAT.limitsSaid.has(said)) return
-        CHAT.limitsSaid.add(said)
-        const when = m.resetsAt ? new Date(m.resetsAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''
-        const which = { five_hour: 'five-hour', seven_day: 'weekly', seven_day_opus: 'weekly' }[m.kind] || ''
-        note(id, m.status === 'rejected'
-          ? `You've hit your ${which ? which + ' ' : ''}usage limit.${when ? ` It resets at ${when}.` : ''}`
-          : `You're close to your ${which ? which + ' ' : ''}usage limit.${when ? ` It resets at ${when}.` : ''}`, m.status === 'rejected')
-        break
-      }
       case 'chatTitle': {
         const h2 = COMPOSER?.id === id && document.querySelector('#detail .dtop h2')
         if (h2) h2.textContent = m.title
@@ -2624,6 +2742,7 @@ if (!BOARD_MODE) {
         CHAT.echo.delete(m.to)
         CHAT.here.set(m.to, { folder: '' })
         if (COMPOSER?.id === id) {
+          refreshPoints(COMPOSER)
           COMPOSER = null
           // shown as a new chat until its file appears, then as itself (a one-chat tab moves with it)
           showPending(m.to)

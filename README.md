@@ -58,6 +58,10 @@ background (`claude -p` with streaming input and output), so your login,
 settings, MCP servers and CLAUDE.md apply as usual, and it writes the same
 transcript a terminal would. A chat already running in a terminal or another
 app is never written to twice; it can be continued here as a copy instead.
+When Claude says you are close to a usage limit, or have hit it, one notice sits
+just above the message box in every chat. Hiding it hides it everywhere, until
+later: sooner if you are on course to run out before the limit resets, and at once
+if you reach the limit or a new limit window starts.
 Turn **Chat here** off in Settings to keep the logbook read-only, as before.
 Chatting needs a trusted folder: Claude runs without its own folder-trust
 prompt here, and would load the folder's settings, hooks and MCP servers. The

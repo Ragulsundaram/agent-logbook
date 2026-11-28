@@ -398,7 +398,8 @@ function onLine (r, m) {
       return
     case 'rate_limit_event': {
       const i = m.rate_limit_info || {}
-      if (i.status && i.status !== 'allowed') emit(r.id, { type: 'chatLimit', status: String(i.status), resetsAt: Number(i.resetsAt) || 0, kind: String(i.rateLimitType || '') })
+      // every status, "allowed" too: that clears a warning shown for the same limit
+      if (i.status) emit(r.id, { type: 'chatLimit', status: String(i.status), resetsAt: Number(i.resetsAt) || 0, kind: String(i.rateLimitType || '') })
       return
     }
     case 'system':
@@ -832,15 +833,18 @@ function setModel (id, model) {
   emit(id, { type: 'chatState', state: state(id) })
 }
 
-function setMode (id, mode) {
+function setMode (id, mode, req = '') {
   const r = RUNS.get(id)
-  if (!r) return
+  // nothing running to ask: the pick stands as it is, and the view is told so
+  if (!r) { emit(id, { type: 'chatModeDone', req, ok: false }); return }
   // shown only once Claude has taken it: a mode it refuses must not look switched on
   control(r, { subtype: 'set_permission_mode', mode: mode || 'default' }, res => {
     if (RUNS.get(r.id) !== r) return
     if (res) r.mode = mode
     else emit(r.id, { type: 'chatNotice', text: `Claude did not switch to that mode${mode === 'bypassPermissions' ? ': a chat started before "Skip permission prompts" was on cannot bypass them. Start a new chat for it' : ''}.` })
     emit(r.id, { type: 'chatState', state: state(r.id) })
+    // the answer to this one pick, so the view clears only the pick it belongs to
+    emit(r.id, { type: 'chatModeDone', req, ok: !!res })
   })
 }
 

@@ -585,6 +585,104 @@ function dismissNudge (key) {
   return alertCtx.globalState.update('nudgesDismissed', all)
 }
 
+// ------------------------------------------------------------ usage-limit notice
+// Claude says, with its replies, how close you are to each usage limit (five-hour,
+// weekly, weekly for one model). A warning shows once, above the message box in
+// every view; dismissed in one, it goes from all of them, and comes back by the rule
+// in limitSnooze. Each limit keeps its own warning and its own dismissal.
+const LIMIT_KEYS = { five_hour: 'session', seven_day: 'weekly_all', seven_day_opus: 'weekly_scoped', seven_day_sonnet: 'weekly_scoped' }
+const LIMIT_MODEL = { seven_day_opus: /opus/i, seven_day_sonnet: /sonnet/i }
+const LIMIT_SEVERITY = { allowed_warning: 0, rejected: 1 }
+let LIMIT_TIMER = null
+
+/** When a warning stops applying: at its reset, or, with no reset time given, a window's length after it came. */
+const limitEnds = n => n.resetsAt ? n.resetsAt * 1000 : (n.at || 0) + (n.kind === 'five_hour' ? 5 * 3600e3 : 7 * 86400e3)
+/** The plan-usage figure for a warning's limit: by limit, by model for a one-model limit, by reset time. */
+function limitItem (notice, items) {
+  const key = LIMIT_KEYS[notice.kind]
+  const reset = notice.resetsAt ? notice.resetsAt * 1000 : 0
+  const nearReset = y => reset && Math.abs((y.resetsAt || 0) - reset) < 120000
+  const mine = items.filter(y => y.key === key && !y.stale)
+  const model = LIMIT_MODEL[notice.kind]
+  return (model && mine.find(y => model.test(y.label || ''))) || mine.find(nearReset) ||
+    (model ? null : mine[0]) || items.find(y => !y.stale && nearReset(y)) || null
+}
+
+/**
+ * When a dismissed usage-limit warning comes back, from how fast that limit is
+ * being used (the plan-usage figures, through pace()):
+ * - on course to run out before it resets: back at half the time left until it
+ *   would run out, but not sooner than 15 minutes or later than 2 hours;
+ * - using it more slowly than that: back in 6 hours;
+ * - no figure for that limit: back in 2 hours.
+ * Never later than the warning stops applying. Whatever the snooze, it is back at
+ * once when it gets worse (the limit is reached) or a new window brings a new
+ * warning (limitShown).
+ */
+function limitSnooze (notice, items, now = Date.now()) {
+  const x = limitItem(notice, items)
+  const p = x ? pace(x, now) : null
+  const ms = p?.runoutIn ? Math.min(2 * 3600e3, Math.max(15 * 60e3, p.runoutIn / 2))
+    : p ? 6 * 3600e3
+      : 2 * 3600e3
+  return now + Math.max(0, Math.min(ms, limitEnds(notice) - now))
+}
+const limitStore = () => SEEN_CTX?.globalState.get('limitNotices', {}) || {}
+const limitHidden = () => SEEN_CTX?.globalState.get('limitDismissed', {}) || {}
+/**
+ * The warning to show now, or null: of the ones that still apply and are not
+ * dismissed, the most serious, then the one ending soonest.
+ */
+function limitShown (now = Date.now()) {
+  const gone = limitHidden()
+  const live = Object.values(limitStore()).filter(n => limitEnds(n) > now).filter(n => {
+    const d = gone[n.kind]
+    const same = d && Math.abs((d.resetsAt || 0) - (n.resetsAt || 0)) <= 120 && (n.resetsAt || d.at === n.at)
+    const worse = (LIMIT_SEVERITY[n.status] ?? 0) > (LIMIT_SEVERITY[d?.status] ?? 0)
+    return !(same && !worse && now < d.until)
+  })
+  live.sort((a, b) => ((LIMIT_SEVERITY[b.status] ?? 0) - (LIMIT_SEVERITY[a.status] ?? 0)) || (limitEnds(a) - limitEnds(b)))
+  return live[0] || null
+}
+/** Every view is told what to show; and told again when a snooze ends or a warning stops applying. */
+function limitTell () {
+  const now = Date.now()
+  broadcast({ type: 'limitNotice', notice: limitShown(now) })
+  clearTimeout(LIMIT_TIMER)
+  const times = Object.values(limitStore()).map(limitEnds).concat(Object.values(limitHidden()).map(d => d.until || 0))
+  const next = times.filter(t => t > now)
+  if (next.length) LIMIT_TIMER = setTimeout(limitTell, Math.min(Math.min(...next) - now + 1000, 864e5))
+}
+/** A limit's status from Claude: a warning is kept (per limit); back to plain "allowed", it is cleared. */
+async function limitSeen (m) {
+  if (!SEEN_CTX) return
+  const kind = String(m.kind || '')
+  const status = String(m.status || '')
+  const now = Date.now()
+  // finished ones go, so the store never grows past the few limits there are
+  const all = Object.fromEntries(Object.entries(limitStore()).filter(([, n]) => limitEnds(n) > now))
+  const was = all[kind]
+  if (status === 'allowed') {
+    if (!was) return
+    delete all[kind]
+  } else {
+    const notice = { kind, status, resetsAt: Number(m.resetsAt) || 0 }
+    if (was && was.status === notice.status && was.resetsAt === notice.resetsAt) return
+    all[kind] = { ...notice, at: now }
+  }
+  await SEEN_CTX.globalState.update('limitNotices', all)
+  limitTell()
+}
+/** Dismissed in any view: the warning shown goes, for every view, until its snooze ends. */
+async function limitDismiss (kind) {
+  const n = limitShown()
+  if (!n || !SEEN_CTX || (kind && kind !== n.kind)) return
+  const gone = { ...limitHidden() }
+  gone[n.kind] = { status: n.status, resetsAt: n.resetsAt, at: n.at, until: limitSnooze(n, limitsNow().items || []) }
+  await SEEN_CTX.globalState.update('limitDismissed', gone)
+  limitTell()
+}
+
 /**
  * A pop-up the moment a chosen bar is about to reset mostly unused, or is on
  * course to run out - once per window, so it never nags.
@@ -1208,6 +1306,8 @@ function followNewChat (sid, post, term, maxMs = 3600e3) {
     WATCH?.setOpen(post, sid)
     tell({ type: 'session', data, fromPending: true })
   }, 1000)
+  // called off (the view never took the new chat): no watch, and no draft left behind
+  return () => { clearInterval(tick); NEW_CHATS.delete(sid) }
 }
 
 function liveTerminalFor (id, fork) {
@@ -1611,7 +1711,8 @@ async function readDropped (uris, room) {
     // the file itself decides what it is read as, and which of the two allowances it uses
     const kind = sharedRules.kindOf(path.basename(file))
     const bucket = kind === 'picture' ? 'picture' : 'file'
-    if (left[bucket] <= 0) { out.push({ name, error: 'a message carries at most 8 pictures and 8 files' }); continue }
+    // no room when asked: said with what it is, so the box can ask again if room opened meanwhile
+    if (left[bucket] <= 0) { out.push({ name, kind, uri: String(raw), full: true, error: 'a message carries at most 8 pictures and 8 files' }); continue }
     const max = sharedRules.LIMITS[kind]
     const tooBig = `too big, ${sharedRules.LIMIT_WORDS[kind]} at most`
     let fh
@@ -1672,7 +1773,15 @@ async function newChatInSidebar () {
   try {
     for (;;) {
       const to = await sidebarView()
-      if (to) { newChatHere(to); return true }
+      if (to) {
+        // started only once the sidebar says it shows it: a view that went away
+        // meanwhile would leave a chat nobody can see, so that try is called off
+        // (the answer comes as a later message, so waiting starts in time)
+        const made = newChatHere(to)
+        if (await pendingShown(made.sid)) return true
+        made.stop()
+        try { to({ type: 'pendingGone', id: made.sid }) } catch {}
+      }
       const again = await vscode.window.showWarningMessage('The logbook sidebar did not open, so the new chat could not start there.', 'Try again')
       if (again !== 'Try again') return false
     }
@@ -1685,7 +1794,16 @@ function newChatHere (post) {
   const sid = require('node:crypto').randomUUID()
   NEW_CHATS.set(sid, { cwd: cwd || require('node:os').homedir() })
   post({ type: 'pendingChat', id: sid, here: true, folder: scan.projectName(cwd || '') })
-  followNewChat(sid, post, null)
+  return { sid, stop: followNewChat(sid, post, null) }
+}
+// new chats a view has said it is showing (pendingShown), by id, for a sender waiting on that
+const PENDING_SHOWN = new Map()
+/** Whether the view says it is showing this new chat within a few seconds. */
+function pendingShown (sid, ms = 4000) {
+  return new Promise(resolve => {
+    const t = setTimeout(() => { PENDING_SHOWN.delete(sid); resolve(false) }, ms)
+    PENDING_SHOWN.set(sid, () => { clearTimeout(t); PENDING_SHOWN.delete(sid); resolve(true) })
+  })
 }
 
 /**
@@ -2063,8 +2181,16 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
     w.onDidReceiveMessage(async msg => {
       try {
         switch (msg.type) {
+          case 'limitDismiss':
+            await limitDismiss(typeof msg.kind === 'string' ? msg.kind : '')
+            break
+          case 'pendingShown':
+            // a view showing a new chat it was handed (newChatInSidebar waits for this)
+            PENDING_SHOWN.get(String(msg.id || ''))?.()
+            break
           case 'ready':
             READY_VIEWS.add(post)
+            post({ type: 'limitNotice', notice: limitShown() })
             // a page loaded in a hidden tab starts out told so, not assumed on screen
             post({ type: 'shown', visible: !!isVisible() })
             post({
@@ -2733,7 +2859,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             if (/^[\w.[\]-]{0,60}$/.test(String(msg.value || ''))) runner.setModel(msg.id, String(msg.value || ''))
             break
           case 'chatMode':
-            if (chatModes().includes(msg.value)) runner.setMode(msg.id, msg.value)
+            if (chatModes().includes(msg.value)) runner.setMode(msg.id, msg.value, /^[\w-]{1,40}$/.test(String(msg.req || '')) ? String(msg.req) : '')
             break
           case 'chatEffort':
             if (!msg.value || CHAT_EFFORTS.includes(msg.value)) runner.setEffort(msg.id, msg.value || '')
@@ -3558,6 +3684,7 @@ function activate (ctx) {
   setImmediate(() => { try { if (mcp.status().claude || mcp.status().codex) mcp.install(ctx.extensionPath) } catch {} })
   alertCtx = ctx
   SEEN_CTX = ctx
+  limitTell()                // a snooze from before a reload is still timed
   FINISH_ITEM = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 91)
   FINISH_ITEM.command = 'claudeHistory.board'
   ctx.subscriptions.push(FINISH_ITEM)
@@ -3580,6 +3707,8 @@ function activate (ctx) {
   runner.init({
     bin: claudeBin,
     emit: m => {
+      // a usage-limit warning is one notice for every view, not one per chat
+      if (m.type === 'chatLimit') { limitSeen(m); return }
       broadcast(m)
       if (m.type === 'chatAsk') askAlert(m)
     },
@@ -3691,6 +3820,7 @@ function activate (ctx) {
 function deactivate () {
   DEACTIVATED = true
   clearTimeout(liveTimer)
+  clearTimeout(LIMIT_TIMER)
   // a "!" command still running would carry on with nobody to see it
   for (const p of SHELLS.values()) stopShell(p)
   // a reply in progress, or a question waiting on you, dies with the window:

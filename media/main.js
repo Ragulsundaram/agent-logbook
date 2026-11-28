@@ -298,7 +298,8 @@ let SEEN_DUE = ''           // the chat just opened here, to be marked seen once
  * you look at it, or while its view was hidden and you came back to it.
  */
 function seenIfShown () {
-  if (BOARD_MODE || !VIEW_SHOWN || document.visibilityState !== 'visible' || !CUR || $('#detail').hidden) return
+  // a chat opened in the background while another page (Settings, Usage) is up is not on screen yet
+  if (BOARD_MODE || TAB !== 'chats' || !VIEW_SHOWN || document.visibilityState !== 'visible' || !CUR || $('#detail').hidden) return
   if (SEEN_DUE !== CUR.id && !UNREAD.has(CUR.id)) return
   SEEN_DUE = ''
   send({ type: 'markSeen', id: CUR.id })
@@ -316,6 +317,8 @@ document.querySelectorAll('.tab').forEach(b => {
     // back on chats with a chat still open: that chat is the screen, as before
     $('#tabs').hidden = TAB === 'chats' && !$('#detail').hidden
     if (TAB === 'chats' && $('#detail').hidden) renderList()
+    // back on chats to a chat opened meanwhile: it is on screen now
+    if (TAB === 'chats') seenIfShown()
     if (TAB === 'usage') send({ type: 'stats', days })
     if (TAB === 'digest') askDigest()
     if (TAB === 'memory' && !MEM.length) send({ type: 'memories' })
@@ -646,6 +649,13 @@ function renderList () {
   draw()
   fillViewport()
 }
+function refocusRow ({ id, at }) {
+  const row = [...$('#rows').querySelectorAll('.row[data-id]')].find(r => r.dataset.id === id)
+  if (!row) return
+  // the title first: with the row focused its actions show, so one of them can take focus
+  row.querySelector('button.t')?.focus({ preventScroll: true })
+  if (at > 0) row.querySelectorAll('button')[at]?.focus({ preventScroll: true })
+}
 
 // ---------------------------------------------------------------- resources
 // What running chats cost the laptop, and commands Claude left behind. Only the
@@ -706,7 +716,8 @@ function paintResources () {
   if (ban) rows.prepend(ban)
   const st = $('#detail .resstat')
   if (st && CUR) {
-    const r = RES?.sessions?.[CUR.id]
+    // the same key the footer uses: an agent thread shows its session's figure
+    const r = RES?.sessions?.[CUR.sessionId || CUR.id]
     st.hidden = !heavy(r)
     if (r) {
       st.textContent = 'Laptop ' + resText(r)
@@ -715,7 +726,15 @@ function paintResources () {
   }
 }
 
+/** The list drawn afresh; the keyboard stays on the same chat's same button. */
 function draw () {
+  const f = document.activeElement
+  const row = f && $('#rows').contains(f) ? f.closest('.row[data-id]') : null
+  const kept = row ? { id: row.dataset.id, at: [...row.querySelectorAll('button')].indexOf(f) } : null
+  drawRows()
+  if (kept) refocusRow(kept)
+}
+function drawRows () {
   const q = $('#q').value.trim().toLowerCase()
   if (FILTER === 'deleted' && !TRASHED.length) FILTER = 'all'
   renderChips()
@@ -1495,38 +1514,35 @@ function renderBlocks (t, blocks, from, body, to = blocks.length, before = null)
         PENDING.set(`${im.ti}:${im.ii}`, { img, fig })
         SEEN.observe(fig)
         fig.dataset.key = `${im.ti}:${im.ii}`
-        fig.appendChild(img)
+        // the tile only holds things: the picture is a button of its own, and so is the
+        // "+N" beside it (a button may not hold another button)
+        const open = el('button', 'shotopen')
+        open.type = 'button'
+        open.setAttribute('aria-label', n > 1 ? `Open picture ${idx + 1} of ${n}` : 'Open picture')
+        open.appendChild(img)
+        fig.appendChild(open)
         // opens in an editor tab, where it can be zoomed and kept beside the chat
         // read back from the key: it is renumbered when the whole chat replaces a quick copy
-        fig.onclick = () => {
+        open.onclick = () => {
           const [ti, ii] = fig.dataset.key.split(':').map(Number)
           send({ type: 'openImage', id: t.id, path: im.path, ti, ii, part: !!CUR?.part })
         }
-        // reachable from the keyboard too: Enter or Space opens it, as a click does
-        fig.tabIndex = 0
-        fig.setAttribute('role', 'button')
-        fig.setAttribute('aria-label', n > 1 ? `Open picture ${idx + 1} of ${n}` : 'Open picture')
-        fig.onkeydown = e => {
-          if (e.target !== fig || (e.key !== 'Enter' && e.key !== ' ')) return
-          e.preventDefault()
-          fig.click()
-        }
         // the "+N" this tile carries when it is the last one shown: the third in one
         // column, the fourth in two. A click shows every picture of this message, and
-        // the message stays that way through redraws; the keyboard lands on this tile
+        // the message stays that way through redraws; the keyboard lands on this picture
         const more = (cls, left) => {
           const b = el('button', 'imore ' + cls, `+${left}`)
+          b.type = 'button'
           const say = `Show ${left} more image${left === 1 ? '' : 's'}`
           b.title = say
           b.setAttribute('aria-label', say)
           // every picture of the message comes into view, each opening on its own as usual
-          b.onclick = e => {
-            e.stopPropagation()
+          b.onclick = () => {
             IMGS_OPEN.add(openKey)
             if (IMGS_OPEN.size > 200) IMGS_OPEN.delete(IMGS_OPEN.values().next().value)
             grid.classList.remove('many', 'more5')
             // the button is gone now: the keyboard moves to the picture it sat on
-            fig.focus()
+            open.focus()
           }
           fig.appendChild(b)
         }
@@ -2726,10 +2742,15 @@ function footer (t) {
 
   const top = el('div', 'fmeta')
   if (footOn('graph')) {
+    // a button, so the keyboard reaches it too. With too little to draw (fewer than two
+    // replies) there is no graph, so no button; a chat's Stats are also in its menu
     const spark = contextLine(i)
-    spark.title = 'Open the analytics for this chat'
-    spark.onclick = () => send({ type: 'analytics', id: t.id })
-    top.appendChild(spark)
+    if (spark.firstChild) {
+      spark.title = 'Open the analytics for this chat'
+      spark.setAttribute('aria-label', 'Open the analytics for this chat')
+      spark.onclick = () => send({ type: 'analytics', id: t.id })
+      top.appendChild(spark)
+    }
   }
   // a chat running here has Claude's own count; otherwise it is worked out from the transcript
   const live = typeof CHAT !== 'undefined' ? CHAT.state.get(t.id) : null
@@ -2802,7 +2823,8 @@ function footer (t) {
 
 /** Context growth across the conversation, drawn as a filled sparkline. */
 function contextLine (i) {
-  const wrap = el('div', 'spark2')
+  const wrap = el('button', 'spark2')
+  wrap.type = 'button'
   const pts = i.series || []
   if (pts.length < 2) return wrap
   const W = 120, H = 30, peak = Math.max(...pts, 1)
@@ -3508,7 +3530,8 @@ window.addEventListener('message', e => {
   }
   if (m.type === 'mcp') { MCP = m.data; paintMcp() }
   if (m.type === 'mcpActivity') { ACTIVITY = m.data; paintActivity() }
-  if (m.type === 'pendingChat' && !BOARD_MODE) showPending(m.id)
+  // shown, and said so: a new chat sent from the board waits for this before counting as started
+  if (m.type === 'pendingChat' && !BOARD_MODE) { showPending(m.id); send({ type: 'pendingShown', id: m.id }) }
   if (m.type === 'pendingGone' && PENDING_CHAT === m.id) { PENDING_CHAT = null; if (!CUR) closeDetail() }
   if (m.type === 'seen') { READ_AT[m.id] = m.at; if (BOARD_MODE) paintSeen() }
   if (m.type === 'shown') { VIEW_SHOWN = !!m.visible; seenIfShown() }

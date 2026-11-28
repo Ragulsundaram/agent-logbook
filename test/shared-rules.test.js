@@ -52,6 +52,10 @@ test('a file at the size limit still fits the base64 the extension takes when se
   assert.ok(b64(rules.LIMITS.picture) < rules.PAYLOAD.imageBase64)
   assert.ok(rules.LIMITS.text <= rules.PAYLOAD.textChars)
   assert.equal(rules.rawFor(rules.PAYLOAD.pdfBase64), rules.LIMITS.pdf)
+  // the largest PDF the extension takes, and the next byte, which the box must refuse
+  assert.equal(rules.LIMITS.pdf, 18749997)
+  assert.ok(4 * Math.ceil(18749997 / 3) < rules.PAYLOAD.pdfBase64)
+  assert.ok(4 * Math.ceil(18749998 / 3) >= rules.PAYLOAD.pdfBase64)
 })
 
 test('limit words never promise more than the limit', () => {
