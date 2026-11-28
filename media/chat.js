@@ -808,10 +808,19 @@ function typeIn (ed, text) {
   if (!text) return
   if (document.activeElement !== ed) ed.focus()
   if (!document.execCommand('insertText', false, text)) {
-    const r = caretRange(ed)
-    if (!r) return
-    r.insertNode(document.createTextNode(text))
-    r.collapse(false)
+    const sel = getSelection()
+    // both ends in the box: a selection reaching outside it must not delete the page around it
+    if (!sel.rangeCount || !ed.contains(sel.getRangeAt(0).commonAncestorContainer)) return
+    // the words replace any selection, and the caret goes after them: inserting
+    // alone leaves the page's caret where it was, at the start of the new text
+    const r = sel.getRangeAt(0)
+    r.deleteContents()
+    const t = document.createTextNode(text)
+    r.insertNode(t)
+    r.setStartAfter(t)
+    r.collapse(true)
+    sel.removeAllRanges()
+    sel.addRange(r)
     ed.dispatchEvent(new Event('input'))
   }
 }
