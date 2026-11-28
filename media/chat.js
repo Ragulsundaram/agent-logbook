@@ -1807,7 +1807,7 @@ function paintComposer () {
 function paintLimit (c) {
   const n = LIMIT_NOTICE
   // redrawn when the notice changes, and when the day does (a reset "on Monday" becomes "at 9:00")
-  const sig = n ? `${n.kind}|${n.status}|${n.resetsAt}|${new Date().toDateString()}` : ''
+  const sig = n ? `${n.kind}|${n.status}|${n.resetsAt}|${n.at}|${new Date().toDateString()}` : ''
   if (c.limit.dataset.sig === sig) return
   c.limit.dataset.sig = sig
   // at midnight the day label is worked out again ("on Mon" becomes "at 9:00"); no notice, no timer

@@ -1778,22 +1778,24 @@ async function readDropped (uris, room) {
 const clampRoom = n => Number.isInteger(n) ? Math.max(0, Math.min(8, n)) : 8
 
 /**
- * Whether another account on this computer could swap a folder on the way to a file,
- * so that opening it reads something else: a folder there sits in one that is not
- * yours or the system's, or that others can write to, unless that one is sticky (as
- * /tmp is) and the folder in it is yours or the system's. Not on Windows, which has
- * no such owners and modes.
+ * Whether another account on this computer could change a folder on the way to a
+ * file, its own folder included, so that opening it reads something else: a folder
+ * there is not yours or the system's, or others can write to it, unless it is sticky
+ * (as /tmp is) and what is in it on the way is yours or the system's.
+ * shortcut: macOS and Linux only (README says so); Windows needs its access lists read.
  */
 async function othersCanSwap (file) {
   const me = typeof process.getuid === 'function' ? process.getuid() : -1
   if (me < 0) return false
   const ours = st => st.uid === me || st.uid === 0
-  for (let d = path.dirname(file); path.dirname(d) !== d; d = path.dirname(d)) {
-    const [st, up] = await Promise.all([fs.promises.lstat(d), fs.promises.lstat(path.dirname(d))])
-    if (!ours(up)) return true
-    if ((up.mode & 0o022) && !((up.mode & 0o1000) && ours(st))) return true
+  let inside = await fs.promises.lstat(file)
+  for (let d = path.dirname(file); ; d = path.dirname(d)) {
+    const st = await fs.promises.lstat(d)
+    if (!ours(st)) return true
+    if ((st.mode & 0o022) && !((st.mode & 0o1000) && ours(inside))) return true
+    if (path.dirname(d) === d) return false
+    inside = st
   }
-  return false
 }
 
 /**
