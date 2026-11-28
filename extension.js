@@ -4,11 +4,13 @@ const path = require('node:path')
 const scan = require('./scan')
 const mcp = require('./mcp-setup')
 const runner = require('./chat-runner')
+// which files can go with a message, how big each kind may be, and the footer's items: the same rules the box uses
+const sharedRules = require('./media/shared-rules.js')
 
 const cfg = (k, dflt) => vscode.workspace.getConfiguration('claudeHistory').get(k, dflt)
 
 /** Everything the Settings tab edits, sent to the webview with the environment. */
-const SETTINGS = ['topBars', 'sort', 'showLiveFirst', 'pageSize', 'dateFormat',
+const SETTINGS = ['topBars', 'footerItems', 'sort', 'showLiveFirst', 'pageSize', 'dateFormat',
   'resumeTarget', 'skipPermissions', 'exportSourceCopy', 'chatLayout',
   'limitAlerts', 'resetSoonWeeklyHours', 'resetSoonSessionMinutes', 'unusedPercent', 'boardAllWindows',
   'finishAlerts', 'chatHere', 'chatPermissionMode', 'chatEffort', 'chatEditorContext']
@@ -417,7 +419,17 @@ function inThisWindow (x) {
   return !!x.cwd && folders.some(f => x.cwd === f || x.cwd.startsWith(f + path.sep))
 }
 
+// the list shows the same chats as unread: bold, with a blue dot. Sent only when the set changes
+let UNREAD_SENT = ''
+function sendUnread () {
+  const ids = [...FINISHED.keys()].sort()
+  const key = ids.join(',')
+  if (key === UNREAD_SENT) return
+  UNREAD_SENT = key
+  broadcast({ type: 'unread', ids })
+}
 function paintFinished () {
+  sendUnread()
   if (!FINISH_ITEM) return
   if (!FINISHED.size) { FINISH_ITEM.hide(); return }
   const n = FINISHED.size
@@ -571,6 +583,118 @@ function dismissNudge (key) {
   const all = { ...alertCtx.globalState.get('nudgesDismissed', {}) }
   all[key] = { flag: nudgeFlag(x.pace), resetsAt: x.resetsAt || 0, due: nudgeDue(x, Date.now()) }
   return alertCtx.globalState.update('nudgesDismissed', all)
+}
+
+// ------------------------------------------------------------ usage-limit notice
+// Claude says, with its replies, how close you are to each usage limit (five-hour,
+// weekly, weekly for one model). A warning shows once, above the message box in
+// every view; dismissed in one, it goes from all of them, and comes back by the rule
+// in limitSnooze. Each limit keeps its own warning and its own dismissal.
+const LIMIT_KEYS = { five_hour: 'session', seven_day: 'weekly_all', seven_day_opus: 'weekly_scoped', seven_day_sonnet: 'weekly_scoped' }
+const LIMIT_MODEL = { seven_day_opus: /opus/i, seven_day_sonnet: /sonnet/i }
+const LIMIT_SEVERITY = { allowed_warning: 0, rejected: 1 }
+let LIMIT_TIMER = null
+let LIMIT_SAVE_SAID = false        // a failure to save the notice has been reported this session
+
+/** When a warning stops applying: at its reset, or, with no reset time given, a window's length after it came. */
+const limitEnds = n => n.resetsAt ? n.resetsAt * 1000 : (n.at || 0) + (n.kind === 'five_hour' ? 5 * 3600e3 : 7 * 86400e3)
+/**
+ * The plan-usage figure for a warning's limit: by limit, then by reset time. A
+ * one-model limit takes only that model's own figure, or none.
+ */
+function limitItem (notice, items) {
+  const key = LIMIT_KEYS[notice.kind]
+  const reset = notice.resetsAt ? notice.resetsAt * 1000 : 0
+  const nearReset = y => reset && Math.abs((y.resetsAt || 0) - reset) < 120000
+  const mine = items.filter(y => y.key === key && !y.stale)
+  const model = LIMIT_MODEL[notice.kind]
+  if (model) return mine.find(y => model.test(y.label || '')) || null
+  return mine.find(nearReset) || mine[0] || items.find(y => !y.stale && nearReset(y)) || null
+}
+
+/**
+ * When a dismissed usage-limit warning comes back, from how fast that limit is
+ * being used (the plan-usage figures, through pace()):
+ * - on course to run out before it resets: back at half the time left until it
+ *   would run out, but not sooner than 15 minutes or later than 2 hours;
+ * - using it more slowly than that: back in 6 hours;
+ * - no figure for that limit: back in 2 hours.
+ * Never later than the warning stops applying. Whatever the snooze, it is back at
+ * once when it gets worse (the limit is reached) or a new window brings a new
+ * warning (limitShown).
+ */
+function limitSnooze (notice, items, now = Date.now()) {
+  const x = limitItem(notice, items)
+  const p = x ? pace(x, now) : null
+  const ms = p?.runoutIn ? Math.min(2 * 3600e3, Math.max(15 * 60e3, p.runoutIn / 2))
+    : p ? 6 * 3600e3
+      : 2 * 3600e3
+  return now + Math.max(0, Math.min(ms, limitEnds(notice) - now))
+}
+const limitStore = () => SEEN_CTX?.globalState.get('limitNotices', {}) || {}
+const limitHidden = () => SEEN_CTX?.globalState.get('limitDismissed', {}) || {}
+/**
+ * The warning to show now, or null: of the ones that still apply and are not
+ * dismissed, the most serious, then the one ending soonest.
+ */
+function limitShown (now = Date.now()) {
+  const gone = limitHidden()
+  const live = Object.values(limitStore()).filter(n => limitEnds(n) > now).filter(n => {
+    const d = gone[n.kind]
+    const same = d && Math.abs((d.resetsAt || 0) - (n.resetsAt || 0)) <= 120 && (n.resetsAt || d.at === n.at)
+    const worse = (LIMIT_SEVERITY[n.status] ?? 0) > (LIMIT_SEVERITY[d?.status] ?? 0)
+    return !(same && !worse && now < d.until)
+  })
+  live.sort((a, b) => ((LIMIT_SEVERITY[b.status] ?? 0) - (LIMIT_SEVERITY[a.status] ?? 0)) || (limitEnds(a) - limitEnds(b)))
+  return live[0] || null
+}
+/** Every view is told what to show; and told again when a snooze ends or a warning stops applying. */
+function limitTell () {
+  const now = Date.now()
+  broadcast({ type: 'limitNotice', notice: limitShown(now) })
+  clearTimeout(LIMIT_TIMER)
+  const times = Object.values(limitStore()).map(limitEnds).concat(Object.values(limitHidden()).map(d => d.until || 0))
+  const next = times.filter(t => t > now)
+  if (next.length) LIMIT_TIMER = setTimeout(limitTell, Math.min(Math.min(...next) - now + 1000, 864e5))
+}
+/** A limit's status from Claude: a warning is kept (per limit); back to plain "allowed", it is cleared. */
+async function limitSeen (m) {
+  if (!SEEN_CTX) return
+  const kind = String(m.kind || '')
+  const status = String(m.status || '')
+  const now = Date.now()
+  // finished ones go, so the store never grows past the few limits there are
+  const all = Object.fromEntries(Object.entries(limitStore()).filter(([, n]) => limitEnds(n) > now))
+  const was = all[kind]
+  if (status === 'allowed') {
+    // back to plain "allowed": that limit's warning goes. With no limit named, nothing
+    // is being warned about at all, so every warning held goes
+    if (kind) { if (!was) return; delete all[kind] } else {
+      if (!Object.keys(all).length) return
+      for (const k of Object.keys(all)) delete all[k]
+    }
+  } else {
+    const notice = { kind, status, resetsAt: Number(m.resetsAt) || 0 }
+    if (was && was.status === notice.status && was.resetsAt === notice.resetsAt) return
+    all[kind] = { ...notice, at: now }
+  }
+  await SEEN_CTX.globalState.update('limitNotices', all)
+  limitTell()
+}
+/**
+ * Dismissed in any view: the warning shown goes, for every view, until its snooze
+ * ends. Only if it is the very warning that view showed: one that changed meanwhile
+ * (the limit now reached) stays up, and the view is sent it.
+ */
+async function limitDismiss (seen) {
+  const n = limitShown()
+  if (!n || !SEEN_CTX) return
+  // the time it came tells two warnings apart that have the same limit, status and reset
+  if (seen.kind !== n.kind || seen.status !== n.status || Number(seen.resetsAt) !== n.resetsAt || (Number(seen.at) || 0) !== (n.at || 0)) { limitTell(); return }
+  const gone = { ...limitHidden() }
+  gone[n.kind] = { status: n.status, resetsAt: n.resetsAt, at: n.at, until: limitSnooze(n, limitsNow().items || []) }
+  await SEEN_CTX.globalState.update('limitDismissed', gone)
+  limitTell()
 }
 
 /**
@@ -1196,6 +1320,8 @@ function followNewChat (sid, post, term, maxMs = 3600e3) {
     WATCH?.setOpen(post, sid)
     tell({ type: 'session', data, fromPending: true })
   }, 1000)
+  // called off (the view never took the new chat): no watch, and no draft left behind
+  return () => { clearInterval(tick); NEW_CHATS.delete(sid) }
 }
 
 function liveTerminalFor (id, fork) {
@@ -1540,7 +1666,7 @@ function prunePastes () {
 function pastedNote (id, list) {
   const pics = (Array.isArray(list) ? list : []).slice(0, 4)
     .filter(im => im && /^image\/(png|jpeg|gif|webp)$/.test(im.mediaType) &&
-      typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < 7e6)
+      typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < sharedRules.PAYLOAD.imageBase64)
   if (!pics.length || !/^[\w-]+$/.test(String(id))) return ''
   const paths = []
   try {
@@ -1557,13 +1683,198 @@ function pastedNote (id, list) {
   return `\n\n(The user attached ${paths.length === 1 ? 'a picture' : `${paths.length} pictures`} to this answer: ${paths.join(', ')}. Open ${paths.length === 1 ? 'it' : 'them'} with the Read tool.)`
 }
 
+// Claude's and Codex's own folders hold logins and settings: never read from a drop
+const CONFIG_PLACES = () => {
+  const home = require('node:os').homedir()
+  return { dirs: [path.join(home, '.claude'), path.join(home, '.codex')], files: [path.join(home, '.claude.json')] }
+}
+
+/**
+ * Read files dropped on the message box from the Explorer, for the box to attach
+ * as if they had been picked with its attach button: only files on this computer
+ * (no network share), only the kinds it takes, only regular files, each within its
+ * kind's size limit, and nothing from Claude's or Codex's own folders. A shortcut
+ * is followed to the file it points at; a broken one is refused. Each refusal
+ * comes back with a short reason, which the box names in one note.
+ */
+async function readDropped (uris, room) {
+  const out = []
+  const places = CONFIG_PLACES()
+  // what the message box still has room for: a message carries at most 8 pictures and 8 files
+  const left = { picture: clampRoom(room?.pictures), file: clampRoom(room?.files) }
+  // the protected files themselves, by identity, so a hard link to one elsewhere is refused too
+  const guarded = []
+  for (const f of places.files.concat(path.join(places.dirs[0], '.credentials.json'))) {
+    try { const st = await fs.promises.stat(f); guarded.push(st) } catch {}
+  }
+  const isGuarded = st => guarded.some(g => g.dev === st.dev && g.ino === st.ino)
+  const inPlaces = f => places.dirs.some(d => within(d, f)) || places.files.some(g => real(g) === f)
+  for (const raw of (Array.isArray(uris) ? uris : []).slice(0, 16)) {
+    let uri
+    try { uri = vscode.Uri.parse(String(raw), true) } catch { continue }
+    const name = path.basename(uri.path) || 'file'
+    if (uri.scheme !== 'file' || uri.authority) { out.push({ name, error: 'not a file on this computer' }); continue }
+    const file = real(uri.fsPath)
+    if (!file) { out.push({ name, error: 'could not be read' }); continue }
+    // the name dropped and the file it leads to must both pass: a shortcut named
+    // notes.md that points at a .env, or at a program, is refused
+    const why = sharedRules.refusal(name) || sharedRules.refusal(path.basename(file))
+    if (why) { out.push({ name, error: why }); continue }
+    const protectedNote = 'in Claude\'s or Codex\'s own settings folder, so it is not attached'
+    if (inPlaces(file)) { out.push({ name, error: protectedNote }); continue }
+    // the file itself decides what it is read as, and which of the two allowances it uses
+    const kind = sharedRules.kindOf(path.basename(file))
+    const bucket = kind === 'picture' ? 'picture' : 'file'
+    // no room when asked: said with what it is, so the box can ask again if room opened meanwhile
+    if (left[bucket] <= 0) { out.push({ name, kind, uri: String(raw), full: true, error: 'a message carries at most 8 pictures and 8 files' }); continue }
+    const max = sharedRules.LIMITS[kind]
+    const tooBig = `too big, ${sharedRules.LIMIT_WORDS[kind]} at most`
+    let fh
+    try {
+      // looked at before opening: opening a named pipe would wait for a writer that never comes
+      const pre = await fs.promises.stat(file)
+      if (!pre.isFile()) { out.push({ name, error: 'could not be read' }); continue }
+      if (pre.size > max) { out.push({ name, error: tooBig }); continue }
+      // checking a path and then opening it is only safe when nobody else can change
+      // the folders on the way in between
+      if (await othersCanSwap(file)) { out.push({ name, error: 'in a folder other accounts on this computer can change, so it is not attached' }); continue }
+      // without waiting either, in case it was swapped for one in between; and never
+      // through a shortcut put in its place (the one dropped was followed above already)
+      fh = await fs.promises.open(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) | (fs.constants.O_NOFOLLOW || 0))
+      const st = await fh.stat()
+      // what was opened must be the file that was checked: the same object as the path
+      // resolves to now, that path still outside the protected places, and not one of the
+      // protected files under another name. Anything that cannot be shown is refused
+      const again = real(uri.fsPath)
+      const now = again && await fs.promises.stat(again).catch(() => null)
+      if (!st.isFile() || !now || again !== file || now.dev !== st.dev || now.ino !== st.ino) { out.push({ name, error: 'could not be read' }); continue }
+      // the path the open file really has, where the system can say it (Linux): that is
+      // the object being read, so the protected places are checked on it directly
+      const held = await fs.promises.readlink(`/proc/self/fd/${fh.fd}`).catch(() => '')
+      if (held && held !== file) { out.push({ name, error: 'could not be read' }); continue }
+      // and the path once more after that: a part of it swapped while this ran shows here
+      if (real(uri.fsPath) !== file) { out.push({ name, error: 'could not be read' }); continue }
+      if (inPlaces(again) || isGuarded(st)) { out.push({ name, error: protectedNote }); continue }
+      // a file with another name may have that name in a protected folder
+      if (st.nlink > 1 && await linkedIntoPlaces(st, places.dirs)) { out.push({ name, error: protectedNote }); continue }
+      if (st.size > max) { out.push({ name, error: tooBig }); continue }
+      // at most one byte past the limit is read, so a file that grows meanwhile is still caught
+      const buf = Buffer.alloc(max + 1)
+      let got = 0
+      for (;;) {
+        const { bytesRead } = await fh.read(buf, got, buf.length - got, got)
+        if (!bytesRead) break
+        got += bytesRead
+        if (got >= buf.length) break
+      }
+      if (got > max) { out.push({ name, error: tooBig }); continue }
+      left[bucket]--
+      // the kind and type of the file read, not of the shortcut's name: the box uses these
+      out.push({ name, kind, mediaType: sharedRules.mediaTypeOf(path.basename(file)), data: buf.subarray(0, got).toString('base64') })
+    } catch { out.push({ name, error: 'could not be read' }) } finally { await fh?.close().catch(() => {}) }
+  }
+  return out
+}
+const clampRoom = n => Number.isInteger(n) ? Math.max(0, Math.min(8, n)) : 8
+
+/**
+ * Whether another account on this computer could change a folder on the way to a
+ * file, its own folder included, so that opening it reads something else: a folder
+ * there is not yours or the system's, or others can write to it, unless it is sticky
+ * (as /tmp is) and what is in it on the way is yours or the system's.
+ * shortcut: macOS and Linux only (README says so); Windows needs its access lists read.
+ */
+async function othersCanSwap (file) {
+  const me = typeof process.getuid === 'function' ? process.getuid() : -1
+  if (me < 0) return false
+  const ours = st => st.uid === me || st.uid === 0
+  let inside = await fs.promises.lstat(file)
+  for (let d = path.dirname(file); ; d = path.dirname(d)) {
+    const st = await fs.promises.lstat(d)
+    if (!ours(st)) return true
+    if ((st.mode & 0o022) && !((st.mode & 0o1000) && ours(inside))) return true
+    if (path.dirname(d) === d) return false
+    inside = st
+  }
+}
+
+/**
+ * Whether a file with more than one name (a hard link) is one of the files in the
+ * protected folders. Every file there is looked at; with too many to look at, or a
+ * folder that cannot be read, it cannot be shown not to be, so the caller refuses it.
+ */
+async function linkedIntoPlaces (st, dirs) {
+  let left = 50000
+  async function walk (d) {
+    let dir
+    try { dir = await fs.promises.opendir(d) } catch (e) { if (e.code === 'ENOENT') return false; throw e }
+    for await (const e of dir) {
+      if (--left < 0) throw new Error('too many files to check')
+      const p = path.join(d, e.name)
+      if (e.isDirectory()) { if (await walk(p)) return true; continue }
+      if (!e.isFile()) continue
+      const s = await fs.promises.lstat(p).catch(() => null)
+      if (s && s.dev === st.dev && s.ino === st.ino) return true
+    }
+    return false
+  }
+  for (const d of dirs) if (await walk(d)) return true
+  return false
+}
+
+/** The sidebar, brought forward and loaded far enough to take messages; null if it never came. */
+async function sidebarView () {
+  await vscode.commands.executeCommand('claudeHistory.view.focus')
+  // the sidebar may still be loading: wait for its page to say it is ready
+  for (let i = 0; i < 40 && !(SIDEBAR && READY_VIEWS.has(SIDEBAR)); i++) await new Promise(r => setTimeout(r, 100))
+  return SIDEBAR && READY_VIEWS.has(SIDEBAR) ? SIDEBAR : null
+}
+const READY_VIEWS = new WeakSet()   // views whose page has loaded and said so
+let SIDEBAR_ASKING = false           // a new chat from the board is waiting on the sidebar, or on its "Try again"
+
+/**
+ * A new chat in the sidebar, for asks that come from elsewhere (the board, the
+ * announcement). The sidebar can take a moment, or fail, to come up: then a warning
+ * offers to try again. One at a time: asks while one is under way add nothing.
+ * Returns whether the chat started.
+ */
+async function newChatInSidebar () {
+  if (SIDEBAR_ASKING) return false
+  SIDEBAR_ASKING = true
+  try {
+    for (;;) {
+      const to = await sidebarView()
+      if (to) {
+        // started only once the sidebar says it shows it: a view that went away
+        // meanwhile would leave a chat nobody can see, so that try is called off
+        // (the answer comes as a later message, so waiting starts in time)
+        const made = newChatHere(to)
+        if (await pendingShown(made.sid)) return true
+        made.stop()
+        try { to({ type: 'pendingGone', id: made.sid }) } catch {}
+      }
+      const again = await vscode.window.showWarningMessage('The logbook sidebar did not open, so the new chat could not start there.', 'Try again')
+      if (again !== 'Try again') return false
+    }
+  } finally { SIDEBAR_ASKING = false }
+}
+
 /** A new chat in the logbook: no Claude yet, it starts with the first message, under this id. */
 function newChatHere (post) {
   const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
   const sid = require('node:crypto').randomUUID()
   NEW_CHATS.set(sid, { cwd: cwd || require('node:os').homedir() })
   post({ type: 'pendingChat', id: sid, here: true, folder: scan.projectName(cwd || '') })
-  followNewChat(sid, post, null)
+  return { sid, stop: followNewChat(sid, post, null) }
+}
+// new chats a view has said it is showing (pendingShown), by id, for a sender waiting on that
+const PENDING_SHOWN = new Map()
+/** Whether the view says it is showing this new chat within a few seconds. */
+function pendingShown (sid, ms = 4000) {
+  return new Promise(resolve => {
+    const t = setTimeout(() => { PENDING_SHOWN.delete(sid); resolve(false) }, ms)
+    PENDING_SHOWN.set(sid, () => { clearTimeout(t); PENDING_SHOWN.delete(sid); resolve(true) })
+  })
 }
 
 /**
@@ -1579,10 +1890,8 @@ async function announceChat (ctx) {
     'Agent Logbook 1.9: chat with Claude right in the logbook. Reply under any chat, or start a new one from +.',
     'Try it', "What's new")
   if (pick === 'Try it') {
-    await vscode.commands.executeCommand('claudeHistory.view.focus')
-    // the sidebar may still be loading: wait for it to say it is ready
-    for (let i = 0; i < 40 && !SIDEBAR; i++) await new Promise(r => setTimeout(r, 100))
-    if (SIDEBAR) newChatHere(SIDEBAR)
+    // not started after all (the sidebar never came, and no retry): offered again next time
+    if (!await newChatInSidebar()) await ctx.globalState.update(KEY, undefined)
   } else if (pick === "What's new") {
     await vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.joinPath(ctx.extensionUri, 'CHANGELOG.md'))
   }
@@ -1630,13 +1939,13 @@ function chatSend (msg, post) {
   // pasted pictures: a known type and a sane size, nothing else goes through
   const images = (Array.isArray(msg.images) ? msg.images : []).slice(0, 8)
     .filter(im => im && /^image\/(png|jpeg|gif|webp)$/.test(im.mediaType) &&
-      typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < 7e6)
+      typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data) && im.data.length < sharedRules.PAYLOAD.imageBase64)
   // attached files: PDFs as they are, text files as text; nothing else goes through
   const files = (Array.isArray(msg.files) ? msg.files : []).slice(0, 8).map(f => ({
     name: String(f?.name || 'file').replace(/[\r\n<>"]/g, '').slice(0, 120),
     mediaType: f?.mediaType === 'application/pdf' ? 'application/pdf' : 'text/plain',
-    data: typeof f?.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(f.data) && f.data.length < 2.5e7 ? f.data : '',
-    text: typeof f?.text === 'string' ? f.text.slice(0, 400000) : null,
+    data: typeof f?.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(f.data) && f.data.length < sharedRules.PAYLOAD.pdfBase64 ? f.data : '',
+    text: typeof f?.text === 'string' ? f.text.slice(0, sharedRules.PAYLOAD.textChars) : null,
   })).filter(f => f.mediaType === 'application/pdf' ? f.data : typeof f.text === 'string')
   // a file that could not go is said, not dropped quietly
   if (Array.isArray(msg.files) && files.length < Math.min(8, msg.files.length)) return fail('A file was too big or could not be read, so nothing was sent. Remove it and send again.')
@@ -1933,6 +2242,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
 <link rel="stylesheet" href="${uri('style.css')}"></head>
 <body${mode ? ` data-mode="${mode}"` : ''}${chatId ? ` data-chat="${chatId}"` : ''}>${fs.readFileSync(path.join(ctx.extensionPath, 'media', 'body.html'), 'utf8')}
 <script nonce="${nonce}" src="${uri('md.js')}"></script>
+<script nonce="${nonce}" src="${uri('shared-rules.js')}"></script>
 <script nonce="${nonce}" src="${uri('main.js')}"></script>
 <script nonce="${nonce}" src="${uri('chat-moves.js')}"></script>
 <script nonce="${nonce}" src="${uri('chat.js')}"></script></body></html>`
@@ -1942,7 +2252,18 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
     w.onDidReceiveMessage(async msg => {
       try {
         switch (msg.type) {
+          case 'limitDismiss':
+            await limitDismiss({ kind: String(msg.kind ?? ''), status: String(msg.status ?? ''), resetsAt: Number(msg.resetsAt) || 0, at: Number(msg.at) || 0 })
+            break
+          case 'pendingShown':
+            // a view showing a new chat it was handed (newChatInSidebar waits for this)
+            PENDING_SHOWN.get(String(msg.id || ''))?.()
+            break
           case 'ready':
+            READY_VIEWS.add(post)
+            post({ type: 'limitNotice', notice: limitShown() })
+            // a page loaded in a hidden tab starts out told so, not assumed on screen
+            post({ type: 'shown', visible: !!isVisible() })
             post({
               type: 'env',
               groups: scan.groupsFor()
@@ -1958,6 +2279,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
                   })
             pushLimits(post, 60000)
             post({ type: 'sessions', data: scan.sessionList(live) })
+            post({ type: 'unread', ids: [...FINISHED.keys()] })
             post({ type: 'chatCutoff', ids: Object.keys(cutoffs()) })
             break
           case 'sessions':
@@ -1989,7 +2311,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             }
             // choosing a chat outdates any agent thread still being read for this view
             AGENT_NAV.set(post, (AGENT_NAV.get(post) || 0) + 1)
-            seenChat(msg.id)
+            // marked seen by the view once it has shown the chat (markSeen), not on asking for it
             WATCH?.setOpen(post, msg.id)
             // clicked again while the whole chat is still being read: wait for that
             // read rather than queueing another behind it
@@ -2221,16 +2543,24 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             // settings page does, so the two can never drift apart
             if (!SETTINGS.includes(msg.key)) return
             if (msg.key === 'resumeTarget' && !TARGET_KEYS.includes(msg.value)) return
+            // a list of known items, each once; checked on its own, so a broken stored value never blocks a fix
+            if (msg.key === 'footerItems' && !sharedRules.validFooterItems(msg.value)) return
             const now = vscode.workspace.getConfiguration('claudeHistory').get(msg.key)
-            if (now !== undefined && now !== null && typeof msg.value !== typeof now) return
+            if (msg.key !== 'footerItems' && now !== undefined && now !== null && typeof msg.value !== typeof now) return
             if (msg.key === 'skipPermissions' && msg.value === true) {
               const ok = await vscode.window.showWarningMessage(
                 'Resume and fork chats with --dangerously-skip-permissions, and offer "Bypass permissions" in chats here? Claude will run every tool without asking.',
                 { modal: true }, 'Turn on')
               if (ok !== 'Turn on') { post({ type: 'env', cfg: settingsSnapshot() }); return }
             }
-            await vscode.workspace.getConfiguration('claudeHistory')
-              .update(msg.key, msg.value, vscode.ConfigurationTarget.Global)
+            try {
+              await vscode.workspace.getConfiguration('claudeHistory')
+                .update(msg.key, msg.value, vscode.ConfigurationTarget.Global)
+            } catch (e) {
+              // not saved: the view goes back to what the setting really is, then says why
+              post({ type: 'env', cfg: settingsSnapshot() })
+              throw e
+            }
             break
           }
           case 'fork': {
@@ -2562,6 +2892,10 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             post({ type: 'chatFilesList', id, q, list })
             break
           }
+          case 'chatDropRead':
+            // files dropped on the message box from VS Code's Explorer arrive as links only
+            post({ type: 'chatDropFiles', key: String(msg.key || '').slice(0, 40), items: await readDropped(msg.uris, msg.room) })
+            break
           case 'chatEditorAsk':
             postEditor()
             break
@@ -2595,9 +2929,13 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           case 'chatModel':
             if (/^[\w.[\]-]{0,60}$/.test(String(msg.value || ''))) runner.setModel(msg.id, String(msg.value || ''))
             break
-          case 'chatMode':
-            if (chatModes().includes(msg.value)) runner.setMode(msg.id, msg.value)
+          case 'chatMode': {
+            const req = /^[\w-]{1,40}$/.test(String(msg.req || '')) ? String(msg.req) : ''
+            if (chatModes().includes(msg.value)) runner.setMode(msg.id, msg.value, req)
+            // a mode not allowed now (Bypass turned off meanwhile): the pick is answered, so the box shows the real mode again
+            else if (req) post({ type: 'chatModeDone', id: String(msg.id || ''), req, ok: false })
             break
+          }
           case 'chatEffort':
             if (!msg.value || CHAT_EFFORTS.includes(msg.value)) runner.setEffort(msg.id, msg.value || '')
             break
@@ -2730,7 +3068,13 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           }
           case 'newChat': {
             const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-            if (msg.where === 'logbook') { newChatHere(post); break }
+            // the board shows no chat itself: a new one opens in the sidebar, which comes forward
+            if (msg.where === 'logbook') {
+              if (mode !== 'board') { newChatHere(post); break }
+              // the sidebar can take a moment, or fail, to come up: say so, with a way to try again
+              await newChatInSidebar()
+              break
+            }
             const bin = claudeBin()
             // the new chat's id is chosen here, so Resume can find its terminal
             // later from the launch itself rather than by asking claude
@@ -2905,7 +3249,11 @@ class HistoryView {
     this.view = view
     view.onDidDispose(() => { SIDEBAR = null })
     wire(this.ctx, view.webview, fn => view.onDidDispose(fn), 'sidebar', () => view.visible)
-    view.onDidChangeVisibility(() => { if (view.visible) pollLive().catch(() => {}) })
+    view.onDidChangeVisibility(() => {
+      if (view.visible) pollLive().catch(() => {})
+      // a hidden view's page cannot tell for itself: it is told, to mark what it shows as seen
+      view.webview.postMessage({ type: 'shown', visible: view.visible })
+    })
   }
 }
 
@@ -3040,6 +3388,15 @@ function openBoard (ctx) {
   return BOARD
 }
 
+/**
+ * Tell an editor tab's page when it is shown or hidden. A page in a hidden tab
+ * still thinks it is visible, so it is told: a chat that finished while you were
+ * away is marked seen only once you can see it.
+ */
+function tellShown (panel) {
+  panel.onDidChangeViewState(e => { e.webviewPanel.webview.postMessage({ type: 'shown', visible: e.webviewPanel.visible }) })
+}
+
 /** Open the same UI as an editor tab, so it can sit beside anything. */
 function openInEditor (ctx, beside) {
   const panel = vscode.window.createWebviewPanel(
@@ -3049,6 +3406,7 @@ function openInEditor (ctx, beside) {
   )
   panel.iconPath = tabIcon(ctx)
   wire(ctx, panel.webview, fn => panel.onDidDispose(fn), undefined, () => panel.visible, { reveal: () => panel.reveal() })
+  tellShown(panel)
   return panel
 }
 
@@ -3307,6 +3665,7 @@ function sleepingTabs (idx = new Map(scan.index().map(x => [x.id, x]))) {
 }
 
 function fillChatTab (ctx, panel, id) {
+  tellShown(panel)
   CHAT_TABS.set(id, panel)
   EXT_CTX = ctx
   TAB_STATE.set(panel, { base: panel.title, state: '' })
@@ -3400,6 +3759,7 @@ function activate (ctx) {
   setImmediate(() => { try { if (mcp.status().claude || mcp.status().codex) mcp.install(ctx.extensionPath) } catch {} })
   alertCtx = ctx
   SEEN_CTX = ctx
+  limitTell()                // a snooze from before a reload is still timed
   FINISH_ITEM = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 91)
   FINISH_ITEM.command = 'claudeHistory.board'
   ctx.subscriptions.push(FINISH_ITEM)
@@ -3422,6 +3782,17 @@ function activate (ctx) {
   runner.init({
     bin: claudeBin,
     emit: m => {
+      // a usage-limit warning is one notice for every view, not one per chat
+      if (m.type === 'chatLimit') {
+        // a storage failure is reported, not left as an unhandled rejection
+        limitSeen(m).catch(err => {
+          // said once a session: every reply carrying the warning would otherwise say it again
+          if (LIMIT_SAVE_SAID) return
+          LIMIT_SAVE_SAID = true
+          vscode.window.showWarningMessage(`Agent Logbook: could not save the usage-limit notice (${err?.message || err}).`)
+        })
+        return
+      }
       broadcast(m)
       if (m.type === 'chatAsk') askAlert(m)
     },
@@ -3533,6 +3904,7 @@ function activate (ctx) {
 function deactivate () {
   DEACTIVATED = true
   clearTimeout(liveTimer)
+  clearTimeout(LIMIT_TIMER)
   // a "!" command still running would carry on with nobody to see it
   for (const p of SHELLS.values()) stopShell(p)
   // a reply in progress, or a question waiting on you, dies with the window:

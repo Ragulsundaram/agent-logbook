@@ -104,6 +104,10 @@ const ICONS = {
     'M12 5.2a3.2 3.2 0 0 1 6 1.3 2.8 2.8 0 0 1 1.2 4.6A3 3 0 0 1 18 16.4a3 3 0 0 1-6 .6z',
     'M12 5.2V17'],
   plus: ['M12 5v14', 'M5 12h14'],
+  clip: ['M20.5 11.2 12.3 19.4a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8'],
+  send: ['M12 19V5.5', 'M6.5 11 12 5.5l5.5 5.5'],
+  queue: ['M6 5v6.5a3.5 3.5 0 0 0 3.5 3.5H19', 'M15 11l4 4-4 4'],
+  file: ['M6.5 3.5h7l4 4v13h-11z', 'M13.5 3.5v4h4'],
   close: ['M6 6l12 12', 'M18 6 6 18'],
   check: 'M5 12.5 10 17.5 19 7',
   list: ['M4 6.5h.01', 'M4 12h.01', 'M4 17.5h.01', 'M9 6.5h11', 'M9 12h11', 'M9 17.5h11'],
@@ -128,7 +132,7 @@ const ICONS = {
 const OUTLINE = new Set(['shield', 'info', 'find', 'eye', 'scan', 'diff', 'bell', 'pulse', 'folder', 'chevron', 'terminal', 'desktop', 'vscode',
   'pencil', 'split', 'open', 'copy', 'fork', 'chart', 'reload', 'export',
   'history', 'compact', 'dots', 'message', 'card', 'calendar', 'book', 'plus', 'list', 'brief',
-  'agent', 'gear', 'layout', 'close', 'check'])
+  'agent', 'gear', 'layout', 'close', 'check', 'send', 'queue', 'file', 'clip'])
 
 // where Resume goes, remembered by the host between windows
 const TARGETS = {
@@ -284,6 +288,24 @@ document.addEventListener('contextmenu', e => {
 const TABICON = { chats: 'message', usage: 'card', digest: 'calendar', memory: 'book', agents: 'agent', settings: 'gear' }
 const TABNAME = { chats: 'Chats', usage: 'Card', digest: 'Digest', memory: 'Memory', agents: 'Agents', settings: 'Settings' }
 let TAB = 'chats'
+let UNREAD = new Set()     // chats that finished a reply in this window you have not opened since
+// whether this view is on screen: the extension says so when it changes, as a page in
+// a hidden tab or a collapsed sidebar still reports itself visible
+let VIEW_SHOWN = true
+let SEEN_DUE = ''           // the chat just opened here, to be marked seen once it is on screen
+/**
+ * A chat is seen once it is actually on screen: just opened here, or finished while
+ * you look at it, or while its view was hidden and you came back to it.
+ */
+function seenIfShown () {
+  // a chat opened in the background while another page (Settings, Usage) is up is not on screen yet
+  if (BOARD_MODE || TAB !== 'chats' || !VIEW_SHOWN || document.visibilityState !== 'visible' || !CUR || $('#detail').hidden) return
+  if (SEEN_DUE !== CUR.id && !UNREAD.has(CUR.id)) return
+  SEEN_DUE = ''
+  send({ type: 'markSeen', id: CUR.id })
+}
+document.addEventListener('visibilitychange', seenIfShown)
+const IMGS_OPEN = new Set()   // messages whose pictures were all shown with "+N", by chat, time and count
 
 document.querySelectorAll('.tab').forEach(b => {
   b.append(icon(TABICON[b.dataset.tab]), el('span', 'tlabel', TABNAME[b.dataset.tab]))
@@ -295,6 +317,8 @@ document.querySelectorAll('.tab').forEach(b => {
     // back on chats with a chat still open: that chat is the screen, as before
     $('#tabs').hidden = TAB === 'chats' && !$('#detail').hidden
     if (TAB === 'chats' && $('#detail').hidden) renderList()
+    // back on chats to a chat opened meanwhile: it is on screen now
+    if (TAB === 'chats') seenIfShown()
     if (TAB === 'usage') send({ type: 'stats', days })
     if (TAB === 'digest') askDigest()
     if (TAB === 'memory' && !MEM.length) send({ type: 'memories' })
@@ -625,6 +649,13 @@ function renderList () {
   draw()
   fillViewport()
 }
+function refocusRow ({ id, at }) {
+  const row = [...$('#rows').querySelectorAll('.row[data-id]')].find(r => r.dataset.id === id)
+  if (!row) return
+  // the title first: with the row focused its actions show, so one of them can take focus
+  row.querySelector('button.t')?.focus({ preventScroll: true })
+  if (at > 0) row.querySelectorAll('button')[at]?.focus({ preventScroll: true })
+}
 
 // ---------------------------------------------------------------- resources
 // What running chats cost the laptop, and commands Claude left behind. Only the
@@ -685,17 +716,25 @@ function paintResources () {
   if (ban) rows.prepend(ban)
   const st = $('#detail .resstat')
   if (st && CUR) {
-    const r = RES?.sessions?.[CUR.id]
-    const grp = st.closest('.resgroup')
-    if (grp && grp.hidden !== !heavy(r)) { grp.hidden = !heavy(r); restack(grp.parentElement) }
+    // the same key the footer uses: an agent thread shows its session's figure
+    const r = RES?.sessions?.[CUR.sessionId || CUR.id]
+    st.hidden = !heavy(r)
     if (r) {
-      st.textContent = resText(r)
+      st.textContent = 'Laptop ' + resText(r)
       st.classList.toggle('hot', heavy(r))
     }
   }
 }
 
+/** The list drawn afresh; the keyboard stays on the same chat's same button. */
 function draw () {
+  const f = document.activeElement
+  const row = f && $('#rows').contains(f) ? f.closest('.row[data-id]') : null
+  const kept = row ? { id: row.dataset.id, at: [...row.querySelectorAll('button')].indexOf(f) } : null
+  drawRows()
+  if (kept) refocusRow(kept)
+}
+function drawRows () {
   const q = $('#q').value.trim().toLowerCase()
   if (FILTER === 'deleted' && !TRASHED.length) FILTER = 'all'
   renderChips()
@@ -774,7 +813,7 @@ function drawDeleted (q) {
   for (const x of list) {
     const r = el('div', 'row deleted')
     r.appendChild(sourceIcon(x.provider))
-    r.append(el('span', 't', x.title), el('span', 'age', ago(x.deletedAt)))
+    r.append(el('span', 't', x.title), el('span', 'age', ago(x.deletedAt) + ' ago'))
     const b = el('button', 'restorebtn', 'Restore')
     b.onclick = e => { e.stopPropagation(); b.disabled = true; send({ type: 'restore', name: x.name }) }
     r.appendChild(b)
@@ -1030,16 +1069,19 @@ function chatRow (s) {
   r.appendChild(sourceIcon(s.provider))
   if (s.pinned) r.appendChild(icon('pin', 'pinmark'))
   if (s.branchedFrom) r.appendChild(icon('fork', 'branchmark'))
-  r.append(el('span', 't', s.title))
+  // a reply that finished while you were not looking reads bold, with a blue dot
+  const unread = UNREAD.has(s.id) && s.live !== 'busy' && s.live !== 'waiting'
+  if (unread) r.classList.add('unread')
+  // the title is the row's button: Tab reaches the row, Enter opens it as a click
+  // does, and with the row focused its actions come into view and into the tab order
+  const open = el('button', 't', s.title)
+  open.setAttribute('aria-label', `${s.title}${unread ? ', new reply' : ''}${s.live === 'waiting' ? ', waiting for you' : ''}`)
+  r.appendChild(open)
   const rb = resBadge(s.id)
   if (rb) r.appendChild(rb)
-  r.appendChild(el('span', 'age', ago(s.lastTs)))
-  // busy gets a turning ring, waiting on you an amber dot, idle a steady dot, anything else nothing
-  const dot = el('span', s.live === 'busy' ? 'spinner' : 'dot' + (s.live === 'waiting' ? ' needs' : s.live === 'idle' ? ' idle' : ' off'))
-  if (s.live === 'waiting') dot.title = 'Claude is waiting for you'
-  r.appendChild(dot)
+  r.appendChild(el('span', 'age', ago(s.lastTs) + ' ago'))
 
-  // hover actions, floated over the right edge like the row's own toolbar
+  // on hover the actions take the age's place; the dot keeps its own spot at the end, so it never moves
   const acts = el('div', 'rowacts')
   const act = (name, tip, fn) => {
     const b = el('button', 'ract')
@@ -1058,6 +1100,16 @@ function chatRow (s) {
     act('archive', s.archived ? 'Unarchive' : 'Archive', () => send({ type: 'archive', id: s.id })),
     act('trash', 'Delete chat', () => send({ type: 'trash', id: s.id })))
   r.appendChild(acts)
+  // busy gets a turning ring, waiting on you an amber dot, an unread reply a blue dot,
+  // idle a steady green dot, anything else an empty spot of the same size
+  const slot = el('span', 'rdot')
+  const dot = el('span', s.live === 'busy' ? 'spinner'
+    : 'dot' + (s.live === 'waiting' ? ' needs' : unread ? ' unread' : s.live === 'idle' ? ' idle' : ' off'))
+  const said = s.live === 'busy' ? 'Working' : s.live === 'waiting' ? 'Claude is waiting for you'
+    : unread ? 'New reply you have not opened' : s.live === 'idle' ? 'Running, idle' : ''
+  if (said) { slot.title = said; slot.setAttribute('role', 'img'); slot.setAttribute('aria-label', said) }
+  slot.appendChild(dot)
+  r.appendChild(slot)
 
   r.title = `${s.project} · ${s.messages} messages · ${nfmt(s.tokens)} tokens · ${money(s.cost)}`
   r.onclick = e => {
@@ -1140,9 +1192,13 @@ function putImage (m) {
  */
 let PENDING_CHAT = null
 function showPending (id) {
+  // a new chat is where you go: started from another page (Settings, the card,
+  // the digest), the Chats page comes forward rather than drawing it out of sight
+  // the chat open before goes first, so bringing Chats forward does not mark it seen
   closeDetail(true)
+  if (TAB !== 'chats') $('.tab[data-tab="chats"]')?.click()
   PENDING_CHAT = id
-  $('#tabs').hidden = TAB === 'chats'   // a chat opened in the background must not take the tab row from another page
+  $('#tabs').hidden = true
   $('#view-chats .bar').hidden = true
   $('#rows').hidden = true
   const d = $('#detail')
@@ -1164,6 +1220,8 @@ function closeDetail (forPending) {
   // a one-chat tab keeps its chat, except to make room for a copy started from it
   if (CHAT_ONLY && !forPending) return
   if (CUR) PENDING_CHAT = null
+  // chat.js: an Enter still waiting on files for the chat that closes does not go
+  if (typeof chatViewClosed === 'function') chatViewClosed()
   CUR = null
   SEEN.disconnect()
   PENDING.clear(); ASKED.clear()
@@ -1438,8 +1496,18 @@ function renderBlocks (t, blocks, from, body, to = blocks.length, before = null)
       run.push(turn.text)
     }
     if (turn.images && turn.images.length) {
+      // every picture in one same-size tile. With four or more, two columns when the
+      // column is wide enough (one when not) and a "+N" on the last tile shown; which
+      // tiles show is the stylesheet's call, as it depends on the column's width
       const iw = el('div', 'imgs')
-      for (const im of turn.images) {
+      const grid = el('div', 'imggrid')
+      const n = turn.images.length
+      // opened with its "+N" once: stays open through live redraws of this message
+      const openKey = `${t.id}|${turn.start || turn.ts}|${n}`
+      if (n >= 4 && !IMGS_OPEN.has(openKey)) grid.classList.add('many')
+      if (n >= 5 && !IMGS_OPEN.has(openKey)) grid.classList.add('more5')
+      iw.appendChild(grid)
+      turn.images.forEach((im, idx) => {
         const fig = el('div', 'shot loading')
         const img = el('img')
         img.loading = 'lazy'
@@ -1447,15 +1515,42 @@ function renderBlocks (t, blocks, from, body, to = blocks.length, before = null)
         PENDING.set(`${im.ti}:${im.ii}`, { img, fig })
         SEEN.observe(fig)
         fig.dataset.key = `${im.ti}:${im.ii}`
-        fig.appendChild(img)
+        // the tile only holds things: the picture is a button of its own, and so is the
+        // "+N" beside it (a button may not hold another button)
+        const open = el('button', 'shotopen')
+        open.type = 'button'
+        open.setAttribute('aria-label', n > 1 ? `Open picture ${idx + 1} of ${n}` : 'Open picture')
+        open.appendChild(img)
+        fig.appendChild(open)
         // opens in an editor tab, where it can be zoomed and kept beside the chat
         // read back from the key: it is renumbered when the whole chat replaces a quick copy
-        fig.onclick = () => {
+        open.onclick = () => {
           const [ti, ii] = fig.dataset.key.split(':').map(Number)
           send({ type: 'openImage', id: t.id, path: im.path, ti, ii, part: !!CUR?.part })
         }
-        iw.appendChild(fig)
-      }
+        // the "+N" this tile carries when it is the last one shown: the third in one
+        // column, the fourth in two. A click shows every picture of this message, and
+        // the message stays that way through redraws; the keyboard lands on this picture
+        const more = (cls, left) => {
+          const b = el('button', 'imore ' + cls, `+${left}`)
+          b.type = 'button'
+          const say = `Show ${left} more image${left === 1 ? '' : 's'}`
+          b.title = say
+          b.setAttribute('aria-label', say)
+          // every picture of the message comes into view, each opening on its own as usual
+          b.onclick = () => {
+            IMGS_OPEN.add(openKey)
+            if (IMGS_OPEN.size > 200) IMGS_OPEN.delete(IMGS_OPEN.values().next().value)
+            grid.classList.remove('many', 'more5')
+            // the button is gone now: the keyboard moves to the picture it sat on
+            open.focus()
+          }
+          fig.appendChild(b)
+        }
+        if (n >= 4 && idx === 2) more('one', n - 2)
+        if (n >= 5 && idx === 3) more('two', n - 3)
+        grid.appendChild(fig)
+      })
       w.appendChild(iw)
     }
     // an agent gets a card of its own, so it drops out of the "ran N tools" line
@@ -1575,6 +1670,43 @@ function stickToEnd (body) {
   })
 }
 
+/**
+ * The footer's numbers are swapped in place rather than the footer replaced:
+ * rebuilding it threw away the runner too, so it restarted from the left edge
+ * every time Claude wrote a line. The file list keeps its open or closed state;
+ * the model and mode buttons chat.js put in the line stay put, the reply status moves across.
+ */
+function swapFooter (t) {
+  const oldFoot = $('#detail')?.querySelector('.foot')
+  if (!oldFoot) return
+  const fresh = footer(t)
+  const runner = oldFoot.querySelector(':scope > .runstrip')
+  const tree = oldFoot.querySelector(':scope > .ftree')
+  const treeOpen = !!(tree && !tree.hidden)
+  // a footer button you are on (the files link, the graph) has the keyboard back after the swap
+  const ae = document.activeElement
+  const focusedCls = ae && oldFoot.contains(ae) ? ['ffiles', 'spark2'].find(k => ae.classList?.contains(k)) : ''
+  const oldMeta = oldFoot.querySelector(':scope > .fmeta')
+  const freshMeta = fresh.querySelector(':scope > .fmeta')
+  if (oldMeta && freshMeta) {
+    // only the details are swapped: the model and mode buttons stay where they are,
+    // so one you are on keeps the keyboard through every live refresh
+    const keep = oldMeta.querySelector(':scope > .fctrls')
+    const status = oldMeta.querySelector(':scope > .fnums > .cstatus')
+    if (status) freshMeta.querySelector(':scope > .fnums')?.appendChild(status)
+    for (const n of [...oldMeta.children]) if (n !== keep) n.remove()
+    for (const n of [...freshMeta.children]) if (!n.classList.contains('fctrls') || !keep) oldMeta.insertBefore(n, keep || null)
+  } else if (freshMeta) oldFoot.appendChild(freshMeta)
+  tree?.remove()
+  const newTree = fresh.querySelector(':scope > .ftree')
+  if (newTree) oldFoot.appendChild(newTree)
+  if (treeOpen) toggleFiles(true)
+  if (focusedCls) oldFoot.querySelector(`:scope > .fmeta .${focusedCls}`)?.focus({ preventScroll: true })
+  const busy = isBusy(t.id)
+  if (busy && !runner) oldFoot.prepend(runnerStrip())
+  if (!busy && runner) runner.remove()
+}
+
 function updateLive (t) {
   const body = $('.msgs')
   if (!body) return false
@@ -1615,31 +1747,7 @@ function updateLive (t) {
   }
   // the footer numbers and the agents button move with every reply
   const d = $('#detail')
-  // The footer's numbers are swapped in place rather than the footer replaced:
-  // rebuilding it threw away the runner too, so it restarted from the left edge
-  // every time Claude wrote a line. The file list keeps its open or closed state.
-  const oldFoot = d.querySelector('.foot')
-  if (oldFoot) {
-    const fresh = footer(t)
-    const runner = oldFoot.querySelector('.runstrip')
-    const tree = oldFoot.querySelector('.ftree')
-    const treeOpen = !!(tree && !tree.hidden)
-    fresh.querySelector('.runstrip')?.remove()
-    // the message box (chat.js) lives at the top of the footer and stays put
-    for (const n of [...oldFoot.children]) if (n !== runner && !n.classList.contains('composer')) n.remove()
-    for (const n of [...fresh.children]) oldFoot.appendChild(n)
-    if (treeOpen) {
-      const t2 = oldFoot.querySelector('.ftree')
-      if (t2) {
-        t2.hidden = false
-        const c = oldFoot.querySelector('.fchanged .chev2')
-        if (c) c.textContent = '▾'
-      }
-    }
-    const busy = isBusy(t.id)
-    if (busy && !runner) oldFoot.prepend(runnerStrip())
-    if (!busy && runner) runner.remove()
-  }
+  swapFooter(t)
   // The agents list is rebuilt only when an agent starts or finishes, and an
   // open one stays open where it was scrolled: rebuilt with every line Claude
   // wrote, it jumped back to the top about once a second.
@@ -1663,7 +1771,9 @@ function updateLive (t) {
 }
 
 /** The chat's actions when the message box is the main one: resume elsewhere, branch, export. */
-function chatMenu (anchor, t) {
+function chatMenu (anchor, drawn) {
+  // the header was drawn with the chat as it was then; live updates since are in CUR
+  const t = CUR?.id === drawn.id ? CUR : drawn
   document.querySelectorAll('body > .menu.chatmenu').forEach(m => m.remove())
   const menu = el('div', 'menu chatmenu')
   const item = (ico, label, hint, fn) => {
@@ -1685,8 +1795,15 @@ function chatMenu (anchor, t) {
   }
   sep()
   item('fork', 'New chat from this one', 'full history, like /branch', () => send({ type: 'fork', id: t.id }))
+  // running in a terminal or another app: carry on here as a copy, the original keeps going
+  if (!t.isAgent && t.provider !== 'codex' && chatOn() && whereRunning(t.id) === 'elsewhere') {
+    item('message', 'Continue here as a copy', 'the original keeps running', () => send({ type: 'chatFork', id: t.id }))
+  }
   item('brief', 'New chat from a summary', 'shorter, cheaper', () => send({ type: 'forkBrief', id: t.id }))
   sep()
+  // the footer's file count can be turned off in Settings: the list is always here
+  const nf = t.info?.files?.length || 0
+  if (nf) item('diff', 'Files changed', `${nf} file${nf === 1 ? '' : 's'}`, () => toggleFiles())
   item(ALLTOOLS ? 'collapse' : 'expand', ALLTOOLS ? 'Collapse all steps' : 'Expand all steps', '', () => $('#detail .foldall')?.click())
   item('chart', 'Stats', '', () => send({ type: 'analytics', id: t.id }))
   item('reload', 'Reload', '', () => send({ type: 'session', id: t.id }))
@@ -1760,6 +1877,7 @@ function showDetail (t, live) {
   const fresh = el('button', 'iconbtn newinchat')
   fresh.appendChild(icon('plus'))
   fresh.title = 'New chat'
+  fresh.setAttribute('aria-label', 'New chat')
   fresh.onclick = e => newChatMenu(e.currentTarget)
   top.appendChild(fresh)
   head.appendChild(top)
@@ -2149,15 +2267,22 @@ function turnChanges (edits, id) {
 
   for (const f of files) {
     const row = el('div', 'trow')
-    const dir = f.path.replace(/\/[^/]+$/, '').split('/').slice(-2).join('/')
-    row.append(icon('pencil', 'tico'),
-      el('span', 'tdir', '…/' + dir + '/'), el('span', 'tfile', f.path.split('/').pop()),
-      el('span', 'adds', `+${f.adds}`))
-    if (f.dels) row.appendChild(el('span', 'dels', `-${f.dels}`))
+    const parts = f.path.split('/')
+    const dir = parts.slice(0, -1).filter(Boolean).slice(-2).join('/')
+    row.appendChild(icon('pencil', 'tico'))
+    // the folder gives way first, from its start; the file name keeps its room.
+    // The marks keep the slashes in place inside the right-to-left box that cuts it
+    if (dir) row.appendChild(el('span', 'tdir', '\u200E…/' + dir + '/\u200E'))
+    row.appendChild(el('span', 'tfile', parts.pop()))
+    const nums = el('span', 'tnums')
+    nums.appendChild(el('span', 'adds', `+${f.adds}`))
+    if (f.dels) nums.appendChild(el('span', 'dels', `-${f.dels}`))
+    row.appendChild(nums)
 
     const btn = (name, tip, fn) => {
       const b = el('button', 'ract')
       b.appendChild(icon(name)); b.title = tip
+      b.setAttribute('aria-label', tip)
       b.onclick = ev => { ev.stopPropagation(); fn() }
       return b
     }
@@ -2587,90 +2712,85 @@ function paintRunner () {
   if (!busy && strip) strip.remove()
 }
 
-// When the footer is too narrow for both groups on one line, the second group
-// wraps under the first. Then drop the divider and give the labels one width,
-// so the two rows line up instead of the second starting indented.
-const STACK = new ResizeObserver(es => { for (const e of es) restack(e.target) })
-function restack (f) {
-  const groups = [...f.querySelectorAll('.fgroup')].filter(g => !g.hidden)
-  const labels = [...f.querySelectorAll('.fglabel')]
-  f.classList.remove('stacked')
-  labels.forEach(l => { l.style.minWidth = '' })
-  if (groups.length < 2 || groups[1].offsetTop <= groups[0].offsetTop) return
-  f.classList.add('stacked')
-  const w = Math.max(...labels.map(l => l.getBoundingClientRect().width))
-  labels.forEach(l => { l.style.minWidth = `${Math.ceil(w)}px` })
-}
-let STACKED = null   // only the footer on screen is watched, so old ones can be freed
-function watchStack (f) {
-  if (STACKED) STACK.unobserve(STACKED)
-  STACKED = f
-  STACK.observe(f)
-  restack(f)
+/** What the footer line shows: Settings > Footer. Context and cost unless changed. */
+const FOOT_ITEMS = sharedRules.FOOTER_ITEMS
+// a missing or broken setting reads as the default, so a switch can always be turned
+const footItems = () => sharedRules.validFooterItems(CFG.footerItems) ? CFG.footerItems : sharedRules.FOOTER_DEFAULT
+const footOn = k => footItems().includes(k)
+/** Whether the chat's title row on screen has the menu that lists its changed files. */
+const headerHasMenu = () => !!$('#detail .dhead .moremenu')
+
+/**
+ * Open or close the list of files this chat changed, from the footer link or the
+ * chat's menu. Opened by you, it is scrolled into view; kept open through a live
+ * refresh (open given), it stays where it is.
+ */
+function toggleFiles (open) {
+  const list = $('#detail .foot > .ftree')
+  if (!list) return
+  list.hidden = open === undefined ? !list.hidden : !open
+  $('#detail .foot > .fmeta .ffiles')?.setAttribute('aria-expanded', String(!list.hidden))
+  if (open === undefined && !list.hidden) list.scrollIntoView({ block: 'nearest' })
 }
 
+/**
+ * Under the message box, one quiet line: on the left the chat's details you chose
+ * in Settings, on the right the model and mode (chat.js puts them in .fctrls).
+ * The list of changed files opens below it.
+ */
 function footer (t) {
   const i = t.info || { series: [], files: [] }
   const bar = el('div', 'foot')
   if (isBusy(t.id)) bar.appendChild(runnerStrip())
 
   const top = el('div', 'fmeta')
-  const spark = contextLine(i)
-  spark.title = 'Open the analytics for this chat'
-  spark.onclick = () => send({ type: 'analytics', id: t.id })
-  top.appendChild(spark)
+  if (footOn('graph')) {
+    // a button, so the keyboard reaches it too. With too little to draw (fewer than two
+    // replies) there is no graph, so no button; a chat's Stats are also in its menu
+    const spark = contextLine(i)
+    if (spark.firstChild) {
+      spark.title = 'Open the analytics for this chat'
+      spark.setAttribute('aria-label', 'Open the analytics for this chat')
+      spark.onclick = () => send({ type: 'analytics', id: t.id })
+      top.appendChild(spark)
+    }
+  }
   // a chat running here has Claude's own count; otherwise it is worked out from the transcript
   const live = typeof CHAT !== 'undefined' ? CHAT.state.get(t.id) : null
   const counted = live?.running ? live.context : null
   const pct = Number.isFinite(counted) ? counted : i.window ? Math.round(i.context / i.window * 100) : 0
   const facts = el('div', 'fnums')
   const row2 = SESSIONS.find(x => x.id === t.id)
-  // two labelled groups rather than one long run: what the conversation uses
-  // of Claude, and - while it runs - what it uses of this laptop
-  const group = label => {
-    const g = el('div', 'fgroup')
-    g.appendChild(el('span', 'fglabel', label))
-    facts.appendChild(g)
-    return g
+  if (footOn('context')) {
+    facts.appendChild(stat(`Context ${pct}%`, `${nfmt(i.context)} of ${nfmt(i.window)} tokens in use at the last message`, pct >= 90 ? 'hot' : ''))
   }
-  const claude = group('Claude')
-  claude.append(
-    stat(`Context ${pct}%`, `${nfmt(i.context)} of ${nfmt(i.window)} tokens in use at the last message`,
-      pct >= 90 ? 'hot' : ''),
-    stat(`Cache ${i.cachePct}%`, 'share of input tokens served from cache'),
-    // Codex bills against a plan, not per token, so there is no figure to show
-    ...(t.provider === 'codex' ? [] : [stat('~' + money(t.cost), 'what this chat would cost at API list prices - not what a subscription bills')]))
+  if (footOn('cache')) facts.appendChild(stat(`Cache ${i.cachePct}%`, 'share of input tokens served from cache'))
+  // Codex bills against a plan, not per token, so there is no figure to show
+  if (footOn('cost') && t.provider !== 'codex') {
+    facts.appendChild(stat('~' + money(t.cost), 'what this chat would cost at API list prices - not what a subscription bills'))
+  }
   // the branch only when it says something: nearly every chat is on the same one
   if (row2?.git?.length) {
     const counts = new Map()
     for (const x of SESSIONS) for (const g of x.git || []) counts.set(g, (counts.get(g) || 0) + 1)
     const common = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
     if (row2.git.length > 1 || (common && row2.git[0] !== common)) {
-      claude.appendChild(stat(row2.git.join(', '),
+      facts.appendChild(stat(row2.git.join(', '),
         row2.git.length > 1 ? 'git branches this chat touched' : `git branch this chat ran on - most chats are on ${common}`))
     }
   }
-  // what this chat is costing the laptop, shown while it runs
-  const laptop = group('Laptop')
-  laptop.classList.add('resgroup')
+  // what this chat is costing the laptop, only while it is a lot
   const rs = stat('', 'How much of your laptop this chat is using right now: memory (RAM) and processor (CPU), counting Claude and every command it has started')
   rs.classList.add('resstat')
-  laptop.appendChild(rs)
   const rnow = RES?.sessions?.[t.sessionId || t.id]
-  laptop.hidden = !heavy(rnow)                // the normal few hundred MB is nothing to act on
-  if (rnow) { rs.textContent = resText(rnow); rs.classList.toggle('hot', heavy(rnow)) }
-  top.appendChild(facts)
-  bar.appendChild(top)
-  watchStack(facts)
+  rs.hidden = !heavy(rnow)                // the normal few hundred MB is nothing to act on
+  if (rnow) { rs.textContent = 'Laptop ' + resText(rnow); rs.classList.toggle('hot', heavy(rnow)) }
+  facts.appendChild(rs)
 
+  let list = null
+  let filesSlot = null
   if (i.files.length) {
-    const head = el('div', 'fchanged')
-    const caret = el('span', 'chev2', '▸')
-    head.append(caret,
-      el('b', '', `${i.files.length} file${i.files.length === 1 ? '' : 's'} changed`),
-      el('span', 'adds', `+${i.adds.toLocaleString()}`),
-      el('span', 'dels', `-${i.dels.toLocaleString()}`))
-    const list = el('div', 'ftree')
+    list = el('div', 'ftree')
     list.hidden = true
     for (const f of i.files) {
       const row = el('div', 'frowf')
@@ -2682,16 +2802,32 @@ function footer (t) {
       row.onclick = () => send({ type: 'openFile', path: f.path })
       list.appendChild(row)
     }
-    head.title = 'Files this chat changed. Click to list them'
-    head.onclick = () => { list.hidden = !list.hidden; caret.textContent = list.hidden ? '▸' : '▾' }
-    bar.append(head, list)
+    // the count as a quiet link; with it turned off the chat's menu opens the list.
+    // A chat with no such menu (Codex, chatting here off) always has the link
+    if (footOn('files') || !headerHasMenu()) {
+      const n = i.files.length
+      const link = el('button', 'linkbtn ffiles', `${n} file${n === 1 ? '' : 's'}`)
+      link.title = `Files this chat changed (+${i.adds.toLocaleString()} -${i.dels.toLocaleString()}). Click to list them`
+      link.setAttribute('aria-expanded', 'false')
+      link.onclick = () => toggleFiles()
+      // a slot of its own after the details, so a narrow panel cuts the figures
+      // before it ever cuts this; the dot before it stays outside the link
+      filesSlot = el('span', 'ffileslot')
+      filesSlot.appendChild(link)
+    }
   }
+  top.appendChild(facts)
+  if (filesSlot) top.appendChild(filesSlot)
+  top.appendChild(el('div', 'fctrls'))
+  bar.appendChild(top)
+  if (list) bar.appendChild(list)
   return bar
 }
 
 /** Context growth across the conversation, drawn as a filled sparkline. */
 function contextLine (i) {
-  const wrap = el('div', 'spark2')
+  const wrap = el('button', 'spark2')
+  wrap.type = 'button'
   const pts = i.series || []
   if (pts.length < 2) return wrap
   const W = 120, H = 30, peak = Math.max(...pts, 1)
@@ -3387,15 +3523,26 @@ window.addEventListener('message', e => {
     if (m.sort) SORT = m.sort
     if (m.dateFormat) DATEFMT = m.dateFormat
     if (typeof m.liveFirst === 'boolean') LIVE_FIRST = m.liveFirst
-    if (m.cfg) { CFG = m.cfg; drawLimits(null); if (TAB === 'settings') renderSettings() }
+    if (m.cfg) {
+      CFG = m.cfg; drawLimits(null); if (TAB === 'settings') renderSettings()
+      // Settings > Footer applies to the chat on screen straight away
+      if (CUR && !$('#detail').hidden) swapFooter(CUR)
+    }
     if (m.groups) GROUPS = m.groups
     if ($('#detail').hidden) renderList()
   }
   if (m.type === 'mcp') { MCP = m.data; paintMcp() }
   if (m.type === 'mcpActivity') { ACTIVITY = m.data; paintActivity() }
-  if (m.type === 'pendingChat' && !BOARD_MODE) showPending(m.id)
+  // shown, and said so: a new chat sent from the board waits for this before counting as started
+  if (m.type === 'pendingChat' && !BOARD_MODE) { showPending(m.id); send({ type: 'pendingShown', id: m.id }) }
   if (m.type === 'pendingGone' && PENDING_CHAT === m.id) { PENDING_CHAT = null; if (!CUR) closeDetail() }
   if (m.type === 'seen') { READ_AT[m.id] = m.at; if (BOARD_MODE) paintSeen() }
+  if (m.type === 'shown') { VIEW_SHOWN = !!m.visible; seenIfShown() }
+  if (m.type === 'unread') {
+    UNREAD = new Set(m.ids || [])
+    seenIfShown()
+    if (!BOARD_MODE && $('#detail').hidden) liveRender()
+  }
   if (m.type === 'board') {
     if (m.seen) READ_AT = m.seen
     const on = new Set(m.data.map(c => c.id))
@@ -3423,6 +3570,8 @@ window.addEventListener('message', e => {
     const p = PERF && !m.live && PERF.id === m.data.id ? PERF : null
     if (p) p.arrived = performance.now() - p.t0
     showDetail(m.data, m.live)
+    // opened, not a live refresh: seen now, or once this view comes into sight
+    if (!m.live) { SEEN_DUE = m.data.id; seenIfShown() }
     if (p) PERF = null
     if (p) {
       p.drawn = performance.now() - p.t0
@@ -4283,9 +4432,11 @@ const setCfg = (key, value) => {
 const el2 = (tag, cls, txt) => el(tag, cls, txt)
 
 /** A styled on/off switch, rather than the platform's own checkbox. */
-function switchEl (on, onChange) {
+/** name: what it switches, said to a screen reader (the words beside it are outside the label). */
+function switchEl (on, onChange, name) {
   const w = el('label', 'swrap')
   const i = el('input'); i.type = 'checkbox'; i.checked = on
+  if (name) i.setAttribute('aria-label', name)
   i.onchange = () => onChange(i.checked)
   w.append(i, el('i', 'sw'))
   return w
@@ -4579,7 +4730,7 @@ function paintMcp () {
   r.append(txt, switchEl(!!MCP.projectOnly, on => {
     MCP.projectOnly = on
     if (MCP.claude || MCP.codex) send({ type: 'mcpConnect', projectOnly: on })
-  }))
+  }, 'This project only'))
   host.appendChild(r)
   if (MCP.claude || MCP.codex) host.appendChild(el('p', 'agnote', 'New chats pick this up. A chat that was already running needs a restart.'))
 }
@@ -4587,7 +4738,17 @@ function paintMcp () {
 function renderSettings () {
   const box = $('#setbody')
   if (!box) return
+  // drawn afresh after every change: the page stays where it was scrolled, and the
+  // control you changed keeps the keyboard (found again by its key, data-setkey)
+  const top = box.scrollTop
+  const active = box.contains(document.activeElement) ? document.activeElement : null
+  const had = active?.dataset.setkey || ''
+  // a number being typed and not saved yet is kept, unless that setting itself changed meanwhile
+  const typing = active?.classList.contains('stepval') && active.value !== active.dataset.shown
+    ? { value: active.value, shown: active.dataset.shown, a: active.selectionStart, b: active.selectionEnd } : null
   box.replaceChildren()
+  const keyed = (n, k) => { n.dataset.setkey = k; return n }
+  const switchFor = (k, on, change, name) => { const w = switchEl(on, change, name); keyed(w.querySelector('input'), k); return w }
 
   // each group is a card: icon, title, a line on what it covers, then its rows
   const section = (ico, title, note, control) => {
@@ -4605,12 +4766,12 @@ function renderSettings () {
   const chosen = (Array.isArray(CFG.topBars) ? CFG.topBars : []).slice(0, SLOTS)
   const live = new Map((LIMITS?.items || []).map(x => [x.key, x]))
 
-  const master = switchEl(chosen.length > 0, on => {
+  const master = switchFor('topBars', chosen.length > 0, on => {
     setCfg('topBars', on
       ? [{ key: 'session', color: SWATCHES[0] }, { key: 'weekly_all', color: SWATCHES[1] }]
       : [])
     renderSettings(); drawLimits(LIMITS)
-  })
+  }, 'Quota bars')
   const sec = section('chart', 'Quota bars',
     'Bars along the top of the panel, one per usage window you pick, that shrink as you use it up. Point at one for exact figures.',
     master)
@@ -4639,7 +4800,8 @@ function renderSettings () {
       row.appendChild(n)
 
       const right = el('div', 'segright')
-      const sel = el('select', 'segsel')
+      const sel = keyed(el('select', 'segsel'), `topBars:key:${i}`)
+      sel.setAttribute('aria-label', `Segment ${i + 1}`)
       for (const spec of BARS) {
         const now = live.get(spec.key)
         const o = el('option', '', spec.name + (now ? (now.stale ? ' · last known' : ` · ${Math.max(0, 100 - now.percent)}% left`) : ' · not reported'))
@@ -4652,7 +4814,7 @@ function renderSettings () {
 
       const sws = el('div', 'swatches')
       for (const c of SWATCHES) {
-        const d = el('button', 'swatch' + (c === (b.color || '') ? ' on' : ''))
+        const d = keyed(el('button', 'swatch' + (c === (b.color || '') ? ' on' : '')), `topBars:color:${i}:${c}`)
         d.style.background = c
         d.title = c
         d.onclick = () => { chosen[i].color = c; setCfg('topBars', chosen); renderSettings(); drawLimits(LIMITS) }
@@ -4662,7 +4824,7 @@ function renderSettings () {
       row.appendChild(right)
 
       if (chosen.length > 1) {
-        const rm = el('button', 'segdrop', '\u00d7')
+        const rm = keyed(el('button', 'segdrop', '\u00d7'), `topBars:drop:${i}`)
         rm.title = 'Remove this segment'
         rm.onclick = () => { chosen.splice(i, 1); setCfg('topBars', chosen); renderSettings(); drawLimits(LIMITS) }
         row.appendChild(rm)
@@ -4671,7 +4833,7 @@ function renderSettings () {
     })
 
     if (chosen.length < SLOTS) {
-      const add = el('button', 'segadd')
+      const add = keyed(el('button', 'segadd'), 'topBars:add')
       add.append(icon('plus', 'segaddico'), el('span', '', 'Add a segment'))
       add.onclick = () => {
         const free = BARS.find(sp => !chosen.some(c => c.key === sp.key)) || BARS[0]
@@ -4687,7 +4849,8 @@ function renderSettings () {
     const row = el('div', 'setrow')
     const txt = el('div', 'settxt')
     txt.append(el('b', '', label), el('em', '', note))
-    const sel = el('select')
+    const sel = keyed(el('select'), key)
+    sel.setAttribute('aria-label', label)
     for (const [value, name] of options) {
       const o = el('option', '', name); o.value = value
       if ((CFG[key] ?? options[0][0]) === value) o.selected = true
@@ -4701,7 +4864,7 @@ function renderSettings () {
     const row = el('div', 'setrow')
     const txt = el('div', 'settxt')
     txt.append(el('b', '', label), el('em', '', note))
-    row.append(txt, switchEl(CFG[key] ?? dflt, on => setCfg(key, on)))
+    row.append(txt, switchFor(key, CFG[key] ?? dflt, on => setCfg(key, on), label))
     host.appendChild(row)
   }
   // a stepper rather than a number input: the platform's spinner arrows are the
@@ -4713,16 +4876,19 @@ function renderSettings () {
     const box = el('div', 'stepper')
     const clamp = n => Math.max(min, Math.min(max, n))
     let value = clamp(Number(CFG[key] ?? dflt) || dflt)
-    const inp = el('input', 'stepval')
+    const inp = keyed(el('input', 'stepval'), key)
     inp.type = 'text'; inp.inputMode = 'numeric'; inp.value = String(value)
+    inp.dataset.shown = String(value)
+    inp.setAttribute('aria-label', label)
     const commit = n => {
       value = clamp(n)
       inp.value = String(value)
       setCfg(key, value)
     }
     const step = (by, sign) => {
-      const b = el('button', 'stepbtn', sign)
+      const b = keyed(el('button', 'stepbtn', sign), `${key}:${by > 0 ? 'up' : 'down'}`)
       b.title = by > 0 ? 'More' : 'Fewer'
+      b.setAttribute('aria-label', `${label}: ${by > 0 ? 'more' : 'fewer'}`)
       b.onclick = () => commit(value + by)
       return b
     }
@@ -4746,6 +4912,28 @@ function renderSettings () {
     'right-stack': { cols: 2, rows: 2, cells: [[1, 1, 1, 2, 0], [2, 1, 1, 1, 1], [2, 2, 1, 1, 1]], name: 'Right stack' },
     grid: { cols: 2, rows: 2, cells: [[1, 1, 1, 1, 0], [2, 1, 1, 1, 1], [1, 2, 1, 1, 1], [2, 2, 1, 1, 1]], name: 'Grid of four' },
   }
+  // --- the line under a chat's message box: one switch per item, stored as one list
+  const foot = section('chart', 'Footer', 'The quiet line under a chat\'s message box. Pick what it shows; the model and mode always sit on its right.')
+  const FOOT_NAMES = {
+    graph: ['Activity graph', 'context over the chat, as a small grey line'],
+    context: ['Context', 'how much of the context window is in use'],
+    cache: ['Cache', 'share of input tokens served from cache'],
+    cost: ['Cost', 'what the chat would cost at API list prices'],
+    replyTime: ['Reply time', '"Done in…" after a reply'],
+    files: ['Files changed', 'a link that opens the list; also in the chat\'s menu'],
+  }
+  for (const k of FOOT_ITEMS) {
+    const row = el('div', 'setrow')
+    const txt = el('div', 'settxt')
+    txt.append(el('b', '', FOOT_NAMES[k][0]), el('em', '', FOOT_NAMES[k][1]))
+    row.append(txt, switchFor(`footerItems:${k}`, footOn(k), on => {
+      const now = FOOT_ITEMS.filter(x => x === k ? on : footOn(x))
+      setCfg('footerItems', now)
+      if (CUR && !$('#detail').hidden) swapFooter(CUR)
+    }, `Footer: ${FOOT_NAMES[k][0]}`))
+    foot.appendChild(row)
+  }
+
   const alerts = section('bell', 'Use it or lose it',
     'Flags a quota bar you chose when it is about to reset with a lot left, or is on course to run out first - under the bars, on the live board and in the status bar.')
   toggle(alerts, 'limitAlerts', 'Also pop up a notification', 'once per window - the flag already shows here and in the status bar', false)
@@ -4763,7 +4951,7 @@ function renderSettings () {
   const now = CFG.chatLayout || 'panel'
   const grid = el('div', 'laygrid')
   for (const [key, sh] of Object.entries(SHAPES)) {
-    const b = el('button', 'laycard' + (key === now ? ' on' : ''))
+    const b = keyed(el('button', 'laycard' + (key === now ? ' on' : '')), `chatLayout:${key}`)
     const pic = el('div', 'laypic' + (key.startsWith('panel') ? ' panel' : ''))
     pic.style.gridTemplateColumns = `repeat(${sh.cols}, 1fr)`
     pic.style.gridTemplateRows = `repeat(${sh.rows}, 1fr)`
@@ -4826,11 +5014,11 @@ function renderSettings () {
   if (dir) shown.title = dir
   wtxt.append(el('b', '', 'Save exports to'), shown)
   const btns = el('div', 'exportbtns')
-  const choose = el('button', 'mcpbtn' + (dir ? '' : ' on'), dir ? 'Change…' : 'Choose…')
+  const choose = keyed(el('button', 'mcpbtn' + (dir ? '' : ' on'), dir ? 'Change…' : 'Choose…'), 'exportDirectory:choose')
   choose.onclick = () => send({ type: 'pickExportDir' })
   btns.appendChild(choose)
   if (dir) {
-    const clear = el('button', 'mcpbtn', 'Clear')
+    const clear = keyed(el('button', 'mcpbtn', 'Clear'), 'exportDirectory:clear')
     clear.title = 'Go back to opening exports as an unsaved tab'
     clear.onclick = () => send({ type: 'clearExportDir' })
     btns.appendChild(clear)
@@ -4842,4 +5030,11 @@ function renderSettings () {
     toggle(exp, 'exportSourceCopy', 'Also write the raw transcript',
       'a .source.jsonl beside the markdown, with every tool result in full - secrets a tool printed included', false)
   }
+  box.scrollTop = top
+  const back = had ? [...box.querySelectorAll('[data-setkey]')].find(n => n.dataset.setkey === had) : null
+  if (back && typing && back.dataset.shown === typing.shown) {
+    back.value = typing.value
+    back.setSelectionRange(typing.a, typing.b)
+  }
+  back?.focus({ preventScroll: true })
 }

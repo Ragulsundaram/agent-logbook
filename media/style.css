@@ -145,8 +145,9 @@ svg.outline { fill: none; stroke: currentColor; stroke-width: 1.7;
   border-radius: 8px; background: var(--clay-dim);
   color: var(--clay) }
 
-.row { display: flex; align-items: center; gap: 10px; padding: 7px 12px;
-  border-left: 2px solid transparent; cursor: pointer; position: relative }
+/* a roomy row with a rounded hover and selected background, inset from the panel's edges */
+.row { display: flex; align-items: center; gap: 12px; min-height: 38px; box-sizing: border-box; padding: 9px 10px;
+  margin: 1px 6px; border-radius: 8px; cursor: pointer; position: relative }
 .row:hover { background: var(--vscode-list-hoverBackground) }
 .row.archived { opacity: .55 }
 /* the Deleted chip's list: no live state, one plain action */
@@ -159,24 +160,29 @@ svg.outline { fill: none; stroke: currentColor; stroke-width: 1.7;
 .restorebtn:disabled { opacity: .5; cursor: default }
 .delnote { padding: 8px 12px 6px; font-size: 12px; color: var(--vscode-descriptionForeground) }
 /* a small mark on the source icon's corner, so a pinned chat's title lines up with the rest */
-.row > .pinmark { position: absolute; left: 22px; top: 4px; width: 9px; height: 9px; margin: 0;
+.row > .pinmark { position: absolute; left: 20px; top: 8px; width: 9px; height: 9px; margin: 0;
   fill: var(--clay) }
 
-/* per-row toolbar, floated over the right edge on hover */
-.rowacts { display: none; position: absolute; right: 8px; top: 50%;
-  transform: translateY(-50%); gap: 1px; padding: 2px; border-radius: 6px;
-  background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
-  box-shadow: 0 8px 24px rgba(0,0,0,.24) }
-.row:hover .rowacts { display: flex }
+/* per-row actions: on hover (or keyboard focus) they take the age's place, and the
+   title gives way. The live or unread dot keeps its own spot after them, so it never moves */
+.rowacts { display: none; flex: none; gap: 1px; margin: -3px 0 }
+.row:hover .rowacts, .row:focus-within .rowacts { display: flex }
+.row:has(> .rowacts):hover .age, .row:has(> .rowacts):focus-within .age { display: none }
+.rdot { flex: none; width: 11px; display: flex; align-items: center; justify-content: center }
 .ract { display: flex; align-items: center; justify-content: center;
   width: 24px; height: 22px; padding: 0; border: 0; border-radius: 4px;
   background: none; color: var(--vscode-descriptionForeground) }
 .ract:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground) }
 .ract svg { width: 13px; height: 13px; fill: currentColor }
-.row.on { background: var(--clay-dim);
-  color: var(--vscode-foreground); border-left-color: var(--vscode-focusBorder) }
+.row.on { background: var(--clay-dim); color: var(--vscode-foreground) }
 .row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 13px; font-weight: 500 }
+  font-size: 13px; font-weight: 400 }
+/* a chat row's title is its button, drawn as plain text */
+.row button.t { padding: 0; border: 0; background: none; font-family: inherit; color: inherit; text-align: left;
+  cursor: pointer; line-height: inherit }
+.row button.t:focus-visible { outline: none }
+.row:has(> button.t:focus-visible) { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px }
+.row.unread .t { font-weight: 700; color: var(--vscode-foreground) }
 .row .age { font-size: 11px; color: var(--vscode-descriptionForeground);
   font-variant-numeric: tabular-nums; flex: none }
 .spark-ico { width: 14px; height: 14px; flex: none; fill: #d97757 }
@@ -187,7 +193,20 @@ svg.outline { fill: none; stroke: currentColor; stroke-width: 1.7;
 /* steady and filled, against the busy ring's turning outline */
 .dot.idle { background: var(--sage) }
 .dot.off { background: transparent }
-.more { padding: 6px 12px 10px 35px; font-size: 12px; cursor: pointer;
+/* a chat running now: a bright green that breathes, in the list's dot spot */
+.rdot { --live: #3fb950 }
+body.vscode-light .rdot, body.vscode-high-contrast-light .rdot { --live: #1a7f37 }
+.rdot .dot.idle { background: var(--live); animation: livepulse 1.8s ease-out infinite }
+.rdot .spinner { border-color: var(--live); border-top-color: transparent; border-right-color: transparent }
+@keyframes livepulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 55%, transparent) }
+  70% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--live) 0%, transparent) }
+  100% { box-shadow: 0 0 0 0 transparent }
+}
+@media (prefers-reduced-motion: reduce) { .rdot .dot.idle { animation: none } }
+/* a reply you have not opened: blue, as a mail app marks unread */
+.dot.unread { width: 8px; height: 8px; background: var(--vscode-notificationsInfoIcon-foreground, #3794ff) }
+.more { padding: 6px 12px 10px 42px; font-size: 12px; cursor: pointer;
   color: var(--vscode-descriptionForeground) }
 .more:hover { color: var(--vscode-textLink-foreground) }
 
@@ -403,14 +422,16 @@ mark.on { background: var(--amber); color: #000 }
   padding-top: 4px; border-top: 1px solid var(--vscode-panel-border);
   font-size: 11px; color: var(--vscode-descriptionForeground) }
 
-/* images shared into a chat */
-/* images follow the side their message is on */
-.imgs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; max-width: 100% }
-.msg.user .imgs { justify-content: flex-end }
-.msg.assistant .imgs { justify-content: flex-start; padding-left: 20px }
-.imgs img { max-width: 190px; max-height: 140px; border-radius: 6px; cursor: zoom-in;
-  border: 1px solid var(--vscode-panel-border); object-fit: cover }
-.imgs img.full { max-width: 100%; max-height: none; object-fit: contain; cursor: zoom-out }
+/* images shared into a chat: every picture in a tile of one size, the picture fitted
+   inside it whole. The column's own width decides one column or two, so the wrapper
+   is a size container; tiles line up on the same side as the message */
+.imgs { margin-top: 8px; align-self: stretch; max-width: 100%; container-type: inline-size }
+.imggrid { display: flex; flex-wrap: wrap; gap: 8px }
+.msg.user .imggrid { justify-content: flex-end; margin-left: auto }
+.msg.assistant .imgs { padding-left: 20px; box-sizing: border-box }
+/* four or more: at most two tiles a row */
+.imggrid.many { max-width: 368px }
+.imgs img { max-width: 100%; cursor: zoom-in }
 
 /* usage card extras */
 .tile i { display: block; font-style: normal; font-size: 11px; margin-top: 2px }
@@ -445,17 +466,37 @@ mark.on { background: var(--amber); color: #000 }
   color: var(--vscode-foreground) }
 
 /* screenshots: a hover cue, and a click that opens the real file when we know it */
-/* A fixed width with the picture's own height - no letterboxing, no cropping.
-   Tall screenshots are capped and scaled down rather than filling the column. */
-.shot { position: relative; display: block; cursor: zoom-in; border-radius: 8px;
-  overflow: hidden; border: 1px solid var(--vscode-panel-border);
-  width: 260px; max-width: 100%; flex: none; line-height: 0 }
-.shot img { display: block; width: 100%; height: auto; max-height: 320px;
-  object-fit: contain; object-position: top }
+/* one size for every tile, whatever the picture's shape; never wider than the column */
+.shot { position: relative; display: block; cursor: zoom-in; border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background);
+  width: 180px; height: 120px; max-width: 100%; flex: none; box-sizing: border-box; line-height: 0 }
+.imgs .shot img { display: block; width: 100%; height: 100%; max-width: none; object-fit: contain; border: 0; border-radius: 0 }
 .shot:hover { border-color: var(--clay) }
-/* same footprint whether it is loading, loaded, or gone from the cache */
-.shot.loading { background: var(--vscode-input-background); min-height: 120px }
-.shot.gone { background: var(--vscode-input-background); cursor: default; min-height: 120px }
+/* the picture's own button fills the tile and looks like nothing but the picture */
+.shotopen { display: block; width: 100%; height: 100%; padding: 0; border: 0; margin: 0; background: none;
+  cursor: zoom-in; line-height: 0; border-radius: inherit }
+.shot.gone .shotopen { cursor: default }
+.shot:has(> .shotopen:focus-visible) { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px }
+.shotopen:focus-visible { outline: none }
+/* the same tile while it loads, or once it is gone from the cache */
+.shot.loading { background: var(--vscode-input-background) }
+.shot.gone { background: var(--vscode-input-background); cursor: default }
+.shot.loading img, .shot.gone img { display: none }
+/* "+N" over the last tile shown when there are more: dims the picture under it */
+.imore { display: none; position: absolute; inset: 0; align-items: center; justify-content: center; padding: 0;
+  border: 0; cursor: pointer; font: inherit; font-size: 15px; font-weight: 600; line-height: 1; color: #fff;
+  background: rgba(0, 0, 0, .55) }
+.imore:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -2px }
+/* two columns (room for two tiles): four tiles, the fourth carries the "+N" */
+@container (width >= 368px) {
+  .imggrid.many > .shot:nth-child(n+5) { display: none }
+  .imggrid.more5 > .shot:nth-child(4) > .imore.two { display: flex }
+}
+/* one column: two tiles, and a third that carries the "+N" */
+@container (width < 368px) {
+  .imggrid.many > .shot:nth-child(n+4) { display: none }
+  .imggrid.many > .shot:nth-child(3) > .imore.one { display: flex }
+}
 .shot.gone::after { content: 'screenshot no longer cached'; position: absolute;
   inset: 0; display: flex; align-items: center; justify-content: center;
   padding: 0 16px; text-align: center; font-size: 11px;
@@ -511,21 +552,34 @@ mark.on { background: var(--amber); color: #000 }
 /* chat footer: context, cache, cost, turns, and the files the chat changed */
 .foot { flex: none; border-top: 1px solid var(--vscode-panel-border);
   background: var(--vscode-sideBar-background) }
-.fmeta { display: flex; align-items: center; gap: 12px; padding: 8px 12px }
-.spark2 { flex: none; width: 120px; height: 30px }
+/* one quiet line: the details you chose on the left (they give way first, cut off
+   with an ellipsis), the model and mode on the right, which always stay */
+.foot .fmeta, .cunder { display: flex; align-items: center; gap: 8px; padding: 6px 12px; min-width: 0 }
+.cunder { padding: 0 2px } .cunder[hidden] { display: none }
+.foot .fnums, .cunder .fnums { display: block; flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap;
+  text-overflow: ellipsis; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--vscode-descriptionForeground) }
+.foot .fnums > *, .cunder .fnums > * { display: inline }
+.foot .fnums > [hidden], .cunder .fnums > [hidden], .foot .fnums > :empty, .cunder .fnums > :empty { display: none }
+/* " · " between the items that show */
+.foot .fnums > :not([hidden]):not(:empty) ~ :not([hidden]):not(:empty)::before,
+.cunder .fnums > :not([hidden]):not(:empty) ~ :not([hidden]):not(:empty)::before { content: ' · '; opacity: .7 }
+.fctrls { flex: none; display: flex; align-items: center; gap: 2px; margin-left: auto }
+/* "N files" never gets cut: the details before it give way instead */
+.ffileslot { flex: none; font-size: 11px; white-space: nowrap; color: var(--vscode-descriptionForeground) }
+.fnums:has(> :not([hidden]):not(:empty)) + .ffileslot::before { content: '\00a0·\00a0'; opacity: .7 }
+.foot .fnums:has(+ .ffileslot) { flex: 0 1 auto }
+.fctrls:empty { display: none }
+.fstat { white-space: nowrap; font-weight: normal }
+/* close to the limit: a touch brighter, not a colour */
+.fstat.hot { color: var(--vscode-foreground) }
+.foot .ffiles { font-size: inherit; color: var(--vscode-descriptionForeground) }
+.foot .ffiles:hover, .foot .ffiles[aria-expanded="true"] { color: var(--vscode-foreground) }
+/* the activity graph, when turned on: small and grey */
+.spark2 { flex: none; width: 48px; height: 14px }
 .spark2 svg { width: 100%; height: 100% }
-.sline { fill: none; stroke: var(--clay); stroke-width: 1.4;
+.sline { fill: none; stroke: var(--vscode-descriptionForeground); stroke-width: 1.2;
   vector-effect: non-scaling-stroke }
-.sfill { fill: var(--clay); opacity: .14; stroke: none }
-.fnums { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px;
-  font-variant-numeric: tabular-nums; color: var(--vscode-descriptionForeground) }
-.fstat { white-space: nowrap }
-.fstat.hot { color: var(--amber); font-weight: 500 }
-.fnums .fstat:not(:last-child)::after { content: ' ·'; opacity: .5 }
-
-.fchanged { display: flex; align-items: center; gap: 8px; cursor: pointer;
-  padding: 8px 12px; border-top: 1px solid var(--vscode-panel-border); font-size: 12px }
-.fchanged:hover { background: var(--vscode-list-hoverBackground) }
+.sfill { fill: var(--vscode-descriptionForeground); opacity: .12; stroke: none }
 .chev2 { font-size: 11px; opacity: .6 }
 .adds { color: var(--sage); font-variant-numeric: tabular-nums }
 .dels { color: var(--loss); font-variant-numeric: tabular-nums }
@@ -540,20 +594,27 @@ mark.on { background: var(--amber); color: #000 }
 
 
 /* what a single turn changed */
+/* never wider than the column: the message lines its cards up at the start, which
+   would otherwise size the card to its longest path */
 .tchange { margin-top: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 8px;
-  overflow: hidden; background: var(--vscode-editorWidget-background) }
-.thead { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px;
+  overflow: hidden; background: var(--vscode-editorWidget-background);
+  align-self: stretch; min-width: 0; max-width: 100%; box-sizing: border-box }
+.thead { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding: 8px 12px; font-size: 12px;
   border-bottom: 1px solid var(--vscode-panel-border) }
 .tcount { color: var(--vscode-descriptionForeground); font-size: 11px; flex: 1 }
-.trow { display: flex; align-items: center; gap: 6px; padding: 8px 12px; cursor: pointer;
-  font-size: 12px; font-family: var(--vscode-editor-font-family) }
+.trow { position: relative; display: flex; align-items: center; gap: 6px; padding: 8px 12px; cursor: pointer;
+  font-size: 12px; font-family: var(--vscode-editor-font-family); min-width: 0 }
 .trow:hover { background: var(--vscode-list-hoverBackground) }
 .tico { width: 13px; height: 13px; flex: none; color: var(--vscode-descriptionForeground) }
-.tdir { color: var(--vscode-descriptionForeground); min-width: 0; overflow: hidden;
+/* the folder shrinks first and loses its start; the file name only once the folder is gone */
+.tdir { color: var(--vscode-descriptionForeground); flex: 0 1000 auto; min-width: 0; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; direction: rtl }
-.tfile { font-weight: 500; flex: 1 }
-.tacts { display: flex; gap: 1px; opacity: 0 }
-.trow:hover .tacts { opacity: 1 }
+.tfile { font-weight: 500; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.tnums { flex: none; margin-left: auto; display: flex; gap: 6px; padding-left: 6px; font-size: 11px }
+/* over the counts on hover, so they take no width from the path */
+.tacts { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); display: flex; gap: 1px;
+  padding: 1px; border-radius: 6px; background: var(--vscode-editorWidget-background); opacity: 0; pointer-events: none }
+.trow:hover .tacts, .trow:focus-within .tacts { opacity: 1; pointer-events: auto }
 
 /* what Claude did, in words rather than raw tool names */
 .twork { margin-top: 8px }
@@ -909,7 +970,8 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
   background: none; color: var(--vscode-foreground) }
 .foldall:hover { background: var(--vscode-toolbar-hoverBackground) }
 .foldall svg { width: 18px; height: 18px; fill: currentColor }
-.spark2 { cursor: pointer; border-radius: 6px }
+.spark2 { cursor: pointer; border-radius: 6px; padding: 0; border: 0; background: none; color: inherit; line-height: 0 }
+.spark2:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px }
 .spark2:hover { background: var(--vscode-toolbar-hoverBackground) }
 
 
@@ -932,10 +994,13 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
    Claude's background agents. The card sits in the chat where one was
    launched; the floating button opens the whole set as a tree, because an
    agent can spawn its own and a flat list hides who asked for what. */
-.acards { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 2px }
+/* in line with the message text above and below it, as wide as the column up to a
+   comfortable reading width, with the same room on every side inside */
+.acards { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 2px 20px;
+  align-self: stretch; max-width: 640px; box-sizing: border-box }
 /* a plain card: the "running" word beside the name already says how it is doing */
 .acard { border: 1px solid var(--vscode-panel-border);
-  border-radius: 8px; padding: 8px 12px 10px;
+  border-radius: 8px; padding: 12px;
   background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background)) }
 .ahead { display: flex; align-items: center; gap: 8px }
 .aico { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--sage);
@@ -1229,7 +1294,7 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 /* resources: only the exceptions are shown */
 .resbadge { flex: none; font-size: 11px; font-weight: 500; padding: 1px 6px; border-radius: 8px;
   background: rgba(224,163,62,.18); color: var(--amber); font-variant-numeric: tabular-nums }
-.fstat.resstat.hot { color: var(--amber); font-weight: 500 }
+.fstat.resstat.hot { color: var(--vscode-foreground) }
 .leftovers { margin: 8px 8px 4px; padding: 8px 12px; border-radius: 8px;
   border: 1px solid rgba(224,163,62,.5); background: rgba(224,163,62,.09) }
 .lohead { font-size: 12px; font-weight: 500; color: var(--amber); margin-bottom: 6px }
@@ -1242,17 +1307,6 @@ a.memlink.dead { color: var(--vscode-descriptionForeground); cursor: default }
 .lostop { flex: none; padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 500;
   border: 1px solid var(--amber); background: none; color: var(--amber) }
 .lostop:hover { background: var(--amber); color: #1b1714 }
-/* footer figures in two labelled groups, Claude and Laptop */
-.fnums { gap: 4px 16px }
-.fgroup { display: flex; align-items: baseline; gap: 4px 8px; flex-wrap: wrap }
-.fgroup + .fgroup { padding-left: 16px; border-left: 1px solid var(--vscode-panel-border) }
-.fnums.stacked .fgroup + .fgroup { padding-left: 0; border-left: none }
-.fnums.stacked .fglabel { display: inline-block }
-.fglabel { font-size: 11px; font-weight: 500;
-  color: var(--vscode-descriptionForeground); opacity: .8 }
-/* the dot separators run within a group, not across the label or the groups */
-.fnums .fstat:not(:last-child)::after { content: none }
-.fgroup .fstat:not(:last-child)::after { content: ' ·'; opacity: .5 }
 
 /* ---- live board: every running chat on one page */
 body.boardmode #tabs, body.boardmode #limits, body.boardmode #lnudges { display: none }
@@ -1511,49 +1565,103 @@ body[data-mode="sidebar"] #rescan { display: none !important }
 /* ---- chatting from the logbook (chat.js) */
 .composer { flex: none; position: relative; display: flex; flex-direction: column; gap: 6px;
   padding: 6px 10px 6px }
-.cbox { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 6px; padding: 4px 4px 4px 8px; border-radius: 8px; cursor: text;
+/* one rounded box: a picture on top, the text (later attachments are chips inside it),
+   then a row with attach on the left and the model, mode and send button on the right */
+.cbox { display: flex; flex-direction: column; gap: 4px; padding: 8px 8px 6px 10px; border-radius: 14px; cursor: text;
   background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)) }
+/* files dragged over the chat: the whole panel dims, with a dashed edge and where they go */
+.dropcover { position: fixed; inset: 6px; z-index: 90; pointer-events: none; display: flex; align-items: center;
+  justify-content: center; border: 2px dashed var(--vscode-focusBorder); border-radius: 12px;
+  background: color-mix(in srgb, var(--vscode-editor-background, #000) 70%, transparent) }
+.dropcover[hidden] { display: none }
+.droppill { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 999px;
+  background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-panel-border);
+  box-shadow: 0 8px 24px rgba(0,0,0,.25); color: var(--vscode-foreground) }
+.dropico { width: 18px; height: 18px; flex: none; color: var(--vscode-focusBorder) }
+.droptext { display: flex; flex-direction: column; line-height: 1.3 }
+.droptext b { font-size: 13px; font-weight: 600 }
+.droptext span { font-size: 11px; color: var(--vscode-descriptionForeground) }
 /* a quiet lift on focus: the theme's focus colour (often bright yellow) shouted */
 .cbox:focus-within { border-color: color-mix(in srgb, var(--vscode-foreground) 28%, transparent) }
 /* a "!" shell command: the box turns the terminal's shell colour and says so */
 .cbox.shell, .cbox.shell:focus-within { border-color: var(--clay); background: color-mix(in srgb, var(--clay) 8%, var(--vscode-input-background)) }
 .cbox.shell .cinput { color: var(--clay); font-family: var(--vscode-editor-font-family) }
-.cbox.shell::before { content: attr(data-mode); flex: 1 0 100%; order: -1; font-size: 10px; letter-spacing: .03em;
+.cbox.shell::before { content: attr(data-mode); order: -1; font-size: 10px; letter-spacing: .03em;
   text-transform: uppercase; color: var(--clay); padding: 2px 0 0 }
-/* the webview's own textarea:focus outline outranks a single class */
+/* the webview's own focus outline outranks a single class */
 .cbox .cinput:focus, .cbox .cinput:focus-visible { outline: none }
-.cinput { flex: 1 1 0; min-width: 0; box-sizing: border-box; resize: none; overflow-y: auto; max-height: 220px; padding: 3px 0 1px;
+/* an editable line of plain text that grows with what is typed, up to a point, then scrolls */
+.cinput { position: relative; width: 100%; min-width: 0; box-sizing: border-box; overflow-y: auto; min-height: 19px; max-height: 220px;
+  padding: 1px 0; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text;
   font: inherit; font-size: 13px; line-height: 1.4; color: var(--vscode-input-foreground);
   background: none; border: 0; outline: none }
-/* the box is the text and the send button, side by side; pasted pictures sit on their own row above */
-.cbox > .cimgs { flex: 1 0 100% }
+.cinput.blank::before { content: attr(data-placeholder); position: absolute; left: 0; top: 1px; right: 0;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; pointer-events: none;
+  color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground)) }
 .cbox > .cimgs:empty { display: none }
-.cbar { display: flex; align-items: center; flex: none }
-/* sized to the choice showing, not to the longest one in the list */
-/* no platform arrow, which was taller than the text: a small caret drawn in */
-.cpick { font: inherit; font-size: 11px; line-height: 16px; field-sizing: content; max-width: 140px; height: 18px;
-  padding: 0 13px 0 4px; border-radius: 4px; cursor: pointer; appearance: none; -webkit-appearance: none;
-  color: var(--vscode-descriptionForeground); border: 1px solid transparent;
-  background: no-repeat right 3px center / 7px 4px
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 7 4'%3E%3Cpath d='M0 0l3.5 4L7 0z' fill='%23888'/%3E%3C/svg%3E") }
-.cpick:hover, .cpick:focus { border-color: var(--vscode-panel-border); color: var(--vscode-foreground); outline: none }
-.cpick option { color: var(--vscode-foreground); background: var(--vscode-dropdown-background, var(--vscode-input-background)) }
+.cbar { display: flex; align-items: center; gap: 6px; min-width: 0 }
+.cright { display: flex; align-items: center; gap: 6px; margin-left: auto; min-width: 0 }
+/* a later picture or file: a link-coloured chip inside the sentence, on the text's
+   baseline, that the text flows around and the caret steps over as one character */
+.cchip { position: relative; display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; min-width: 0;
+  vertical-align: baseline; white-space: nowrap; user-select: none; cursor: default;
+  color: var(--vscode-textLink-foreground) }
+.cchipimg { width: 14px; height: 14px; flex: none; align-self: center; border-radius: 3px; object-fit: cover }
+.cchipico { width: 13px; height: 13px; flex: none; align-self: center }
+.cchipname { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.cchipsize { flex: none; font-size: 10px; opacity: .75 }
+/* the remove button floats over the chip's end, so it takes no room after the chip */
+.cchip .cimgx { position: absolute; right: -6px; top: -6px; z-index: 1; width: 14px; height: 14px; line-height: 14px; font-size: 10px; opacity: 0; pointer-events: none;
+  background: color-mix(in srgb, var(--vscode-foreground) 18%, transparent); color: var(--vscode-foreground) }
+.cchip:hover .cimgx, .cchip .cimgx:focus-visible { opacity: 1; pointer-events: auto }
+/* the model and the mode: plain words, a soft pill behind them only on hover or focus */
+.cpick { display: inline-flex; align-items: baseline; gap: 5px; min-width: 0; max-width: 180px; padding: 3px 8px;
+  border: 0; border-radius: 8px; background: none; cursor: pointer; font: inherit; font-size: 12px; line-height: 16px;
+  white-space: nowrap; color: var(--vscode-descriptionForeground); outline: none }
+.cpick > span { overflow: hidden; text-overflow: ellipsis; min-width: 0 }
+/* quiet at rest, also after a click or once its menu closed: lit only under the pointer,
+   while its menu is open, or reached from the keyboard */
+.cpick:focus { outline: none }
+.cpick:hover, .cpick:focus-visible, .cpick[aria-expanded="true"] { color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent) }
+.cpick .ceffort { opacity: .75; flex: none }
+/* the model and mode menus: a quiet heading, roomy rows, a tick on the chosen one
+   (selection) apart from the hover colour (where the pointer is) */
+/* as wide as 220px where the panel allows, never wider than the panel less its 8px edges
+   (border-box, so the padding and border count) */
+.menu.pickmenu { position: fixed; margin: 0; box-sizing: border-box; min-width: min(220px, calc(100vw - 16px));
+  max-width: min(320px, calc(100vw - 16px)); max-height: 70vh; overflow-y: auto; padding: 6px; border-radius: 10px }
+.pickmenu .menuhead { padding: 4px 8px 6px; font-size: 12px; color: var(--vscode-descriptionForeground) }
+.pickmenu .pnote { padding: 4px 8px 6px; font-size: 12px; line-height: 1.4; white-space: normal;
+  color: var(--vscode-descriptionForeground) }
+.pickmenu .menuitem { min-height: 30px; font-size: 13px; border-radius: 6px; cursor: pointer }
+.pickmenu .mright { display: flex; align-items: center; gap: 6px; margin-left: auto; padding-left: 12px; flex: none }
+.pickmenu .mright em { margin-left: 0; padding-left: 0 }
+.pickmenu .mtick { width: 14px; height: 14px; color: var(--vscode-textLink-foreground); stroke-width: 2.2 }
+.pickmenu .mchev { width: 12px; height: 12px; opacity: .7 }
+.pickmenu .mchev.back { transform: rotate(180deg); margin-right: 2px }
+.pickmenu .menuitem[aria-expanded="true"] { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)) }
 .cstatus { font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap }
 .cstatus:empty { display: none }
-/* mode and status in the "Claude" numbers under the box */
-.fgroup > .cmode, .composer > .cmode { margin-left: -4px }
-.composer > .cmode, .composer > .cstatus { align-self: flex-start }
-.cgo { flex: none; display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0;
-  border: 0; border-radius: 5px; cursor: pointer; background: var(--clay); color: #fff }
-.cgo svg { width: 9px; height: 9px; fill: currentColor }
-.cgo:disabled { opacity: .45; cursor: default }
+/* the status in the "Claude" numbers under the box */
+.composer > .cstatus { align-self: flex-start }
+/* round, like a chat app's send button */
+.cgo { flex: none; display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0;
+  border: 0; border-radius: 50%; cursor: pointer; background: var(--clay); color: #fff }
+.cgo:hover:not(:disabled) { filter: brightness(1.1) }
+.cgo:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px }
+.cgo svg { width: 14px; height: 14px; fill: currentColor }
+.cgo svg.outline { fill: none; stroke-width: 2.2 }
+/* nothing to send: a neutral grey, not a faded orange */
+.cgo:disabled { cursor: default; background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+  color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground)) }
 .cgo.stop { background: var(--vscode-button-secondaryBackground, rgba(127,127,127,.25)); color: var(--vscode-foreground) }
 .cstopico { width: 8px; height: 8px; border-radius: 2px; background: currentColor }
 .cblock { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px;
   color: var(--vscode-descriptionForeground) }
 .cblock span { flex: 1 1 200px }
 .cimgs { display: flex; gap: 6px; flex-wrap: wrap }
-.cimg { position: relative; width: 52px; height: 52px; border-radius: 6px; overflow: hidden;
+.cimg { position: relative; width: 64px; height: 64px; border-radius: 8px; overflow: hidden;
   border: 1px solid var(--vscode-panel-border) }
 .cimg img { width: 100%; height: 100%; object-fit: cover }
 .cimgx { position: absolute; top: 1px; right: 1px; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%;
@@ -1624,19 +1732,15 @@ body[data-mode="sidebar"] #rescan { display: none !important }
   background: var(--vscode-input-background) }
 .chatnote span { flex: 1 }
 .chatnote.err { color: var(--vscode-errorForeground); background: rgba(229,83,75,.1) }
+/* the usage-limit notice, just above the message box */
+.climit[hidden] { display: none }
 .chatnote .iconbtn { flex: none }
 
 /* Under the message box the footer gives the conversation its room back: the
    numbers and "files changed" share one short row instead of taking three. */
 .foot:has(> .composer) { display: flex; flex-wrap: wrap; align-items: center }
 .foot:has(> .composer) > .composer { flex: 1 0 100%; box-sizing: border-box; min-width: 0 }
-.foot:has(> .composer) > .fmeta { flex: 1 1 auto; min-width: 0; gap: 8px; padding: 0 8px 6px 12px }
-.foot:has(> .composer) .spark2 { width: 48px; height: 14px }
-.foot:has(> .composer) .fnums { font-size: 11px; gap: 2px 12px }
-.foot:has(> .composer) .fglabel { font-size: 10px }
-.foot:has(> .composer) > .fchanged { flex: none; gap: 6px; padding: 0 12px 6px 12px; border-top: 0;
-  font-size: 11px; background: none }
-.foot:has(> .composer) > .fchanged:hover { color: var(--vscode-foreground); text-decoration: underline }
+.foot:has(> .composer) > .fmeta { flex: 1 0 100%; box-sizing: border-box; padding: 0 10px 6px 14px }
 .foot:has(> .composer) > .ftree { flex: 1 0 100% }
 
 /* an editor tab holding one chat: just the chat */
@@ -1675,7 +1779,14 @@ body[data-chat] .dback, body[data-chat] .newinchat { display: none !important }
 .ctip { display: flex; align-items: center; flex-wrap: wrap; gap: 0 4px; font-size: 12px; margin-bottom: 6px;
   color: var(--vscode-descriptionForeground) }
 .ctip .iconbtn { margin-left: auto }
-.ctip .linkbtn, .cctx .linkbtn, .chatmeta .linkbtn { background: none; border: 0; padding: 0; color: var(--vscode-textLink-foreground); cursor: pointer; font: inherit }
+/* a quiet action written as a link: never the platform's own button */
+.linkbtn { background: none; border: 0; padding: 0; color: var(--vscode-textLink-foreground); cursor: pointer; font: inherit;
+  line-height: inherit; border-radius: 3px }
+.linkbtn:hover { text-decoration: underline; color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground)) }
+.linkbtn:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px }
+.linkbtn:disabled { opacity: .5; cursor: default; text-decoration: none }
+/* in the notice in place of the box, it sits on the line, beside the filled button */
+.cblock .linkbtn { flex: none; font-size: 12px }
 
 /* what a tool printed, and a step that failed */
 .tfail { margin-left: 8px; font-size: 11px; color: var(--vscode-errorForeground) }
@@ -1684,17 +1795,12 @@ body[data-chat] .dback, body[data-chat] .newinchat { display: none !important }
   font-family: var(--vscode-editor-font-family); font-size: 11px; color: var(--vscode-descriptionForeground) }
 .tout.err { color: var(--vscode-errorForeground) }
 
-/* the attach button beside send */
-.cattach { flex: none; width: 20px; height: 20px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none;
-  color: var(--vscode-descriptionForeground); cursor: pointer; align-self: flex-end }
+/* the attach button, at the start of the row under the text */
+.cattach { flex: none; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%;
+  background: none; color: var(--vscode-descriptionForeground); cursor: pointer }
 .cattach:hover { background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent); color: var(--vscode-foreground) }
-.cattach svg { width: 14px; height: 14px; fill: currentColor }
-/* an attached PDF or text file */
-.cfile { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 4px 22px 4px 6px;
-  border: 1px solid var(--vscode-panel-border); border-radius: 6px; font-size: 11px; margin: 4px 6px 0 0 }
-.cfileext { font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px; background: var(--clay); color: #fff }
-.cfilename { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-.cfile .cimgx { top: 2px; right: 2px }
+.cattach:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px }
+.cattach svg { width: 16px; height: 16px; stroke-width: 1.8 }
 /* which file goes with the message */
 .cctx { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--vscode-descriptionForeground); margin: 0 2px 4px }
 .cctxname { font-family: var(--vscode-editor-font-family); color: var(--vscode-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0 }
