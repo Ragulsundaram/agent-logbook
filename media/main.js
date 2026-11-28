@@ -1682,7 +1682,9 @@ function swapFooter (t) {
   const runner = oldFoot.querySelector(':scope > .runstrip')
   const tree = oldFoot.querySelector(':scope > .ftree')
   const treeOpen = !!(tree && !tree.hidden)
-  const filesFocused = !!document.activeElement?.classList?.contains('ffiles') && oldFoot.contains(document.activeElement)
+  // a footer button you are on (the files link, the graph) has the keyboard back after the swap
+  const ae = document.activeElement
+  const focusedCls = ae && oldFoot.contains(ae) ? ['ffiles', 'spark2'].find(k => ae.classList?.contains(k)) : ''
   const oldMeta = oldFoot.querySelector(':scope > .fmeta')
   const freshMeta = fresh.querySelector(':scope > .fmeta')
   if (oldMeta && freshMeta) {
@@ -1698,7 +1700,7 @@ function swapFooter (t) {
   const newTree = fresh.querySelector(':scope > .ftree')
   if (newTree) oldFoot.appendChild(newTree)
   if (treeOpen) toggleFiles(true)
-  if (filesFocused) oldFoot.querySelector(':scope > .fmeta .ffiles')?.focus()
+  if (focusedCls) oldFoot.querySelector(`:scope > .fmeta .${focusedCls}`)?.focus({ preventScroll: true })
   const busy = isBusy(t.id)
   if (busy && !runner) oldFoot.prepend(runnerStrip())
   if (!busy && runner) runner.remove()

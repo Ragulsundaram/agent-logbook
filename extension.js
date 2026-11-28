@@ -594,6 +594,7 @@ const LIMIT_KEYS = { five_hour: 'session', seven_day: 'weekly_all', seven_day_op
 const LIMIT_MODEL = { seven_day_opus: /opus/i, seven_day_sonnet: /sonnet/i }
 const LIMIT_SEVERITY = { allowed_warning: 0, rejected: 1 }
 let LIMIT_TIMER = null
+let LIMIT_SAVE_SAID = false        // a failure to save the notice has been reported this session
 
 /** When a warning stops applying: at its reset, or, with no reset time given, a window's length after it came. */
 const limitEnds = n => n.resetsAt ? n.resetsAt * 1000 : (n.at || 0) + (n.kind === 'five_hour' ? 5 * 3600e3 : 7 * 86400e3)
@@ -663,8 +664,12 @@ async function limitSeen (m) {
   const all = Object.fromEntries(Object.entries(limitStore()).filter(([, n]) => limitEnds(n) > now))
   const was = all[kind]
   if (status === 'allowed') {
-    if (!was) return
-    delete all[kind]
+    // back to plain "allowed": that limit's warning goes. With no limit named, nothing
+    // is being warned about at all, so every warning held goes
+    if (kind) { if (!was) return; delete all[kind] } else {
+      if (!Object.keys(all).length) return
+      for (const k of Object.keys(all)) delete all[k]
+    }
   } else {
     const notice = { kind, status, resetsAt: Number(m.resetsAt) || 0 }
     if (was && was.status === notice.status && was.resetsAt === notice.resetsAt) return
@@ -673,10 +678,15 @@ async function limitSeen (m) {
   await SEEN_CTX.globalState.update('limitNotices', all)
   limitTell()
 }
-/** Dismissed in any view: the warning shown goes, for every view, until its snooze ends. */
-async function limitDismiss (kind) {
+/**
+ * Dismissed in any view: the warning shown goes, for every view, until its snooze
+ * ends. Only if it is the very warning that view showed: one that changed meanwhile
+ * (the limit now reached) stays up, and the view is sent it.
+ */
+async function limitDismiss (seen) {
   const n = limitShown()
-  if (!n || !SEEN_CTX || (kind && kind !== n.kind)) return
+  if (!n || !SEEN_CTX) return
+  if (seen.kind !== n.kind || seen.status !== n.status || Number(seen.resetsAt) !== n.resetsAt) { limitTell(); return }
   const gone = { ...limitHidden() }
   gone[n.kind] = { status: n.status, resetsAt: n.resetsAt, at: n.at, until: limitSnooze(n, limitsNow().items || []) }
   await SEEN_CTX.globalState.update('limitDismissed', gone)
@@ -1730,6 +1740,12 @@ async function readDropped (uris, room) {
       const again = real(uri.fsPath)
       const now = again && await fs.promises.stat(again).catch(() => null)
       if (!st.isFile() || !now || again !== file || now.dev !== st.dev || now.ino !== st.ino) { out.push({ name, error: 'could not be read' }); continue }
+      // the path the open file really has, where the system can say it (Linux): that is
+      // the object being read, so the protected places are checked on it directly
+      const held = await fs.promises.readlink(`/proc/self/fd/${fh.fd}`).catch(() => '')
+      if (held && held !== file) { out.push({ name, error: 'could not be read' }); continue }
+      // and the path once more after that: a part of it swapped while this ran shows here
+      if (real(uri.fsPath) !== file) { out.push({ name, error: 'could not be read' }); continue }
       if (inPlaces(again) || isGuarded(st)) { out.push({ name, error: protectedNote }); continue }
       if (st.size > max) { out.push({ name, error: tooBig }); continue }
       // at most one byte past the limit is read, so a file that grows meanwhile is still caught
@@ -2182,7 +2198,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
       try {
         switch (msg.type) {
           case 'limitDismiss':
-            await limitDismiss(typeof msg.kind === 'string' ? msg.kind : '')
+            await limitDismiss({ kind: String(msg.kind ?? ''), status: String(msg.status ?? ''), resetsAt: Number(msg.resetsAt) || 0 })
             break
           case 'pendingShown':
             // a view showing a new chat it was handed (newChatInSidebar waits for this)
@@ -3708,7 +3724,16 @@ function activate (ctx) {
     bin: claudeBin,
     emit: m => {
       // a usage-limit warning is one notice for every view, not one per chat
-      if (m.type === 'chatLimit') { limitSeen(m); return }
+      if (m.type === 'chatLimit') {
+        // a storage failure is reported, not left as an unhandled rejection
+        limitSeen(m).catch(err => {
+          // said once a session: every reply carrying the warning would otherwise say it again
+          if (LIMIT_SAVE_SAID) return
+          LIMIT_SAVE_SAID = true
+          vscode.window.showWarningMessage(`Agent Logbook: could not save the usage-limit notice (${err?.message || err}).`)
+        })
+        return
+      }
       broadcast(m)
       if (m.type === 'chatAsk') askAlert(m)
     },

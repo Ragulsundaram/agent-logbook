@@ -644,7 +644,9 @@ const dataOf = t => t.data.slice(lead(t))
  */
 function pieces (ed) {
   const out = []
+  // what came last: nothing yet, text (ending in a typed break or not), or a block's own break
   let last = ''
+  let afterBlock = false
   const walk = root => {
     const kids = root.childNodes
     for (let i = 0; i < kids.length; i++) {
@@ -652,15 +654,22 @@ function pieces (ed) {
       if (n.nodeType === 3) {
         const text = dataOf(n)
         out.push({ node: n, text, skip: lead(n) })
-        if (text) last = text
+        if (text) { last = text; afterBlock = false }
       } else if (n.nodeType !== 1) continue
-      else if (isChip(n)) out.push({ node: n, chip: true, text: '' })
+      // a chip is something on the line: a block after it starts a new one
+      else if (isChip(n)) { out.push({ node: n, chip: true, text: '' }); last = ' '; afterBlock = false }
       else if (n.nodeName === 'BR') {
         const text = i === kids.length - 1 ? '' : '\n'
         out.push({ node: n, br: true, text })
-        if (text) last = text
+        if (text) { last = text; afterBlock = false }
       } else {
-        if (n.nodeName === 'DIV' && last && !last.endsWith('\n')) { out.push({ node: n, block: true, text: '\n' }); last = '\n' }
+        // every line block after something starts a new line: after an empty block too
+        // (a blank line), but not twice after a break you typed yourself
+        if (n.nodeName === 'DIV' && last && (afterBlock || !last.endsWith('\n'))) {
+          out.push({ node: n, block: true, text: '\n' })
+          last = '\n'
+          afterBlock = true
+        }
         walk(n)
       }
     }
@@ -708,12 +717,15 @@ function offsetAt (ed, node, off) {
   return n
 }
 
-/** The point in the box that far into the text. */
-function pointAt (ed, n) {
+/**
+ * The point in the box that far into the text. after: a point right before chips
+ * goes past them instead (a chip takes no room in the text, so both are that far in).
+ */
+function pointAt (ed, n, after = false) {
   for (const p of pieces(ed)) {
     if (p.chip) continue
     if (p.node.nodeType === 3) {
-      if (n <= p.text.length) return [p.node, n + p.skip]
+      if (n < p.text.length || (n === p.text.length && !after)) return [p.node, n + p.skip]
       n -= p.text.length
       continue
     }
@@ -838,9 +850,9 @@ function makeEditor () {
     const a = offsetAt(ed, r.startContainer, r.startOffset)
     return { start: a, end: r.collapsed ? a : offsetAt(ed, r.endContainer, r.endOffset) }
   }
-  ed.setSelectionRange = (a, b) => {
+  ed.setSelectionRange = (a, b, afterChips = false) => {
     const r = document.createRange()
-    r.setStart(...pointAt(ed, a))
+    r.setStart(...pointAt(ed, a, afterChips))
     r.setEnd(...pointAt(ed, b))
     const sel = getSelection()
     sel.removeAllRanges()
@@ -979,11 +991,8 @@ function buildComposer (id) {
     if (!files.length) { typeIn(ta, e.clipboardData?.getData('text/plain') || ''); return }
     addMany(c, files, insertPoint(ta))
   }
-  go.onclick = () => {
-    const st = CHAT.state.get(id)
-    if (st?.busy && !ta.value.trim() && !(CHAT.images.get(id) || []).length && !(CHAT.files.get(id) || []).length) send({ type: 'chatStop', id })
-    else submit(c)
-  }
+  // the same rule the button shows: Stop only with nothing to send, files still loading included
+  go.onclick = () => { if (CHAT.state.get(id)?.busy && nothingToSend(c)) send({ type: 'chatStop', id }); else submit(c) }
   model.onclick = e => { e.stopPropagation(); pickMenu(c, 'model', model) }
   mode.onclick = e => { e.stopPropagation(); pickMenu(c, 'mode', mode) }
   fit()
@@ -997,7 +1006,10 @@ const readStart = id => chatMoves.readStart(CHAT, id)
 const moveChatState = (id, to) => chatMoves.moveChatState(CHAT, id, to)
 /** One picture or file finished reading: once none are left, an Enter that waited for them goes. */
 function readDone (slot) {
-  try { return readFinished(slot) } finally { prunePoints() }
+  try { return readFinished(slot) } finally {
+    prunePoints()
+    if (COMPOSER?.id === slot.id) paintGo(COMPOSER)
+  }
 }
 /**
  * Insertion points are only needed while files are on their way: once no chat has
@@ -1042,78 +1054,103 @@ const refusal = sharedRules.refusal
  * without it the refusal is said at once. Returns whether a read started.
  */
 function addAny (c, file, at = c.insertAt, bad = null, known = '', batch = newBatch()) {
+  const name = file.name || 'pasted picture'
   const refuse = why => {
-    const entry = [file.name || 'pasted picture', why]
+    const entry = [name, why]
     if (bad) bad.push(entry); else notAttached(c.id, [entry])
     return false
   }
+  // .env files usually hold secrets: refused before anything else, a picture type
+  // included. A pasted picture has a picture's name (or none) and is not affected
+  if (sharedRules.extOf(file.name) === 'env') return refuse('may hold secrets')
   // known: the kind the extension found for a file dropped from the Explorer, which may
-  // be a shortcut whose own name says less than the file it leads to (checked there)
-  if (known === 'picture') return addImage(c, file, at, refuse, batch)
-  if (!known && file.type.startsWith('image/')) return addImage(c, file, at, refuse, batch)
-  // otherwise the same rule wherever the file came from (attach, paste, Finder):
-  // its name decides, not the type the system gives it
-  const why = known ? '' : refusal(file.name)
-  if (why) return refuse(why)
-  const kind = known || sharedRules.kindOf(file.name)
+  // be a shortcut whose own name says less than the file it leads to (checked there).
+  // Otherwise a picture type is a picture (a pasted one has no useful name), and
+  // anything else goes by its name, the same wherever it came from
+  let kind = known
+  if (!kind && file.type.startsWith('image/')) kind = 'picture'
+  if (!kind) {
+    const why = refusal(file.name)
+    if (why) return refuse(why)
+    kind = sharedRules.kindOf(file.name)
+  }
   // a picture named as one but given no type (some Finder drops): typed from its name
-  if (kind === 'picture') return addImage(c, new File([file], file.name, { type: sharedRules.mediaTypeOf(file.name) }), at, refuse, batch)
-  const pdf = kind === 'pdf'
+  const type = kind !== 'picture' ? '' : file.type.startsWith('image/') ? file.type : sharedRules.mediaTypeOf(file.name)
+  if (kind === 'picture' && !/^image\/(png|jpeg|gif|webp)$/.test(type)) return refuse('only PNG, JPEG, GIF and WebP pictures can be sent')
   if (file.size > sharedRules.LIMITS[kind]) return refuse(`too big, ${sharedRules.LIMIT_WORDS[kind]} at most`)
-  const r = new FileReader()
-  const slot = readStart(c.id)
-  const done = () => readDone(slot)
-  const turn = takeTurn(batch)
-  r.onerror = () => inTurn(batch, turn, () => { notAttached(slot.id, [[file.name, 'could not be read']]); done() })
-  r.onload = () => inTurn(batch, turn, () => {
-    const id = slot.id               // the chat may have moved to a new id while this was read
-    const item = { name: file.name, mediaType: pdf ? 'application/pdf' : 'text/plain' }
-    if (pdf) item.data = String(r.result).replace(/^data:[^,]*,/, '')
-    else item.text = String(r.result)
-    // a message carries at most 8: one past that is named, not dropped quietly
-    if (at) PLACE_AT.set(item, at)
-    if (chatMoves.readPlace(CHAT, slot, 'files', item) === 'over') overLimit(id, file.name, 'files')
-    if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
-    done()
-  })
-  if (pdf) r.readAsDataURL(file); else r.readAsText(file)
-  return true
-}
-
-function addImage (c, file, at, refuse, batch = newBatch()) {
-  if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) return refuse('only PNG, JPEG, GIF and WebP pictures can be sent')
-  if (file.size > MAX_IMAGE) return refuse(`too big, ${sharedRules.LIMIT_WORDS.picture} at most`)
-  const r = new FileReader()
-  const slot = readStart(c.id)
-  const done = () => readDone(slot)
-  const name = file.name || 'pasted picture'
-  const turn = takeTurn(batch)
-  r.onerror = () => inTurn(batch, turn, () => { notAttached(slot.id, [[name, 'could not be read']]); done() })
-  r.onload = () => inTurn(batch, turn, () => {
-    const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(String(r.result))
-    if (!m) { notAttached(slot.id, [[name, 'could not be read']]); done(); return }
-    const id = slot.id               // the chat may have moved to a new id while this was read
-    // the name and size are for the chip only: submit sends the type and data alone
-    const item = { mediaType: m[1], data: m[2], url: String(r.result), name: file.name || '', size: file.size }
-    if (at) PLACE_AT.set(item, at)
-    if (chatMoves.readPlace(CHAT, slot, 'pictures', item) === 'over') overLimit(id, name, 'pictures')
-    if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
-    done()
-  })
-  r.readAsDataURL(file)
+  // an empty PDF has nothing to send, and the whole message would be refused for it
+  if (kind === 'pdf' && !file.size) return refuse('empty')
+  const typed = kind === 'picture' && file.type !== type ? new File([file], file.name, { type }) : file
+  admit(batch, { slot: readStart(c.id), file: typed, kind, name, at })
   return true
 }
 
 /**
  * Files from one attach, paste or drop are added in the order they were given,
- * however their reads finish: each takes a turn when its read starts, and a read
- * that finishes early waits for the ones before it.
+ * however their reads finish, and only as many are read at once as IN_FLIGHT:
+ * the rest wait their turn, so a big selection is never all held in memory. Each
+ * counts as a read under way from the start (an Enter waits for it). Before a read
+ * starts, the message's room is checked: one past the 8 pictures or 8 files is named
+ * as left out instead, and the next one in line can take a slot that frees up.
  */
-const newBatch = () => ({ queue: [] })
+const IN_FLIGHT = 3
+const newBatch = () => ({ queue: [], waiting: [], active: 0, pending: { pictures: 0, files: 0 } })
 function takeTurn (batch) { const turn = { then: null }; batch.queue.push(turn); return turn }
 function inTurn (batch, turn, then) {
   turn.then = then
   while (batch.queue[0]?.then) batch.queue.shift().then()
+}
+function admit (batch, job) {
+  batch.waiting.push(job)
+  pump(batch)
+  // a file loading counts as something to send: the button shows Queue, not Stop
+  if (COMPOSER?.id === job.slot.id) paintGo(COMPOSER)
+}
+function pump (batch) {
+  while (batch.active < IN_FLIGHT && batch.waiting.length) {
+    const job = batch.waiting[0]
+    const bucket = job.kind === 'picture' ? 'pictures' : 'files'
+    const have = ((bucket === 'pictures' ? CHAT.images : CHAT.files).get(job.slot.id) || []).length
+    // full only counts what is attached: with reads still on their way that would fill
+    // it, the next waits for them (one may fail and leave room) instead of being refused
+    if (have < 8 && have + batch.pending[bucket] >= 8) break
+    batch.waiting.shift()
+    if (have >= 8) { overLimit(job.slot.id, job.name, bucket); readDone(job.slot); continue }
+    batch.active++
+    batch.pending[bucket]++
+    startRead(batch, job, () => { batch.active--; batch.pending[bucket]--; pump(batch) })
+  }
+}
+/** One file read and, in its turn, added to the message and the text. finish frees its place in the batch. */
+function startRead (batch, job, finish) {
+  const { slot, file, kind, at, name } = job
+  const bucket = kind === 'picture' ? 'pictures' : 'files'
+  const turn = takeTurn(batch)
+  const r = new FileReader()
+  const fail = () => { notAttached(slot.id, [[name, 'could not be read']]); finish(); readDone(slot) }
+  r.onerror = () => inTurn(batch, turn, fail)
+  r.onload = () => inTurn(batch, turn, () => {
+    const id = slot.id               // the chat may have moved to a new id while this was read
+    let item
+    if (kind === 'picture') {
+      const m = /^data:(image\/[\w+.-]+);base64,(.*)$/.exec(String(r.result))
+      if (!m) return fail()
+      // the name and size are for the chip only: submit sends the type and data alone
+      item = { mediaType: m[1], data: m[2], url: String(r.result), name: file.name || '', size: file.size }
+    } else {
+      item = { name: file.name, mediaType: kind === 'pdf' ? 'application/pdf' : 'text/plain' }
+      if (kind === 'pdf') item.data = String(r.result).replace(/^data:[^,]*,/, '')
+      else item.text = String(r.result)
+    }
+    if (at) PLACE_AT.set(item, at)
+    // a message carries at most 8 of each: one past that is named, not dropped quietly
+    if (chatMoves.readPlace(CHAT, slot, bucket, item) === 'over') overLimit(id, name, bucket)
+    if (COMPOSER?.id === id) { paintImages(COMPOSER); paintGo(COMPOSER) }
+    // its place goes to the next in line first; then this read counts as done
+    finish()
+    readDone(slot)
+  })
+  if (kind === 'text') r.readAsText(file); else r.readAsDataURL(file)
 }
 
 /** Several files from one attach, paste or drop: each read as usual, in order, the refusals named together. */
@@ -1515,9 +1552,10 @@ function askMention (c) {
 function pickMention (c, x) {
   const at = c.mention.at
   const end = c.ta.selectionStart
-  // typed over the letters after "@", so chips elsewhere in the text stay where they are
+  // typed over the letters after "@", so chips elsewhere in the text stay where they are:
+  // the start is taken after any chip right before the "@", so the chip is not typed over
   c.ta.focus()
-  c.ta.setSelectionRange(at, end)
+  c.ta.setSelectionRange(at, end, true)
   typeIn(c.ta, '@' + x.name + ' ')
   c.mention = null
   CHAT.drafts.set(c.id, c.ta.value)
@@ -1758,23 +1796,37 @@ function paintComposer () {
 /** The usage-limit notice above the box: one for every view, dismissed for all of them at once. */
 function paintLimit (c) {
   const n = LIMIT_NOTICE
-  const sig = n ? `${n.kind}|${n.status}|${n.resetsAt}` : ''
+  // redrawn when the notice changes, and when the day does (a reset "on Monday" becomes "at 9:00")
+  const sig = n ? `${n.kind}|${n.status}|${n.resetsAt}|${new Date().toDateString()}` : ''
   if (c.limit.dataset.sig === sig) return
   c.limit.dataset.sig = sig
+  // at midnight the day label is worked out again ("on Mon" becomes "at 9:00"); no notice, no timer
+  clearTimeout(c.limitMidnight)
+  if (n) {
+    const mid = new Date()
+    mid.setHours(24, 0, 1, 0)
+    c.limitMidnight = setTimeout(() => { if (c.limit.isConnected) paintLimit(c) }, mid - Date.now())
+  }
   c.limit.replaceChildren()
   c.limit.hidden = !n
   if (!n) return
-  const when = n.resetsAt ? new Date(n.resetsAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''
+  // the time alone for a reset today; on another day the day and date too
+  const at = n.resetsAt ? new Date(n.resetsAt * 1000) : null
+  const time = at ? at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''
+  const reset = !at ? ''
+    : at.toDateString() === new Date().toDateString() ? ` It resets at ${time}.`
+      : ` It resets on ${at.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })} at ${time}.`
   const which = { five_hour: 'five-hour', seven_day: 'weekly', seven_day_opus: 'weekly', seven_day_sonnet: 'weekly' }[n.kind] || ''
   const hit = n.status === 'rejected'
   c.limit.className = 'climit chatnote' + (hit ? ' err' : '')
   c.limit.appendChild(el('span', '', hit
-    ? `You've hit your ${which ? which + ' ' : ''}usage limit.${when ? ` It resets at ${when}.` : ''}`
-    : `You're close to your ${which ? which + ' ' : ''}usage limit.${when ? ` It resets at ${when}.` : ''}`))
+    ? `You've hit your ${which ? which + ' ' : ''}usage limit.${reset}`
+    : `You're close to your ${which ? which + ' ' : ''}usage limit.${reset}`))
   const x = el('button', 'iconbtn', '×')
   x.title = 'Hide for now, in every chat. It comes back sooner if you are using it up quickly, and at once if you reach the limit'
   x.setAttribute('aria-label', 'Hide the usage-limit notice for now')
-  x.onclick = () => send({ type: 'limitDismiss', kind: n.kind })
+  // the notice as shown: if a newer one has arrived meanwhile, the extension keeps that one up
+  x.onclick = () => send({ type: 'limitDismiss', kind: n.kind, status: n.status, resetsAt: n.resetsAt })
   c.limit.appendChild(x)
 }
 
@@ -1798,9 +1850,13 @@ function tipDone () {
   if (COMPOSER) paintTip(COMPOSER)
 }
 
+/** Nothing typed, attached, or still being read: what makes the button Stop while Claude works. */
+const nothingToSend = c => !c.ta.value.trim() && !(CHAT.images.get(c.id) || []).length && !(CHAT.files.get(c.id) || []).length &&
+  !CHAT.reading.get(c.id)
+
 function paintGo (c) {
   const st = CHAT.state.get(c.id)
-  const empty = !c.ta.value.trim() && !(CHAT.images.get(c.id) || []).length && !(CHAT.files.get(c.id) || []).length
+  const empty = nothingToSend(c)
   // "!" switches the box to a shell command, as Claude Code's terminal does: it looks it
   const shell = /^\s*!/.test(c.ta.value) && !(CHAT.images.get(c.id) || []).length
   c.ta.parentNode.classList.toggle('shell', shell)
@@ -2011,7 +2067,9 @@ function pickMenu (c, kind, anchor) {
     if (split.rest.length) { sep(main); row(main, 'More models', { sub: 'more' }) }
   } else {
     main.appendChild(el('div', 'menuhead', 'Permissions'))
-    for (const [v, label, tip] of modeList(p)) row(main, label, { on: v === p.mode, tip, pick: () => setMode(c, v) })
+    // only the modes on offer can be picked; one no longer offered (bypass, after its
+    // setting went off) still shows as the current one on the button
+    for (const [v, label, tip] of modes()) row(main, label, { on: v === p.mode, tip, pick: () => setMode(c, v) })
   }
   wrap.onkeydown = e => {
     const at = e.target.closest?.('.pickmenu')
@@ -2780,6 +2838,8 @@ if (!BOARD_MODE) {
         break
       case 'chatExit':
         CHAT.state.set(id, { ...st, running: false, busy: false, asks: [], endedAt: Date.now(), sentHere: 0 })
+        // a pick still waiting gets no answer now: it stands as the choice for the next run
+        if (CHAT.picks.get(id)?.modeAsk) CHAT.picks.get(id).modeAsk = null
         CHAT.partial.delete(id)
         if (m.error) note(id, m.error, true)
         break
