@@ -1583,9 +1583,18 @@ const CONFIG_PLACES = () => {
  * is followed to the file it points at; a broken one is refused. Each refusal
  * comes back with a short reason, which the box names in one note.
  */
-async function readDropped (uris) {
+async function readDropped (uris, room) {
   const out = []
   const places = CONFIG_PLACES()
+  // what the message box still has room for: a message carries at most 8 pictures and 8 files
+  const left = { picture: clampRoom(room?.pictures), file: clampRoom(room?.files) }
+  // the protected files themselves, by identity, so a hard link to one elsewhere is refused too
+  const guarded = []
+  for (const f of places.files.concat(path.join(places.dirs[0], '.credentials.json'))) {
+    try { const st = await fs.promises.stat(f); guarded.push(st) } catch {}
+  }
+  const isGuarded = st => guarded.some(g => g.dev === st.dev && g.ino === st.ino)
+  const inPlaces = f => places.dirs.some(d => within(d, f)) || places.files.some(g => real(g) === f)
   for (const raw of (Array.isArray(uris) ? uris : []).slice(0, 16)) {
     let uri
     try { uri = vscode.Uri.parse(String(raw), true) } catch { continue }
@@ -1597,12 +1606,12 @@ async function readDropped (uris) {
     // notes.md that points at a .env, or at a program, is refused
     const why = sharedRules.refusal(name) || sharedRules.refusal(path.basename(file))
     if (why) { out.push({ name, error: why }); continue }
-    if (places.dirs.some(d => within(d, file)) || places.files.some(f => real(f) === file)) {
-      out.push({ name, error: 'in Claude\'s or Codex\'s own settings folder, so it is not attached' })
-      continue
-    }
-    // the file itself decides what it is read as
+    const protectedNote = 'in Claude\'s or Codex\'s own settings folder, so it is not attached'
+    if (inPlaces(file)) { out.push({ name, error: protectedNote }); continue }
+    // the file itself decides what it is read as, and which of the two allowances it uses
     const kind = sharedRules.kindOf(path.basename(file))
+    const bucket = kind === 'picture' ? 'picture' : 'file'
+    if (left[bucket] <= 0) { out.push({ name, error: 'a message carries at most 8 pictures and 8 files' }); continue }
     const max = sharedRules.LIMITS[kind]
     const tooBig = `too big, ${sharedRules.LIMIT_WORDS[kind]} at most`
     let fh
@@ -1611,10 +1620,16 @@ async function readDropped (uris) {
       const pre = await fs.promises.stat(file)
       if (!pre.isFile()) { out.push({ name, error: 'could not be read' }); continue }
       if (pre.size > max) { out.push({ name, error: tooBig }); continue }
-      // without waiting either, in case it was swapped for one in between; then checked again on the handle
+      // without waiting either, in case it was swapped for one in between
       fh = await fs.promises.open(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0))
       const st = await fh.stat()
-      if (!st.isFile()) { out.push({ name, error: 'could not be read' }); continue }
+      // what was opened must be the file that was checked: the same object as the path
+      // resolves to now, that path still outside the protected places, and not one of the
+      // protected files under another name. Anything that cannot be shown is refused
+      const again = real(uri.fsPath)
+      const now = again && await fs.promises.stat(again).catch(() => null)
+      if (!st.isFile() || !now || again !== file || now.dev !== st.dev || now.ino !== st.ino) { out.push({ name, error: 'could not be read' }); continue }
+      if (inPlaces(again) || isGuarded(st)) { out.push({ name, error: protectedNote }); continue }
       if (st.size > max) { out.push({ name, error: tooBig }); continue }
       // at most one byte past the limit is read, so a file that grows meanwhile is still caught
       const buf = Buffer.alloc(max + 1)
@@ -1626,11 +1641,14 @@ async function readDropped (uris) {
         if (got >= buf.length) break
       }
       if (got > max) { out.push({ name, error: tooBig }); continue }
-      out.push({ name, mediaType: sharedRules.mediaTypeOf(path.basename(file)), data: buf.subarray(0, got).toString('base64') })
+      left[bucket]--
+      // the kind and type of the file read, not of the shortcut's name: the box uses these
+      out.push({ name, kind, mediaType: sharedRules.mediaTypeOf(path.basename(file)), data: buf.subarray(0, got).toString('base64') })
     } catch { out.push({ name, error: 'could not be read' }) } finally { await fh?.close().catch(() => {}) }
   }
   return out
 }
+const clampRoom = n => Number.isInteger(n) ? Math.max(0, Math.min(8, n)) : 8
 
 /** The sidebar, brought forward and loaded far enough to take messages; null if it never came. */
 async function sidebarView () {
@@ -1641,6 +1659,25 @@ async function sidebarView () {
 }
 const READY_VIEWS = new WeakSet()   // views whose page has loaded and said so
 let SIDEBAR_ASKING = false           // a new chat from the board is waiting on the sidebar, or on its "Try again"
+
+/**
+ * A new chat in the sidebar, for asks that come from elsewhere (the board, the
+ * announcement). The sidebar can take a moment, or fail, to come up: then a warning
+ * offers to try again. One at a time: asks while one is under way add nothing.
+ * Returns whether the chat started.
+ */
+async function newChatInSidebar () {
+  if (SIDEBAR_ASKING) return false
+  SIDEBAR_ASKING = true
+  try {
+    for (;;) {
+      const to = await sidebarView()
+      if (to) { newChatHere(to); return true }
+      const again = await vscode.window.showWarningMessage('The logbook sidebar did not open, so the new chat could not start there.', 'Try again')
+      if (again !== 'Try again') return false
+    }
+  } finally { SIDEBAR_ASKING = false }
+}
 
 /** A new chat in the logbook: no Claude yet, it starts with the first message, under this id. */
 function newChatHere (post) {
@@ -1664,8 +1701,8 @@ async function announceChat (ctx) {
     'Agent Logbook 1.9: chat with Claude right in the logbook. Reply under any chat, or start a new one from +.',
     'Try it', "What's new")
   if (pick === 'Try it') {
-    const to = await sidebarView()
-    if (to) newChatHere(to)
+    // not started after all (the sidebar never came, and no retry): offered again next time
+    if (!await newChatInSidebar()) await ctx.globalState.update(KEY, undefined)
   } else if (pick === "What's new") {
     await vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.joinPath(ctx.extensionUri, 'CHANGELOG.md'))
   }
@@ -2077,7 +2114,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             }
             // choosing a chat outdates any agent thread still being read for this view
             AGENT_NAV.set(post, (AGENT_NAV.get(post) || 0) + 1)
-            seenChat(msg.id)
+            // marked seen by the view once it has shown the chat (markSeen), not on asking for it
             WATCH?.setOpen(post, msg.id)
             // clicked again while the whole chat is still being read: wait for that
             // read rather than queueing another behind it
@@ -2660,7 +2697,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           }
           case 'chatDropRead':
             // files dropped on the message box from VS Code's Explorer arrive as links only
-            post({ type: 'chatDropFiles', key: String(msg.key || '').slice(0, 40), items: await readDropped(msg.uris) })
+            post({ type: 'chatDropFiles', key: String(msg.key || '').slice(0, 40), items: await readDropped(msg.uris, msg.room) })
             break
           case 'chatEditorAsk':
             postEditor()
@@ -2834,16 +2871,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
             if (msg.where === 'logbook') {
               if (mode !== 'board') { newChatHere(post); break }
               // the sidebar can take a moment, or fail, to come up: say so, with a way to try again
-              // one warning at a time: clicks while it is up, or while the sidebar is still coming, add nothing
-              if (SIDEBAR_ASKING) break
-              SIDEBAR_ASKING = true
-              const startInSidebar = async () => {
-                const to = await sidebarView()
-                if (to) { newChatHere(to); return }
-                const again = await vscode.window.showWarningMessage('The logbook sidebar did not open, so the new chat could not start there.', 'Try again')
-                if (again === 'Try again') await startInSidebar()
-              }
-              try { await startInSidebar() } finally { SIDEBAR_ASKING = false }
+              await newChatInSidebar()
               break
             }
             const bin = claudeBin()

@@ -123,6 +123,8 @@ function chatMount () {
   if (!t) return
   const d = $('#detail')
   const fresh = !COMPOSER || COMPOSER.id !== t.id
+  // another chat on screen: an Enter the last one left waiting for its files does not go unseen
+  if (COMPOSER && fresh) callOffSend(COMPOSER.id)
   if (fresh) {
     COMPOSER = buildComposer(t.id)
     send({ type: 'chatState', id: t.id })
@@ -164,6 +166,14 @@ function cycleMode (c) {
   const list = modes()
   const i = list.findIndex(m => m[0] === picksFor(c.id).mode)
   setMode(c, list[(i + 1) % list.length][0], false)
+}
+
+/**
+ * The chat view closed (back to the list, another page): an Enter waiting for files
+ * is called off rather than sent where nobody sees it. The draft and the files stay.
+ */
+function chatViewClosed () {
+  if (COMPOSER) callOffSend(COMPOSER.id)
 }
 
 /**
@@ -647,8 +657,8 @@ function pieces (ed) {
 const textOf = ed => pieces(ed).map(p => p.text).join('')
 
 /**
- * The text Claude gets: the chips taken out, and the gap a chip left closed up to
- * one space, so "at<chip>please" reads "at please". Worked out from the chips
+ * The text Claude gets: the chips taken out, so "at<chip>please" reads "at please"
+ * and "at <chip> please" keeps the spaces you typed. Worked out from the chips
  * themselves, not from any character, so what you typed goes as you typed it.
  */
 function messageText (ed) {
@@ -657,17 +667,13 @@ function messageText (ed) {
   for (const p of pieces(ed)) {
     if (p.chip) { gap = true; continue }
     if (!p.text) continue
-    if (gap) {
-      s = s.replace(/[ \t]+$/, '')
-      const t = p.text.replace(/^[ \t]+/, '')
-      if (s && t && !s.endsWith('\n') && !t.startsWith('\n')) s += ' '
-      s += t
-      gap = !t
-      continue
-    }
+    // a chip that was the only thing between two words leaves one space; any space or
+    // line break you typed around it is kept as it is
+    if (gap && s && /\S$/.test(s) && /^\S/.test(p.text)) s += ' '
+    gap = false
     s += p.text
   }
-  return gap ? s.replace(/[ \t]+$/, '') : s
+  return s
 }
 
 /** How far into the text a point in the box is. */
@@ -729,6 +735,15 @@ function caretToEnd (ed) {
   sel.addRange(r)
 }
 
+/**
+ * Where files being added go: the caret (or the range given), as a live range and
+ * as a place in the text, so a box rebuilt meanwhile can find the same spot.
+ */
+function insertPoint (ed, range = caretRange(ed)) {
+  if (!range) return null
+  return { range, offset: offsetAt(ed, range.startContainer, range.startOffset) }
+}
+
 /** Where the caret is in the box, as a collapsed range; null when the box does not have it. */
 function caretRange (ed) {
   const sel = getSelection()
@@ -767,7 +782,8 @@ function makeEditor () {
       get () { return textOf(ed) },
       // the words are replaced; the chips stay, after them
       set (v) {
-        const chips = [...ed.childNodes].filter(isChip)
+        // chips anywhere in the box, inside a line block too
+        const chips = [...ed.querySelectorAll('.cchip')]
         ed.replaceChildren(...(String(v) ? [document.createTextNode(String(v))] : []), ...chips)
         if (document.activeElement === ed) this.setSelectionRange(String(v).length, String(v).length)
         ed.classList.toggle('blank', !String(v) && !chips.length)
@@ -863,7 +879,7 @@ function buildComposer (id) {
   pickFile.type = 'file'; pickFile.multiple = true; pickFile.hidden = true
   pickFile.accept = 'image/png,image/jpeg,image/gif,image/webp,application/pdf,' + TEXT_EXT.map(x => '.' + x).join(',')
   // where the caret was when you reached for the button: the files go there
-  clip.onmousedown = () => { c.insertAt = caretRange(ta) }
+  clip.onmousedown = () => { c.insertAt = insertPoint(ta) }
   clip.onclick = () => pickFile.click()
   // closed without a pick: that spot is not kept for a later paste or drop
   pickFile.addEventListener('cancel', () => { c.insertAt = null })
@@ -924,7 +940,7 @@ function buildComposer (id) {
     e.preventDefault()
     // text comes in as plain words, never as formatting
     if (!files.length) { typeIn(ta, e.clipboardData?.getData('text/plain') || ''); return }
-    addMany(c, files, caretRange(ta))
+    addMany(c, files, insertPoint(ta))
   }
   go.onclick = () => {
     const st = CHAT.state.get(id)
@@ -960,8 +976,14 @@ const PLACE_AT = new WeakMap()
 function notAttached (id, bad) {
   if (!bad.length) return
   note(id, `Not attached: ${bad.map(([name, why]) => `${name} (${why})`).join(', ')}.`, true)
-  CHAT.sendWhenRead.delete(id)
+  callOffSend(id)
 }
+/**
+ * An Enter waiting for files to be read does not go once one of them did not make
+ * it (refused, unreadable, or past the 8 and 8): you see what was left out and decide.
+ * Every such path comes through here.
+ */
+const callOffSend = id => CHAT.sendWhenRead.delete(id)
 
 // why a file of this name cannot be attached, or '' when it can: the extension asks the same
 const refusal = sharedRules.refusal
@@ -971,18 +993,21 @@ const refusal = sharedRules.refusal
  * its chip goes. bad: where a refusal is collected, to be named with the others;
  * without it the refusal is said at once. Returns whether a read started.
  */
-function addAny (c, file, at = c.insertAt, bad = null) {
+function addAny (c, file, at = c.insertAt, bad = null, known = '') {
   const refuse = why => {
     const entry = [file.name || 'pasted picture', why]
     if (bad) bad.push(entry); else notAttached(c.id, [entry])
     return false
   }
-  if (file.type.startsWith('image/')) return addImage(c, file, at, refuse)
-  // the same rule wherever the file came from (attach, paste, Finder or the Explorer):
+  // known: the kind the extension found for a file dropped from the Explorer, which may
+  // be a shortcut whose own name says less than the file it leads to (checked there)
+  if (known === 'picture') return addImage(c, file, at, refuse)
+  if (!known && file.type.startsWith('image/')) return addImage(c, file, at, refuse)
+  // otherwise the same rule wherever the file came from (attach, paste, Finder):
   // its name decides, not the type the system gives it
-  const why = refusal(file.name)
+  const why = known ? '' : refusal(file.name)
   if (why) return refuse(why)
-  const kind = sharedRules.kindOf(file.name)
+  const kind = known || sharedRules.kindOf(file.name)
   // a picture named as one but given no type (some Finder drops): typed from its name
   if (kind === 'picture') return addImage(c, new File([file], file.name, { type: sharedRules.mediaTypeOf(file.name) }), at, refuse)
   const pdf = kind === 'pdf'
@@ -1083,7 +1108,9 @@ function dropIn (c, dt) {
   const slot = readStart(c.id)
   const key = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
   CHAT.drops.set(key, { slot, at: c.insertAt, bad })
-  send({ type: 'chatDropRead', key, uris: want })
+  // what the box still has room for, so the extension reads (and sends back) no more than fits
+  const room = { pictures: 8 - (CHAT.images.get(c.id) || []).length, files: 8 - (CHAT.files.get(c.id) || []).length }
+  send({ type: 'chatDropRead', key, uris: want, room })
 }
 // ------------------------------------------------------------ dropping anywhere on the chat
 
@@ -1144,7 +1171,7 @@ document.addEventListener('drop', e => {
   e.preventDefault()
   // dropped on the text: where it landed; anywhere else: at the caret if the box had it, else at the end
   const at = document.caretRangeFromPoint?.(e.clientX, e.clientY)
-  c.insertAt = at && c.ta.contains(at.startContainer) ? at : caretRange(c.ta)
+  c.insertAt = at && c.ta.contains(at.startContainer) ? insertPoint(c.ta, at) : insertPoint(c.ta)
   dropIn(c, e.dataTransfer)
   c.insertAt = null
 })
@@ -1161,8 +1188,12 @@ function dropRead (m) {
     try { bin = atob(it.data) } catch { bad.push([name, 'could not be read']); continue }
     const bytes = new Uint8Array(bin.length)
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-    // the chat may have moved to a new id (/clear) while the files were read
-    addAny({ id: slot.id }, new File([bytes], name, { type: String(it.mediaType || '') }), at, bad)
+    // read as what the extension found the file to be, shown under the name it was dropped as;
+    // into the chat the read belongs to now (/clear may have moved it to a new id)
+    const known = ['picture', 'pdf', 'text'].includes(it.kind) ? it.kind : ''
+    const type = known === 'picture' ? String(it.mediaType || '') : known === 'pdf' ? 'application/pdf' : 'text/plain'
+    if (!known || (known === 'picture' && !/^image\/(png|jpeg|gif|webp)$/.test(type))) { bad.push([name, 'could not be read']); continue }
+    addAny({ id: slot.id }, new File([bytes], name, { type }), at, bad, known)
   }
   // said before this read counts as done, so a waiting Enter is called off rather than sent
   notAttached(slot.id, bad)
@@ -1242,10 +1273,19 @@ function chipFor (c, item, picture) {
 }
 
 /** A new chip goes where the caret was when it was pasted, dropped or attached; otherwise at the end. */
-function placeChip (c, chip, r) {
+function placeChip (c, chip, at) {
   const ed = c.ta
   const sel = getSelection()
-  const placed = r && ed.contains(r.startContainer)
+  let r = at?.range
+  // the box was rebuilt since (you left the chat and came back): the same place in
+  // the text, worked out again in the new box
+  if (at && !(r && ed.contains(r.startContainer)) && Number.isFinite(at.offset)) {
+    r = document.createRange()
+    r.setStart(...pointAt(ed, at.offset))
+    r.collapse(true)
+    at.range = r
+  }
+  const placed = !!r && ed.contains(r.startContainer)
   // the caret follows the chip only if it is still where the file was added: a
   // caret or selection you have moved since is left alone
   const caretThere = placed && document.activeElement === ed && sel.rangeCount && sel.isCollapsed &&
@@ -1526,6 +1566,7 @@ function overLimit (id, name, kind) {
   const over = prev && !prev.sent ? prev : { pictures: [], files: [] }
   over[kind] = [...over[kind], name]
   CHAT.over.set(id, over)
+  callOffSend(id)
   if (COMPOSER?.id === id) placeLive()
 }
 function overText (over) {

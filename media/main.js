@@ -292,9 +292,16 @@ let UNREAD = new Set()     // chats that finished a reply in this window you hav
 // whether this view is on screen: the extension says so when it changes, as a page in
 // a hidden tab or a collapsed sidebar still reports itself visible
 let VIEW_SHOWN = true
-/** The chat on screen finished while you look at it, or while its tab was hidden and you came back: it is seen. */
+let SEEN_DUE = ''           // the chat just opened here, to be marked seen once it is on screen
+/**
+ * A chat is seen once it is actually on screen: just opened here, or finished while
+ * you look at it, or while its view was hidden and you came back to it.
+ */
 function seenIfShown () {
-  if (!BOARD_MODE && VIEW_SHOWN && document.visibilityState === 'visible' && CUR && UNREAD.has(CUR.id) && !$('#detail').hidden) send({ type: 'markSeen', id: CUR.id })
+  if (BOARD_MODE || !VIEW_SHOWN || document.visibilityState !== 'visible' || !CUR || $('#detail').hidden) return
+  if (SEEN_DUE !== CUR.id && !UNREAD.has(CUR.id)) return
+  SEEN_DUE = ''
+  send({ type: 'markSeen', id: CUR.id })
 }
 document.addEventListener('visibilitychange', seenIfShown)
 const IMGS_OPEN = new Set()   // messages whose pictures were all shown with "+N", by chat, time and count
@@ -1193,6 +1200,8 @@ function closeDetail (forPending) {
   // a one-chat tab keeps its chat, except to make room for a copy started from it
   if (CHAT_ONLY && !forPending) return
   if (CUR) PENDING_CHAT = null
+  // chat.js: an Enter still waiting on files for the chat that closes does not go
+  if (typeof chatViewClosed === 'function') chatViewClosed()
   CUR = null
   SEEN.disconnect()
   PENDING.clear(); ASKED.clear()
@@ -3535,6 +3544,8 @@ window.addEventListener('message', e => {
     const p = PERF && !m.live && PERF.id === m.data.id ? PERF : null
     if (p) p.arrived = performance.now() - p.t0
     showDetail(m.data, m.live)
+    // opened, not a live refresh: seen now, or once this view comes into sight
+    if (!m.live) { SEEN_DUE = m.data.id; seenIfShown() }
     if (p) PERF = null
     if (p) {
       p.drawn = performance.now() - p.t0
