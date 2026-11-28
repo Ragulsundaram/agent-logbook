@@ -115,7 +115,8 @@ usage - the same request Claude Code itself makes. The token is never stored or
 sent anywhere else. A file you drop on the message box from VS Code's Explorer is
 read only to attach it to your message, as the attach button would; files inside
 `~/.claude`, `~/.codex` or `~/.claude.json`, which hold logins and settings, are
-never read this way.
+never read this way, under any name, and neither is a file in a folder other
+accounts on this computer can change.
 
 **Writes** its own cache and flags under `~/.claude`, and appends a
 `custom-title` line to a Claude transcript when you rename a chat, which is how

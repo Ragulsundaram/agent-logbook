@@ -40,6 +40,7 @@ const CHAT = {
   mcpTop: new Map(),     // chat id -> how far the server list is scrolled
   mcpSeq: 0,             // numbers each /mcp action, so a reply clears only its own
   over: new Map(),       // chat id -> { pictures, files, sent }: what a message left out
+  refused: new Map(),    // chat id -> files not attached while reads are under way, all named in one note
   editor: { label: '', file: '' },   // what the editor has open, which goes with your message
   skipCtx: new Set(),    // chats whose next message goes without the editor's file
   files: new Map(),      // chat id -> attached PDFs and text files waiting to go
@@ -117,7 +118,8 @@ function chatMount () {
   if (BOARD_MODE) return
   if (!chatOn()) {
     // the status, model, mode and live area were moved out of the box: they go too
-    if (COMPOSER) { refreshPoints(COMPOSER); for (const n of [COMPOSER.root, COMPOSER.live, COMPOSER.status, COMPOSER.model, COMPOSER.mode]) n.remove(); COMPOSER = null }
+    // an Enter left waiting for files does not go once the box is back: you send again
+    if (COMPOSER) { callOffSend(COMPOSER.id); refreshPoints(COMPOSER); for (const n of [COMPOSER.root, COMPOSER.live, COMPOSER.status, COMPOSER.model, COMPOSER.mode]) n.remove(); COMPOSER = null }
     return
   }
   const t = chatTarget()
@@ -1020,8 +1022,11 @@ function prunePoints () {
   for (const at of POINTS) if (at !== COMPOSER?.insertAt) POINTS.delete(at)
 }
 function readFinished (slot) {
+  const go = chatMoves.readDone(CHAT, slot)
+  // the last read in: the next file refused starts a note of its own
+  if (!CHAT.reading.has(slot.id)) CHAT.refused.delete(slot.id)
   // the box may have been rebuilt since (you switched chats and back): send from the current one
-  if (chatMoves.readDone(CHAT, slot) && COMPOSER?.id === slot.id) submit(COMPOSER)
+  if (go && COMPOSER?.id === slot.id) submit(COMPOSER)
 }
 
 // where each picture or file read from a paste, drop or the attach button goes in the
@@ -1030,12 +1035,15 @@ function readFinished (slot) {
 const PLACE_AT = new WeakMap()
 
 /**
- * Files that could not be attached, all named in one note. An Enter waiting for
- * them does not go without them: the note stays in view and you decide.
+ * Files that could not be attached, all named in one note: while reads are under
+ * way, the ones refused earlier stay named with them. An Enter waiting for them
+ * does not go without them: the note stays in view and you decide.
  */
 function notAttached (id, bad) {
   if (!bad.length) return
-  note(id, `Not attached: ${bad.map(([name, why]) => `${name} (${why})`).join(', ')}.`, true)
+  const all = [...(CHAT.reading.get(id) ? CHAT.refused.get(id) || [] : []), ...bad]
+  if (CHAT.reading.get(id)) CHAT.refused.set(id, all)
+  note(id, `Not attached: ${all.map(([name, why]) => `${name} (${why})`).join(', ')}.`, true)
   callOffSend(id)
 }
 /**
@@ -1206,6 +1214,8 @@ function dropIn (c, dt) {
   // counted as a read under way, so an Enter pressed meanwhile waits for these files;
   // what was refused here is named with what the extension refuses, in one note
   const slot = readStart(c.id)
+  // a file on its way counts as something to send: the button shows Queue, not Stop
+  if (COMPOSER?.id === c.id) paintGo(COMPOSER)
   const key = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
   CHAT.drops.set(key, { slot, at: c.insertAt, bad })
   // what the box still has room for, so the extension reads (and sends back) no more than fits
@@ -1580,7 +1590,7 @@ function submit (c, only) {
   if (whereRunning(id) === 'elsewhere') return
   // "!" runs a command in the chat's folder, as in Claude Code's terminal: Claude
   // does not answer it, but gets the command and its output with your next message
-  if (!images.length && /^\s*!/.test(text)) {
+  if (!images.length && !files.length && /^\s*!/.test(text)) {
     const cmd = text.replace(/^\s*!/, '').trim()
     if (!cmd) return
     const key = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
@@ -1826,7 +1836,7 @@ function paintLimit (c) {
   x.title = 'Hide for now, in every chat. It comes back sooner if you are using it up quickly, and at once if you reach the limit'
   x.setAttribute('aria-label', 'Hide the usage-limit notice for now')
   // the notice as shown: if a newer one has arrived meanwhile, the extension keeps that one up
-  x.onclick = () => send({ type: 'limitDismiss', kind: n.kind, status: n.status, resetsAt: n.resetsAt })
+  x.onclick = () => send({ type: 'limitDismiss', kind: n.kind, status: n.status, resetsAt: n.resetsAt, at: n.at })
   c.limit.appendChild(x)
 }
 
@@ -1858,7 +1868,8 @@ function paintGo (c) {
   const st = CHAT.state.get(c.id)
   const empty = nothingToSend(c)
   // "!" switches the box to a shell command, as Claude Code's terminal does: it looks it
-  const shell = /^\s*!/.test(c.ta.value) && !(CHAT.images.get(c.id) || []).length
+  // with a picture or file attached the message goes to Claude, so it is no command
+  const shell = /^\s*!/.test(c.ta.value) && !(CHAT.images.get(c.id) || []).length && !(CHAT.files.get(c.id) || []).length
   c.ta.parentNode.classList.toggle('shell', shell)
   c.ta.parentNode.dataset.mode = shell ? 'Shell command · runs in the chat\'s folder' : ''
   if (shell) {
@@ -2675,7 +2686,7 @@ if (!BOARD_MODE) {
     if (m.type === 'chatCutoff') { CHAT.cutoff = new Set(m.ids || []); paintComposer(); return }
     if (m.type === 'limitNotice') {
       const n = m.notice
-      LIMIT_NOTICE = n && typeof n.kind === 'string' && typeof n.status === 'string' ? { kind: n.kind, status: n.status, resetsAt: Number(n.resetsAt) || 0 } : null
+      LIMIT_NOTICE = n && typeof n.kind === 'string' && typeof n.status === 'string' ? { kind: n.kind, status: n.status, resetsAt: Number(n.resetsAt) || 0, at: Number(n.at) || 0 } : null
       if (COMPOSER) paintLimit(COMPOSER)
       return
     }

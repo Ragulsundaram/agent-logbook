@@ -488,12 +488,12 @@ mark.on { background: var(--amber); color: #000 }
   background: rgba(0, 0, 0, .55) }
 .imore:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -2px }
 /* two columns (room for two tiles): four tiles, the fourth carries the "+N" */
-@container (min-width: 368px) {
+@container (width >= 368px) {
   .imggrid.many > .shot:nth-child(n+5) { display: none }
   .imggrid.more5 > .shot:nth-child(4) > .imore.two { display: flex }
 }
 /* one column: two tiles, and a third that carries the "+N" */
-@container (max-width: 367.98px) {
+@container (width < 368px) {
   .imggrid.many > .shot:nth-child(n+4) { display: none }
   .imggrid.many > .shot:nth-child(3) > .imore.one { display: flex }
 }

@@ -598,15 +598,18 @@ let LIMIT_SAVE_SAID = false        // a failure to save the notice has been repo
 
 /** When a warning stops applying: at its reset, or, with no reset time given, a window's length after it came. */
 const limitEnds = n => n.resetsAt ? n.resetsAt * 1000 : (n.at || 0) + (n.kind === 'five_hour' ? 5 * 3600e3 : 7 * 86400e3)
-/** The plan-usage figure for a warning's limit: by limit, by model for a one-model limit, by reset time. */
+/**
+ * The plan-usage figure for a warning's limit: by limit, then by reset time. A
+ * one-model limit takes only that model's own figure, or none.
+ */
 function limitItem (notice, items) {
   const key = LIMIT_KEYS[notice.kind]
   const reset = notice.resetsAt ? notice.resetsAt * 1000 : 0
   const nearReset = y => reset && Math.abs((y.resetsAt || 0) - reset) < 120000
   const mine = items.filter(y => y.key === key && !y.stale)
   const model = LIMIT_MODEL[notice.kind]
-  return (model && mine.find(y => model.test(y.label || ''))) || mine.find(nearReset) ||
-    (model ? null : mine[0]) || items.find(y => !y.stale && nearReset(y)) || null
+  if (model) return mine.find(y => model.test(y.label || '')) || null
+  return mine.find(nearReset) || mine[0] || items.find(y => !y.stale && nearReset(y)) || null
 }
 
 /**
@@ -686,7 +689,8 @@ async function limitSeen (m) {
 async function limitDismiss (seen) {
   const n = limitShown()
   if (!n || !SEEN_CTX) return
-  if (seen.kind !== n.kind || seen.status !== n.status || Number(seen.resetsAt) !== n.resetsAt) { limitTell(); return }
+  // the time it came tells two warnings apart that have the same limit, status and reset
+  if (seen.kind !== n.kind || seen.status !== n.status || Number(seen.resetsAt) !== n.resetsAt || (Number(seen.at) || 0) !== (n.at || 0)) { limitTell(); return }
   const gone = { ...limitHidden() }
   gone[n.kind] = { status: n.status, resetsAt: n.resetsAt, at: n.at, until: limitSnooze(n, limitsNow().items || []) }
   await SEEN_CTX.globalState.update('limitDismissed', gone)
@@ -1731,8 +1735,12 @@ async function readDropped (uris, room) {
       const pre = await fs.promises.stat(file)
       if (!pre.isFile()) { out.push({ name, error: 'could not be read' }); continue }
       if (pre.size > max) { out.push({ name, error: tooBig }); continue }
-      // without waiting either, in case it was swapped for one in between
-      fh = await fs.promises.open(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0))
+      // checking a path and then opening it is only safe when nobody else can change
+      // the folders on the way in between
+      if (await othersCanSwap(file)) { out.push({ name, error: 'in a folder other accounts on this computer can change, so it is not attached' }); continue }
+      // without waiting either, in case it was swapped for one in between; and never
+      // through a shortcut put in its place (the one dropped was followed above already)
+      fh = await fs.promises.open(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) | (fs.constants.O_NOFOLLOW || 0))
       const st = await fh.stat()
       // what was opened must be the file that was checked: the same object as the path
       // resolves to now, that path still outside the protected places, and not one of the
@@ -1747,6 +1755,8 @@ async function readDropped (uris, room) {
       // and the path once more after that: a part of it swapped while this ran shows here
       if (real(uri.fsPath) !== file) { out.push({ name, error: 'could not be read' }); continue }
       if (inPlaces(again) || isGuarded(st)) { out.push({ name, error: protectedNote }); continue }
+      // a file with another name may have that name in a protected folder
+      if (st.nlink > 1 && await linkedIntoPlaces(st, places.dirs)) { out.push({ name, error: protectedNote }); continue }
       if (st.size > max) { out.push({ name, error: tooBig }); continue }
       // at most one byte past the limit is read, so a file that grows meanwhile is still caught
       const buf = Buffer.alloc(max + 1)
@@ -1766,6 +1776,49 @@ async function readDropped (uris, room) {
   return out
 }
 const clampRoom = n => Number.isInteger(n) ? Math.max(0, Math.min(8, n)) : 8
+
+/**
+ * Whether another account on this computer could swap a folder on the way to a file,
+ * so that opening it reads something else: a folder there sits in one that is not
+ * yours or the system's, or that others can write to, unless that one is sticky (as
+ * /tmp is) and the folder in it is yours or the system's. Not on Windows, which has
+ * no such owners and modes.
+ */
+async function othersCanSwap (file) {
+  const me = typeof process.getuid === 'function' ? process.getuid() : -1
+  if (me < 0) return false
+  const ours = st => st.uid === me || st.uid === 0
+  for (let d = path.dirname(file); path.dirname(d) !== d; d = path.dirname(d)) {
+    const [st, up] = await Promise.all([fs.promises.lstat(d), fs.promises.lstat(path.dirname(d))])
+    if (!ours(up)) return true
+    if ((up.mode & 0o022) && !((up.mode & 0o1000) && ours(st))) return true
+  }
+  return false
+}
+
+/**
+ * Whether a file with more than one name (a hard link) is one of the files in the
+ * protected folders. Every file there is looked at; with too many to look at, or a
+ * folder that cannot be read, it cannot be shown not to be, so the caller refuses it.
+ */
+async function linkedIntoPlaces (st, dirs) {
+  let left = 50000
+  async function walk (d) {
+    let dir
+    try { dir = await fs.promises.opendir(d) } catch (e) { if (e.code === 'ENOENT') return false; throw e }
+    for await (const e of dir) {
+      if (--left < 0) throw new Error('too many files to check')
+      const p = path.join(d, e.name)
+      if (e.isDirectory()) { if (await walk(p)) return true; continue }
+      if (!e.isFile()) continue
+      const s = await fs.promises.lstat(p).catch(() => null)
+      if (s && s.dev === st.dev && s.ino === st.ino) return true
+    }
+    return false
+  }
+  for (const d of dirs) if (await walk(d)) return true
+  return false
+}
 
 /** The sidebar, brought forward and loaded far enough to take messages; null if it never came. */
 async function sidebarView () {
@@ -2198,7 +2251,7 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
       try {
         switch (msg.type) {
           case 'limitDismiss':
-            await limitDismiss({ kind: String(msg.kind ?? ''), status: String(msg.status ?? ''), resetsAt: Number(msg.resetsAt) || 0 })
+            await limitDismiss({ kind: String(msg.kind ?? ''), status: String(msg.status ?? ''), resetsAt: Number(msg.resetsAt) || 0, at: Number(msg.at) || 0 })
             break
           case 'pendingShown':
             // a view showing a new chat it was handed (newChatInSidebar waits for this)
@@ -2874,9 +2927,13 @@ function wire (ctx, w, onDispose, mode, isVisible = () => true, opts = {}) {
           case 'chatModel':
             if (/^[\w.[\]-]{0,60}$/.test(String(msg.value || ''))) runner.setModel(msg.id, String(msg.value || ''))
             break
-          case 'chatMode':
-            if (chatModes().includes(msg.value)) runner.setMode(msg.id, msg.value, /^[\w-]{1,40}$/.test(String(msg.req || '')) ? String(msg.req) : '')
+          case 'chatMode': {
+            const req = /^[\w-]{1,40}$/.test(String(msg.req || '')) ? String(msg.req) : ''
+            if (chatModes().includes(msg.value)) runner.setMode(msg.id, msg.value, req)
+            // a mode not allowed now (Bypass turned off meanwhile): the pick is answered, so the box shows the real mode again
+            else if (req) post({ type: 'chatModeDone', id: String(msg.id || ''), req, ok: false })
             break
+          }
           case 'chatEffort':
             if (!msg.value || CHAT_EFFORTS.includes(msg.value)) runner.setEffort(msg.id, msg.value || '')
             break

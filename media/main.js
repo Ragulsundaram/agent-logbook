@@ -1194,8 +1194,9 @@ let PENDING_CHAT = null
 function showPending (id) {
   // a new chat is where you go: started from another page (Settings, the card,
   // the digest), the Chats page comes forward rather than drawing it out of sight
-  if (TAB !== 'chats') $('.tab[data-tab="chats"]')?.click()
+  // the chat open before goes first, so bringing Chats forward does not mark it seen
   closeDetail(true)
+  if (TAB !== 'chats') $('.tab[data-tab="chats"]')?.click()
   PENDING_CHAT = id
   $('#tabs').hidden = true
   $('#view-chats .bar').hidden = true

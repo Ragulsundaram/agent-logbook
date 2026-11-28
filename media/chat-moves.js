@@ -10,7 +10,7 @@
 ;(function (root) {
   // everything the view keeps per chat id that goes on under the new one
   const PER_CHAT = ['state', 'echo', 'partial', 'notes', 'picks', 'side', 'mcp', 'drafts', 'layout', 'images', 'files',
-    'sentLog', 'shell', 'todosFold', 'over', 'mcpTop', 'reading']
+    'sentLog', 'shell', 'todosFold', 'over', 'mcpTop', 'reading', 'refused']
 
   function readStart (CHAT, id) {
     const slot = { id }
